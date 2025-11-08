@@ -12,6 +12,7 @@ import {
   Activity,
 } from "lucide-react";
 
+// 분석 요약 카드 컴포넌트 - 2단 레이어(Overview Score + Repository Statistics) + 3가지 상태 지원 (Demo/Loading/Completed)
 export const AnalysisSummaryCard = ({
   repoName = "Repository",
   score = 92,
@@ -135,9 +136,142 @@ export const AnalysisSummaryCard = ({
             )}
           </div>
         </div>
+
+        {/* RIGHT: REPOSITORY STATISTICS */}
+        <div className="lg:col-span-8">
+          <h2 className="text-2xl font-black text-gray-900 mb-6">
+            {repoName} Repository Statistics
+          </h2>
+
+          {/* Stats Grid */}
+          <div className="grid grid-cols-3 gap-4 mb-8">
+            <StatCard
+              icon={Star}
+              value={formatNumber(stats.stars)}
+              label="GitHub Stars"
+              gradient="from-yellow-50 to-orange-50"
+              border="border-yellow-200"
+              iconColor="text-yellow-500"
+              isLoading={isLoading}
+            />
+            <StatCard
+              icon={GitFork}
+              value={formatNumber(stats.forks)}
+              label="Forks"
+              gradient="from-cyan-50 to-blue-50"
+              border="border-cyan-200"
+              iconColor="text-cyan-600"
+              isLoading={isLoading}
+            />
+            <StatCard
+              icon={Users}
+              value={formatNumber(stats.contributors)}
+              label="Contributors"
+              gradient="from-purple-50 to-pink-50"
+              border="border-purple-200"
+              iconColor="text-purple-600"
+              isLoading={isLoading}
+            />
+          </div>
+
+          {/* Metric Bars */}
+          {/* 보안 - 초록 / 코드 품질 - 파랑 / 커뮤니티 활성도 - 보라 */}
+          <div className="space-y-5">
+            <MetricBar
+              icon={Shield}
+              label="보안 점수"
+              value={metrics.security}
+              color="from-green-400 to-emerald-500"
+              textColor="text-green-600"
+              isLoading={isLoading}
+            />
+            <MetricBar
+              icon={Code}
+              label="코드 품질"
+              value={metrics.quality}
+              color="from-blue-400 to-indigo-500"
+              textColor="text-blue-600"
+              isLoading={isLoading}
+            />
+            <MetricBar
+              icon={Activity}
+              label="커뮤니티 활성도"
+              value={metrics.activity}
+              color="from-purple-400 to-pink-500"
+              textColor="text-purple-600"
+              isLoading={isLoading}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
+};
+
+// 개별 통계 카드 컴포넌트
+const StatCard = ({
+  icon: Icon,
+  value,
+  label,
+  gradient,
+  border,
+  iconColor,
+  isLoading,
+}) => (
+  <div
+    className={`bg-gradient-to-br ${gradient} rounded-2xl p-5 border ${border}`}
+  >
+    {isLoading ? (
+      <div className="h-20 flex items-center justify-center">
+        <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
+      </div>
+    ) : (
+      <>
+        <Icon className={`w-6 h-6 ${iconColor} mb-2`} />
+        <div className="text-3xl font-bold text-gray-900 mb-1">{value}</div>
+        <div className="text-sm text-gray-600">{label}</div>
+      </>
+    )}
+  </div>
+);
+
+// 개별 메트릭 바 컴포넌트
+const MetricBar = ({
+  icon: Icon,
+  label,
+  value,
+  color,
+  textColor,
+  isLoading,
+}) => (
+  <div>
+    <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center gap-2">
+        <Icon className={`w-5 h-5 ${textColor}`} />
+        <span className="font-bold text-gray-900">{label}</span>
+      </div>
+      {!isLoading && (
+        <span className={`text-lg font-bold ${textColor}`}>{value}%</span>
+      )}
+    </div>
+    <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
+      {isLoading ? (
+        <div className="h-full bg-gray-300 animate-pulse rounded-full"></div>
+      ) : (
+        <div
+          className={`h-full bg-gradient-to-r ${color} rounded-full transition-all duration-1000`}
+          style={{ width: `${value}%` }}
+        ></div>
+      )}
+    </div>
+  </div>
+);
+
+// 숫자 포맷팅 함수 (예: 182000 -> 182K)
+const formatNumber = (num) => {
+  if (num >= 1000000) return (num / 1000000).toFixed(1) + "M";
+  if (num >= 1000) return (num / 1000).toFixed(1) + "k";
+  return num;
 };
 
 export default AnalysisSummaryCard;
