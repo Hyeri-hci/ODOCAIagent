@@ -204,6 +204,17 @@ export const AnalysisSummaryCard = ({
           </div>
         </div>
       </div>
+
+      {/* 기본 액션 버튼 영역 */}
+      {onPrimaryAction && (
+        <button
+          onClick={onPrimaryAction}
+          disabled={isLoading}
+          className="w-full mt-6 bg-gradient-to-r from-blue-500 to-cyan-500 text-white py-3 rounded-lg text-sm font-semibold hover:shadow-lg transition-all disabled:opacity-50"
+        >
+          {primaryActionText}
+        </button>
+      )}
     </div>
   );
 };
