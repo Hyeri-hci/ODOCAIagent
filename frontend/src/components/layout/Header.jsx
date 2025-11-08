@@ -1,5 +1,5 @@
 import React from "react";
-import { GitHub } from "lucide-react";
+import { GitBranch } from "lucide-react";
 
 export const Header = ({ hasResult = false }) => {
   return (
@@ -9,7 +9,7 @@ export const Header = ({ hasResult = false }) => {
           {/* Logo */}
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-gradient-to-br from-[#2563EB] to-[#1E3A8A] rounded-xl flex items-center justify-center shadow-lg">
-              <GitHub className="w-5 h-5 text-white" />
+              <GitBranch className="w-5 h-5 text-white" />
             </div>
             <span className="text-xl font-bold bg-gradient-to-r from-[#2563EB] to-[#1E3A8A] bg-clip-text text-transparent">
               ODOC AI Agent

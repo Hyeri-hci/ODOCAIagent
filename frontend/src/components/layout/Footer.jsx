@@ -1,5 +1,5 @@
 import React from "react";
-import { GitHub } from "lucide-react";
+import { GitBranch } from "lucide-react";
 
 export const Footer = () => {
   return (
@@ -11,25 +11,13 @@ export const Footer = () => {
             <div className="md:col-span-2">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-12 h-12 bg-gradient-to-br from-[#2563EB] to-[#1E3A8A] rounded-xl flex items-center justify-center shadow-lg">
-                  <Github className="w-6 h-6 text-white" />
+                  <GitBranch className="w-6 h-6 text-white" />
                 </div>
                 <span className="text-2xl font-black">ODOC AI Agent</span>
               </div>
               <p className="text-slate-400 leading-relaxed mb-6">
                 AI 기반 오픈소스 분석으로 더 나은 기여 경험을 제공합니다.
-                <br />
-                Powered by OSSDoctor AI
               </p>
-              <div className="flex gap-4">
-                <a
-                  href="https://github.com"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-10 h-10 bg-white/10 hover:bg-white/20 rounded-lg flex items-center justify-center transition-all hover:scale-110"
-                >
-                  <Github className="w-5 h-5" />
-                </a>
-              </div>
             </div>
 
             {/* Quick Links */}
@@ -42,14 +30,6 @@ export const Footer = () => {
                     className="text-slate-400 hover:text-white transition-colors"
                   >
                     분석하기
-                  </a>
-                </li>
-                <li>
-                  <a
-                    href="#"
-                    className="text-slate-400 hover:text-white transition-colors"
-                  >
-                    Documentation
                   </a>
                 </li>
                 <li>
@@ -93,18 +73,10 @@ export const Footer = () => {
                 </li>
                 <li>
                   <a
-                    href="#"
-                    className="text-slate-400 hover:text-white transition-colors"
-                  >
-                    Contact
-                  </a>
-                </li>
-                <li>
-                  <a
                     href="mailto:hyeri.hci.du@gmail.com"
                     className="text-slate-400 hover:text-white transition-colors"
                   >
-                    hyeri.hci.du@gmail.com
+                    Contact Us hyeri.hci.du@gmail.com
                   </a>
                 </li>
               </ul>
@@ -112,7 +84,7 @@ export const Footer = () => {
           </div>
 
           {/* Bottom Bar */}
-          <div className="pt-8 border-t border-slate-800">
+          <div className="pt-4 border-t border-slate-800">
             <div className="flex flex-col md:flex-row items-center justify-between gap-4">
               <p className="text-sm text-slate-500">
                 © 2025 ODOC AI Agent. All rights reserved.
