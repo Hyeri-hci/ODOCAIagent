@@ -1,10 +1,11 @@
 import axios from "axios";
 
+// API 기본 설정
 const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL || "http://localhost:8080";
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 const MOCK_MODE = import.meta.env.VITE_MOCK_MODE === "true";
 
-// create Axios instance
+// Axios 인스턴스 생성
 const api = axios.create({
   baseURL: API_BASE_URL,
   headers: {
@@ -12,7 +13,7 @@ const api = axios.create({
   },
 });
 
-// Mock mode 설정
+// Mock 데이터
 const mockData = {
   analyze: {
     job_id: "mock-job-123",
@@ -98,67 +99,60 @@ const mockData = {
   ],
 };
 
-// API Functions
-
-// repository analysis 요청 - @Pparam {string} repoUrl - GitHub URL
+// API 함수들
 export const analyzeRepository = async (repoUrl) => {
   if (MOCK_MODE) {
-    console.log("MOCK_MODE: Returning mock analyze data");
-    await new Promise((resolve) => setTimeout(resolve, 2000)); // 2초 딜레이
+    await new Promise((resolve) => setTimeout(resolve, 1000));
     return mockData.analyze;
   }
 
-  // 실제 API 호출
   try {
     const response = await api.post("/api/analyze", { repo_url: repoUrl });
     return response.data;
   } catch (error) {
-    console.error("Error analyzing repository:", error);
+    console.error("분석 실패:", error);
     throw error;
   }
 };
 
-/**
- * create Milestone
- * @param {number[]} actions - 선택된 작업 ID 배열
- * @param {object} analysis - 분석 결과 객체
- */
 export const createMilestone = async (actions, analysis) => {
   if (MOCK_MODE) {
-    console.log("MOCK_MODE: Returning mock milestone creation");
-    await new Promise((resolve) => setTimeout(resolve, 1000)); // 1초 딜레이
+    await new Promise((resolve) => setTimeout(resolve, 500));
     return {
-      status: "success",
+      status: "created",
       milestone_id: "ms_mock_123",
-      message: "마일스톤이 성공적으로 생성되었습니다.",
+      calendarEvents: actions.map((id) => ({
+        id: `evt_${id}`,
+        title: `작업 ${id}`,
+        start_time: new Date().toISOString(),
+      })),
+      todoItems: actions.map((id) => ({
+        id: `todo_${id}`,
+        title: `할 일 ${id}`,
+        completed: false,
+      })),
     };
   }
+
   try {
-    const response = await api.post("/api/milestone", {
-      actions,
-      analysis,
-    });
+    const response = await api.post("/api/milestone", { actions, analysis });
     return response.data;
   } catch (error) {
-    console.error("Error creating milestone:", error);
+    console.error("마일스톤 생성 실패:", error);
     throw error;
   }
 };
 
-/**
- * send Report
- * @param {string} report - 생성된 리포트 내용
- * @param {number[]} actions - 선택된 작업 ID 배열
- */
 export const sendReport = async (report, actions) => {
   if (MOCK_MODE) {
-    console.log("MOCK_MODE: Returning mock report sending");
-    await new Promise((resolve) => setTimeout(resolve, 1000)); // 1초 딜레이
+    await new Promise((resolve) => setTimeout(resolve, 500));
     return {
-      status: "success",
-      message: "리포트가 성공적으로 전송되었습니다.",
+      status: "sent",
+      message_id: "msg_mock_123",
+      sent_at: new Date().toISOString(),
     };
   }
+
   try {
     const response = await api.post("/api/report/send", {
       report,
@@ -167,15 +161,13 @@ export const sendReport = async (report, actions) => {
     });
     return response.data;
   } catch (error) {
-    console.error("Error sending report:", error);
+    console.error("리포트 전송 실패:", error);
     throw error;
   }
 };
 
-// 기타 API 함수들 (모듈 정보, 온보딩 단계, 벤치마크 비교 등)
 export const getModules = async () => {
   if (MOCK_MODE) {
-    console.log("MOCK_MODE: Returning mock modules data");
     return { modules: mockData.modules };
   }
 
@@ -183,14 +175,13 @@ export const getModules = async () => {
     const response = await api.get("/api/modules");
     return response.data;
   } catch (error) {
-    console.error("Error fetching modules:", error);
+    console.error("모듈 정보 가져오기 실패:", error);
     throw error;
   }
 };
 
 export const getOnboarding = async () => {
   if (MOCK_MODE) {
-    console.log("MOCK_MODE: Returning mock onboarding data");
     return { onboarding: mockData.onboarding };
   }
 
@@ -198,14 +189,13 @@ export const getOnboarding = async () => {
     const response = await api.get("/api/onboarding");
     return response.data;
   } catch (error) {
-    console.error("Error fetching onboarding data:", error);
+    console.error("온보딩 정보 가져오기 실패:", error);
     throw error;
   }
 };
 
 export const getBenchmarks = async () => {
   if (MOCK_MODE) {
-    console.log("MOCK_MODE: Returning mock benchmarks data");
     return { benchmarks: mockData.benchmarks };
   }
 
@@ -213,7 +203,90 @@ export const getBenchmarks = async () => {
     const response = await api.get("/api/benchmarks");
     return response.data;
   } catch (error) {
-    console.error("Error fetching benchmarks data:", error);
+    console.error("벤치마크 정보 가져오기 실패:", error);
+    throw error;
+  }
+};
+
+// Kakao OAuth2 관련 함수들
+export const getKakaoAuthUrl = () => {
+  const KAKAO_CLIENT_ID =
+    import.meta.env.VITE_KAKAO_CLIENT_ID || "your_kakao_client_id";
+  const REDIRECT_URI =
+    import.meta.env.VITE_KAKAO_REDIRECT_URI ||
+    "http://localhost:5173/auth/kakao/callback";
+
+  return `https://kauth.kakao.com/oauth/authorize?client_id=${KAKAO_CLIENT_ID}&redirect_uri=${REDIRECT_URI}&response_type=code`;
+};
+
+export const kakaoLogin = async (code) => {
+  if (MOCK_MODE) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return {
+      access_token: "mock_access_token",
+      user: {
+        id: 12345,
+        email: "user@example.com",
+        nickname: "테스트 사용자",
+      },
+    };
+  }
+
+  try {
+    const response = await api.post("/api/auth/kakao/login", { code });
+    return response.data;
+  } catch (error) {
+    console.error("카카오 로그인 실패:", error);
+    throw error;
+  }
+};
+
+export const checkKakaoAuth = async () => {
+  if (MOCK_MODE) {
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // Mock: 50% 확률로 로그인되어 있다고 가정
+    const isLoggedIn = Math.random() > 0.5;
+    if (isLoggedIn) {
+      return {
+        authenticated: true,
+        user: {
+          email: "user@example.com",
+          nickname: "테스트 사용자",
+        },
+      };
+    }
+    return { authenticated: false };
+  }
+
+  try {
+    const response = await api.get("/api/auth/kakao/check");
+    return response.data;
+  } catch (error) {
+    console.error("카카오 인증 확인 실패:", error);
+    return { authenticated: false };
+  }
+};
+
+export const sendReportPDF = async (analysisData, userEmail) => {
+  if (MOCK_MODE) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    return {
+      status: "success",
+      message: "PDF 리포트가 이메일로 전송되었습니다",
+      email: userEmail,
+      pdf_url: "https://example.com/reports/mock-report.pdf",
+      sent_at: new Date().toISOString(),
+    };
+  }
+
+  try {
+    const response = await api.post("/api/report/pdf", {
+      analysis_data: analysisData,
+      email: userEmail,
+    });
+    return response.data;
+  } catch (error) {
+    console.error("PDF 리포트 전송 실패:", error);
     throw error;
   }
 };
