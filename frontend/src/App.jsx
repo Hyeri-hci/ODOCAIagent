@@ -2,8 +2,9 @@ import React, { useState, useEffect } from "react";
 import { AppLayout } from "./components/layout";
 import HeroSection from "./components/HeroSection";
 import AnalyzeForm from "./components/AnalyzeForm";
+import HighlightsSection from "./components/HighlightsSection";
+import FeaturesSection from "./components/FeaturesSection";
 import ResultCards from "./components/ResultCards";
-import HowItWorksSection from "./components/HowItWorksSection";
 import {
   ConfirmSendModal,
   KakaoLoginModal,
@@ -179,26 +180,47 @@ ODOC AI Agent 분석 리포트
     window.location.href = kakaoAuthUrl;
   };
 
-  // 분석 섹션으로 스크롤
+  // 분석 섹션으로 스크롤 + Input 포커스
   const scrollToAnalyze = () => {
-    document.getElementById("analyze")?.scrollIntoView({ behavior: "smooth" });
+    // Input 요소를 직접 찾아서 스크롤
+    const input = document.querySelector('#analyze input[type="text"]');
+
+    if (input) {
+      // 1. Input 요소로 직접 스크롤 (부드럽게)
+      input.scrollIntoView({
+        behavior: "smooth",
+        block: "center", // 화면 중앙에 위치
+      });
+
+      // 2. 스크롤 완료 후 포커스
+      setTimeout(() => {
+        input.focus();
+      }, 800); // 스크롤 애니메이션 완료 대기
+    } else {
+      // Input을 찾지 못한 경우 섹션으로 이동
+      const analyzeSection = document.getElementById("analyze");
+      if (analyzeSection) {
+        analyzeSection.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
+    }
   };
 
   return (
     <AppLayout notification={notification} hasResult={!!analysisResult}>
-      {/* Hero Section */}
+      {/* Hero Section - Apple Style */}
       <HeroSection onAnalyzeClick={scrollToAnalyze} />
 
-      {/* Analyze Form */}
-      <div id="analyze">
-        <AnalyzeForm
-          onAnalyze={handleAnalyze}
-          isAnalyzing={isAnalyzing}
-          hasResult={!!analysisResult}
-        />
-      </div>
+      {/* Analyze Form - Minimal & Clean */}
+      <AnalyzeForm
+        onAnalyze={handleAnalyze}
+        isAnalyzing={isAnalyzing}
+        hasResult={!!analysisResult}
+      />
 
-      {/* Result Cards */}
+      {/* Result Cards (keep original - user requested) */}
       {analysisResult && (
         <div id="results">
           <ResultCards
@@ -212,8 +234,13 @@ ODOC AI Agent 분석 리포트
         </div>
       )}
 
-      {/* How It Works Section */}
-      {!analysisResult && <HowItWorksSection />}
+      {/* Highlights & Features Section - Only show when no result */}
+      {!analysisResult && (
+        <>
+          <HighlightsSection />
+          <FeaturesSection onAnalyzeClick={scrollToAnalyze} />
+        </>
+      )}
 
       {/* Modals */}
       <ConfirmSendModal
