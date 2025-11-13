@@ -5,11 +5,11 @@ import { Footer } from "./Footer";
 
 // 전체 페이지 레이아웃 컴포넌트 (Header + Notification + Main Content + Footer)
 
-export const AppLayout = ({ children, notification, hasResult = false }) => {
+export const AppLayout = ({ children, notification }) => {
   return (
     <div className="min-h-screen bg-white">
       {/* Header */}
-      <Header hasResult={hasResult} />
+      <Header />
 
       {/* Notification Toast */}
       {notification && (
