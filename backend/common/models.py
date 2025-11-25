@@ -12,7 +12,7 @@ class RepoMetrics(BaseModel):
 
 class DiagnosisResult(BaseModel):
     repo_full_name: str               # "owner/repo"
-    helth_score: float                # 0 ~ 100
+    health_score: float                # 0 ~ 100
     activity_level: str               # "low", "medium", "high"
     maintenance_level: str            # "poor", "average", "good"
     issue_responsiveness: str         # "slow", "moderate", "fast"
