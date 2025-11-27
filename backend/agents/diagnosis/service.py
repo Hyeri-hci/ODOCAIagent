@@ -12,8 +12,10 @@ from .tools.health_score import (
     score_commit_activity,
     score_documentation,
 )
-
 from .task_type import DiagnosisTaskType, parse_task_type
+from .llm_summarizer import summarize_diagnosis_repository
+
+USE_LLM_SUMMARY = False
 
 def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> str:
     """
@@ -140,7 +142,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         commit_metrics=commit_metrics,
     )
 
-    return {
+    result_json: Dict[str, Any] = {
         "input": {
             "owner": owner,
             "repo": repo,
@@ -149,6 +151,23 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "scores": asdict(scores),
         "details": details,
-        "natural_language_summary_for_user": natural_summary,
     }
+
+    # LLM 요약 생성
+    if USE_LLM_SUMMARY:
+        natural_summary = summarize_diagnosis_repository(
+            diagnosis_result=result_json,
+            user_level=payload.get("user_context", {}).get("level", "beginner"),
+            language="ko",
+        )
+    else:
+        natural_summary = _summarize_common(
+            repo_info=repo_info,
+            scores=scores,
+            commit_metrics=commit_metrics,
+        )
+
+    result_json["natural_language_summary_for_user"] = natural_summary
+
+    return result_json
 
