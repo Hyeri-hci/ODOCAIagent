@@ -35,7 +35,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     scores = aggregate_health_scores(
         has_readme=repo_info.has_readme,
         commit_metrics=commit_metrics,
-        readme_stats=repo_info.readme_content,
+        readme_stats=repo_info.readme_stats,
     )
 
     # 4. 간단 자연어 요약 (현재는 규칙 기반)
