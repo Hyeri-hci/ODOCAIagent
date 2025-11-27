@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .chaoss_metrics import CommitActivityMetrics
+from .readme_loader import ReadmeContent
 
 @dataclass
 class HealthScore:
@@ -38,19 +39,59 @@ def score_commit_activity(metrics: CommitActivityMetrics) -> int:
 
     return min(score, 100)
 
-def score_documentation(has_readme: bool) -> int:
+def score_documentation(
+        has_readme: bool,
+        stats: ReadmeContent | None = None,
+) -> int:
     """
         문서화 품질 점수 산출
-        현재는 README 존재 여부만으로 80 또는 20 점수 매핑
-        추후 README 구조/8카테고리 반영
+        현재는 임시 버전 (README 존재 여부 기반)
     """
-    return 80 if has_readme else 20
+    if not has_readme:
+        return 20 # README 없음
+    
+    score = 50 # README 존재 기본 점수
+
+    if stats is None:
+        return score
+    
+    # length 기반 추가 점수
+    if stats.length >= 4000:
+        score += 20
+    elif stats.length >= 1000:
+        score += 10
+    elif stats.length < 300:
+        score -= 10
+
+    # Heading 수 기반 추가 점수 - Section
+    if stats.heading_count >= 8:
+        score += 10
+    elif stats.heading_count >= 3:
+        score += 5
+    else:
+        score -= 5
+
+    # link 수 기반 추가 점수 - References or Resources
+    if stats.link_count >= 10:
+        score += 5
+    elif stats.link_count >= 3:
+        score += 3
+
+    # code block 수 기반 추가 점수 - Examples
+    if stats.code_block_count >= 3:
+        score += 5
+    elif stats.code_block_count >= 1:
+        score += 3
+
+    score = max(0, min(score, 100))
+    return score
 
 def aggregate_health_scores(
         has_readme: bool,
         commit_metrics: CommitActivityMetrics,
+        readme_stats: ReadmeContent | None = None,
 ) -> HealthScore:
-    doc_score = score_documentation(has_readme)
+    doc_score = score_documentation(has_readme, readme_stats)
     activity_score = score_commit_activity(commit_metrics)
     
     overall = int((doc_score + activity_score) / 2)
