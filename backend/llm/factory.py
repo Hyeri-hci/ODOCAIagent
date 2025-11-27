@@ -18,10 +18,10 @@ def fetch_llm_client() -> LLMClient:
 
     if provider == "openai_compatible":
         _client = OpenAILikeClient()
-    elif provider == "dummy":
+    elif provider == "local_kanana":
         # 테스트용 더미 클라이언트 (원하면 추가 구현)
-        from .dummy import DummyChatClient  # 존재한다고 가정
-        _client = DummyChatClient()
+        from .local_kanana import LocalKananaClient
+        _client = LocalKananaClient()
     else:
         # 알 수 없는 값이면 기본값
         _client = OpenAILikeClient()
