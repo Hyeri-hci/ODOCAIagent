@@ -1,106 +1,64 @@
+from __future__ import annotations
+from typing import Any, Dict, List, Optional
+import datetime as dt
 import requests
-from .config import GITHUB_TOKEN
 
-BASE_URL = "https://api.github.com"
+from .config import GITHUB_API_BASE, GITHUB_TOKEN, DEFAULT_ACTIVITY_DAYS
 
-def _headers():
-    return {
-        "Authorization": f"token {GITHUB_TOKEN}",
+class GitHubClientError(Exception):
+    """GitHub API 호출 관련 예외 클래스"""
+    pass
+
+def _build_headers() -> Dict[str, str]:
+    headers = {
+        "Accept": "application/vnd.github+json",
     }
+    if GITHUB_TOKEN:
+        headers["Authorization"] = f"Bearer {GITHUB_TOKEN}"
+    return headers
 
-def get_repo_info(owner: str, repo: str) -> dict:
-    url = f"{BASE_URL}/repos/{owner}/{repo}"
-    resp = requests.get(url, headers=_headers())
-    resp.raise_for_status()
+def fetch_repo(owner: str, repo: str) -> Dict[str, Any]:
+    """repos/{owner}/{repo} 기본 정보 조회"""
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}"
+    resp = requests.get(url, headers=_build_headers(), timeout=10)
+    if resp.status_code == 404:
+        raise GitHubClientError(f"Repository {owner}/{repo} not found.")
+    if resp.status_code != 200:
+        raise GitHubClientError(f"Failed to fetch repository: {resp.status_code} {resp.text}")
     return resp.json()
 
-def get_commits(owner: str, repo: str, since: str | None = None) -> list[dict]:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/commits"
-    if since:
-        params = {"since": since}
-    else:
-        params = {}
-    resp = requests.get(url, headers=_headers(), params=params)
-    resp.raise_for_status()
-    return resp.json()
-
-def get_contributors(owner: str, repo: str) -> list[dict]:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/contributors"
-    resp = requests.get(url, headers=_headers())
-    resp.raise_for_status()
-    return resp.json()
-
-def get_languages(owner: str, repo: str) -> dict:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/languages"
-    resp = requests.get(url, headers=_headers())
-    resp.raise_for_status()
-    return resp.json()
-
-def get_topics(owner: str, repo: str) -> list[str]:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/topics"
-    headers = _headers()
-    headers["Accept"] = "application/vnd.github.mercy-preview+json"
-    resp = requests.get(url, headers=headers)
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("names", [])
-
-def get_license(owner: str, repo: str) -> dict | None:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/license"
-    resp = requests.get(url, headers=_headers())
+def fetch_readme(owner: str, repo: str) -> Optional[Dict[str, Any]]:
+    """
+        repos/{owner}/{repo}/readme 정보 조회 (없으면 None 반환)
+    """
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/readme"
+    resp = requests.get(url, headers=_build_headers(), timeout=10)
     if resp.status_code == 404:
         return None
-    resp.raise_for_status()
+    if resp.status_code != 200:
+        raise GitHubClientError(f"Failed to fetch README: {resp.status_code} {resp.text}")
     return resp.json()
 
-def get_release_cycle(owner: str, repo: str) -> float | None:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/releases"
-    resp = requests.get(url, headers=_headers())
-    resp.raise_for_status()
-    releases = resp.json()
-    if len(releases) < 2:
-        return None
-    release_dates = [release["published_at"] for release in releases]
-    release_dates.sort()
-    deltas = []
-    for i in range(1, len(release_dates)):
-        delta = ( 
-            requests.utils.parse_date(release_dates[i]) - 
-            requests.utils.parse_date(release_dates[i - 1])
-        ).days
-        deltas.append(delta)
-    average_cycle = sum(deltas) / len(deltas)
-    return average_cycle
+def fetch_recent_commits(
+    owner: str,
+    repo: str,
+    days: int = DEFAULT_ACTIVITY_DAYS,
+    per_page: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+        최근 커밋 내역 조회(최대 per_page 개)
+    """
+    since_dt = dt.datetime.now() - dt.timedelta(days=days)
+    since_iso = since_dt.isoformat() + "Z"  
 
-def get_recent_prs(owner: str, repo: str, since: str) -> list[dict]:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/pulls"
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/commits"
     params = {
-        "state": "all",
-        "sort": "updated",
-        "direction": "desc",
-        "since": since
+        "since": since_iso,
+        "per_page": per_page,
+        # "page": 1,
     }
-    resp = requests.get(url, headers=_headers(), params=params)
-    resp.raise_for_status()
-    return resp.json()
 
-def get_recent_issues(owner: str, repo: str, since: str) -> list[dict]:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/issues"
-    params = {
-        "state": "all",
-        "since": since
-    }
-    resp = requests.get(url, headers=_headers(), params=params)
-    resp.raise_for_status()
+    resp = requests.get(url, headers=_build_headers(), params=params, timeout=15)
+    if resp.status_code != 200:
+        raise GitHubClientError(f"Failed to fetch commits: {resp.status_code} {resp.text}")
     return resp.json()
-
-def get_recent_releases(owner: str, repo: str, since: str) -> list[dict]:
-    url = f"{BASE_URL}/repos/{owner}/{repo}/releases"
-    resp = requests.get(url, headers=_headers())
-    resp.raise_for_status()
-    releases = resp.json()
-    recent_releases = [
-        release for release in releases
-        if release["published_at"] >= since
-    ]
-    return recent_releases

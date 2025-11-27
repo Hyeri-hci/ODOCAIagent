@@ -1,36 +1,51 @@
+from __future__ import annotations
+
+import os
+import sys
+
+# 프로젝트 루트(ODOCAIGENT)를 sys.path에 추가
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
 import streamlit as st
-from backend.diagnosis.service import diagnose_repo
 
-st.title("Repository Health Diagnosis Test")
-st.write("Enter a GitHub repository full name (e.g., 'owner/repo') to diagnose its health.")
+from backend.agents.diagnosis.service import run_diagnosis
 
-default_repo = "microsoft/vscode"
+st.set_page_config(page_title="ODOC Diagnosis Agent", layout="centered")
+st.title("ODOC Diagnosis Agent")
 
-full_name_input = st.text_input(
-    "Repository (owner/repo):", 
-    value=default_repo,
-    help="Enter the full name of the GitHub repository in the format 'owner/repo'."
+owner = st.text_input("GitHub Repository Owner", value="torvalds")
+repo = st.text_input("GitHub Repository Name", value="linux")
+task_type = st.selectbox(
+    "Task Type", 
+    ["full_diagnosis", "docs_only", "activity_only"],
+    index=0,
+    format_func=lambda x:{
+        "full_diagnosis": "full_diagnosis (문서 + 활동성)",
+        "docs_only": "docs_only (문서만)",
+        "activity_only": "activity_only (활동성만)",
+    }[x],
 )
 
-if st.button("진단 실행"):
-  if "/" not in full_name_input:
-      st.error("Invalid repository name format. Please use 'owner/repo'.")
+if st.button("Run Diagnosis"):
+  with st.spinner("Running Diagnosis Agent..."):
+    payload = {
+        "owner": owner,
+        "repo": repo,
+        "task_type": task_type,
+        "focus": ["documentation", "activity"],
+    }
+    try:
+      result = run_diagnosis(payload)
+    except Exception as e:
+        st.error(f"Error occurred: {e}")
+    else:
+       st.subheader("Repository Score")
+       st.json(result["scores"])
+       
+       st.subheader("Diagnosis Details")
+       st.json(result["details"])
 
-  else:
-      with st.spinner("Diagnosing repository..."):
-          try:
-              diagnosis_result = diagnose_repo(full_name_input)
-              st.success("Diagnosis Complete!")
-              
-              st.subheader("Health Score")
-              st.metric(label="Health Score", value=f"{diagnosis_result.health_score}")
-
-              st.subheader("Diagnosis Details")
-              st.write(f"**Activity Level:** {diagnosis_result.activity_level}")
-              st.write(f"**Maintenance Level:** {diagnosis_result.maintenance_level}")
-              st.write(f"**Issue Responsiveness:** {diagnosis_result.issue_responsiveness}")
-              if diagnosis_result.recommendations:
-                  st.info(f"**Recommendations:** {diagnosis_result.recommendations}")
-          
-          except Exception as e:
-              st.error(f"An error occurred during diagnosis: {e}")
+       st.subheader("Summary")
+       st.text(result["natural_language_summary_for_user"])
