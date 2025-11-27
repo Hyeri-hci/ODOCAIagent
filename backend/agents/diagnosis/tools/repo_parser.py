@@ -4,7 +4,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 from backend.common.github_client import fetch_readme, fetch_repo
-from .readme_loader import fetch_readme_content, compute_reademe_metrics, ReadmeContent
+from .readme_loader import (
+    fetch_readme_content,
+    compute_reademe_metrics,
+    ReadmeContent,
+)
 
 @dataclass
 class RepoInfo:
@@ -22,7 +26,7 @@ def fetch_repo_info(owner: str, repo: str) -> RepoInfo:
     readme_data = fetch_readme(owner, repo)
 
     has_readme = readme_data is not None
-    readme_content: Optional[ReadmeContent] = None
+    readme_stats: Optional[ReadmeContent] = None
 
     if has_readme:
         readme_text = fetch_readme_content(owner, repo)

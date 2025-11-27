@@ -19,7 +19,13 @@ owner = st.text_input("GitHub Repository Owner", value="torvalds")
 repo = st.text_input("GitHub Repository Name", value="linux")
 task_type = st.selectbox(
     "Task Type", 
-    ["full_diagnosis"]
+    ["full_diagnosis", "docs_only", "activity_only"],
+    index=0,
+    format_func=lambda x:{
+        "full_diagnosis": "full_diagnosis (문서 + 활동성)",
+        "docs_only": "docs_only (문서만)",
+        "activity_only": "activity_only (활동성만)",
+    }[x],
 )
 
 if st.button("Run Diagnosis"):

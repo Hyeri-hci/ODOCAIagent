@@ -56,11 +56,11 @@ def score_documentation(
         return score
     
     # length 기반 추가 점수
-    if stats.length >= 4000:
+    if stats.length_chars >= 4000:
         score += 20
-    elif stats.length >= 1000:
+    elif stats.length_chars >= 1000:
         score += 10
-    elif stats.length < 300:
+    elif stats.length_chars < 300:
         score -= 10
 
     # Heading 수 기반 추가 점수 - Section
@@ -101,3 +101,11 @@ def aggregate_health_scores(
         activity_maintainability=activity_score,
         overall_score=overall,
     )
+
+
+__all__ = [
+    "HealthScore",
+    "score_commit_activity",
+    "score_documentation",
+    "aggregate_health_scores",
+]
