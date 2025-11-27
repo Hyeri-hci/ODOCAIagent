@@ -39,7 +39,7 @@ class OpenAILikeClient(LLMClient):
         url = f"{self.api_base}/chat/completions"
         payload: Dict[str, Any] = {
             "model": request.model or self.default_model,
-            "messages": self._convert_messages(request.message),
+            "messages": self._convert_messages(request.messages),
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "top_p": request.top_p,

@@ -9,7 +9,7 @@ from .openai_like import OpenAILikeClient
 _client: Optional[LLMClient] = None
 
 def fetch_llm_client() -> LLMClient:
-    """싱글톤 LLM 클라이언트 인스턴스 반환""""
+    """싱글톤 LLM 클라이언트 인스턴스 반환"""
     global _client
     if _client is not None:
         return _client

@@ -15,7 +15,7 @@ from .tools.health_score import (
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
 
-USE_LLM_SUMMARY = False
+USE_LLM_SUMMARY = True
 
 def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> str:
     """

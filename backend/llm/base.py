@@ -13,7 +13,7 @@ class ChatMessage:
 
 @dataclass
 class ChatRequest:
-    message: List[ChatMessage]
+    messages: List[ChatMessage]
     model: Optional[str] = None
     max_tokens: int = 1024
     temperature: float = 0.2
