@@ -21,7 +21,7 @@ def _decode_readme_content(readme_data: Dict[str, Any]) -> str:
     if not content_base64:
         return ""
     try:
-        raw_bytes = base64.b64decode(content_base64, validate=True)
+        raw_bytes = base64.b64decode(content_base64)
         return raw_bytes.decode("utf-8", errors="replace")
     except Exception:
         return ""
