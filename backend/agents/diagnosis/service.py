@@ -1,6 +1,6 @@
 from backend.common.models import DiagnosisResult
-from .repo_parser import build_repo_metrics
-from .health_score import calculate_health_score
+from .tools.repo_parser import build_repo_metrics
+from .tools.health_score import calculate_health_score
 
 def diagnose_repo(full_name: str) -> DiagnosisResult:
     """
