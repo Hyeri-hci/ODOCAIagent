@@ -10,13 +10,14 @@ if ROOT_DIR not in sys.path:
 
 import streamlit as st
 
-from backend.agents.diagnosis.service import run_diagnosis
+# from backend.agents.diagnosis.service import run_diagnosis
+from backend.agents.supervisor.service import run_supervisor, SupervisorInput
 
 st.set_page_config(page_title="ODOC Diagnosis Agent", layout="centered")
 st.title("ODOC Diagnosis Agent")
 
-owner = st.text_input("GitHub Repository Owner", value="torvalds")
-repo = st.text_input("GitHub Repository Name", value="linux")
+owner = st.text_input("GitHub Repository Owner", value="microsoft")
+repo = st.text_input("GitHub Repository Name", value="vscode")
 task_type = st.selectbox(
     "Task Type", 
     ["full_diagnosis", "docs_only", "activity_only"],
@@ -29,23 +30,32 @@ task_type = st.selectbox(
 )
 
 if st.button("Run Diagnosis"):
-  with st.spinner("Running Diagnosis Agent..."):
-    payload = {
-        "owner": owner,
-        "repo": repo,
-        "task_type": task_type,
-        "focus": ["documentation", "activity"],
-    }
-    try:
-      result = run_diagnosis(payload)
-    except Exception as e:
-        st.error(f"Error occurred: {e}")
-    else:
-       st.subheader("Repository Score")
-       st.json(result["scores"])
-       
-       st.subheader("Diagnosis Details")
-       st.json(result["details"])
+      owner_clean = owner.strip()
+      repo_clean = repo.strip()
 
-       st.subheader("Summary")
-       st.text(result["natural_language_summary_for_user"])
+      if not owner_clean or not repo_clean:
+          st.error("Please enter both owner and repository name.")
+      else:
+        try:
+            sup_in = SupervisorInput(
+                    user_query=f"{owner_clean}/{repo_clean} 저장소 상태를 진단해 주세요.",
+                    owner=owner_clean,
+                    repo=repo_clean,
+                    language="ko",
+                    user_level="beginner",
+                )
+            sup_out = run_supervisor(sup_in)
+        except Exception as e:
+                st.error(f"Error: {e}")
+        else:
+            diagnosis_result = sup_out.intermediate["diagnosis"]
+
+            st.subheader("Repository Score")
+            st.json(diagnosis_result["scores"])
+            
+            st.subheader("Detailed Diagnosis")
+            st.json(diagnosis_result["details"])
+
+            st.subheader("Supervisor Final Answer")
+            st.text(sup_out.answer)
+            
