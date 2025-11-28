@@ -28,7 +28,7 @@ USE_LLM_SUMMARY = True
 
 
 def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> str:
-    """간단 규칙 기반 자연어 요약"""
+    """규칙 기반 자연어 요약."""
     parts: List[str] = []
     parts.append(f"Repository: {repo_info.full_name}")
     if repo_info.description:
@@ -62,17 +62,8 @@ def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> st
 
 def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Diagnosis Agent 진입점
-
-    payload 예시
-    {
-        "owner": "microsoft",
-        "repo": "vscode",
-        "task_type": "full_diagnosis",
-        "focus": ["documentation", "activity"],
-        "user_context": {"level": "beginner"},
-        "advanced_analysis": false  // true면 카테고리별 상세 요약 포함 (느림)
-    }
+    Diagnosis Agent 진입점.
+    payload: owner, repo, task_type, focus, user_context, advanced_analysis
     """
 
     owner = (payload.get("owner") or "").strip()
@@ -88,10 +79,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 고급 분석 모드: 카테고리별 상세 요약 포함 (LLM 5회, 기본 1회보다 느림)
     advanced_analysis = payload.get("advanced_analysis", False)
 
-    # ========================================
-    # Phase 1: GitHub API 병렬 호출 (캐시 적용)
-    # ========================================
-    logger.info("Phase 1: Fetching GitHub data in parallel...")
+    # Phase 1: GitHub API 병렬 호출
+    logger.info("Phase 1: Fetching GitHub data...")
     
     if task_type == DiagnosisTaskType.FULL:
         # FULL 모드: repo_info, readme, commits 병렬 호출
@@ -122,10 +111,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     if readme_text:
         readme_metrics = compute_reademe_metrics(readme_text)
 
-    # ========================================
-    # Phase 2: README 분류 + LLM 요약
-    # ========================================
-    logger.info("Phase 2: README classification and summarization...")
+    # Phase 2: README 분류 + 요약
+    logger.info("Phase 2: README classification...")
     
     if readme_text:
         readme_categories, readme_category_score, unified_summary = classify_readme_sections(
@@ -154,10 +141,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     details["readme_raw"] = readme_text
 
-    # ========================================
     # Phase 3: 점수 계산
-    # ========================================
-    logger.info("Phase 3: Computing health scores...")
+    logger.info("Phase 3: Computing scores...")
     scores: HealthScore
 
     if task_type == DiagnosisTaskType.FULL:

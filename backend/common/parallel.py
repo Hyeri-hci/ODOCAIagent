@@ -1,9 +1,4 @@
-"""
-병렬 실행 유틸리티.
-
-concurrent.futures 기반으로 I/O 작업 병렬화.
-LangGraph 전환 시에도 노드 내부에서 그대로 사용 가능.
-"""
+"""concurrent.futures 기반 병렬 실행 유틸."""
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,8 +8,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-# 기본 워커 수 (GitHub API rate limit 고려)
 DEFAULT_MAX_WORKERS = 4
 
 
@@ -22,26 +15,7 @@ def run_parallel(
     tasks: Dict[str, Callable[[], T]],
     max_workers: int = DEFAULT_MAX_WORKERS,
 ) -> Dict[str, T]:
-    """
-    여러 함수를 병렬로 실행하고 결과를 딕셔너리로 반환.
-    
-    Args:
-        tasks: {키: 실행할_함수} 딕셔너리. 함수는 인자 없이 호출됨.
-        max_workers: 최대 동시 실행 스레드 수
-        
-    Returns:
-        {키: 결과} 딕셔너리
-        
-    사용 예:
-        results = run_parallel({
-            "repo": lambda: fetch_repo(owner, repo),
-            "readme": lambda: fetch_readme_content(owner, repo),
-            "commits": lambda: compute_commit_activity(owner, repo, days),
-        })
-        repo_info = results["repo"]
-        readme_text = results["readme"]
-        commit_metrics = results["commits"]
-    """
+    """여러 함수를 병렬 실행하고 결과 딕셔너리 반환."""
     results: Dict[str, T] = {}
     errors: Dict[str, Exception] = {}
     
@@ -75,12 +49,7 @@ def run_parallel_safe(
     max_workers: int = DEFAULT_MAX_WORKERS,
     default: T = None,  # type: ignore
 ) -> Tuple[Dict[str, T], Dict[str, Exception]]:
-    """
-    병렬 실행 (에러 발생 시에도 계속 진행).
-    
-    Returns:
-        (결과 딕셔너리, 에러 딕셔너리)
-    """
+    """병렬 실행 (에러 발생 시에도 계속 진행). 반환: (결과, 에러) 튜플."""
     results: Dict[str, T] = {}
     errors: Dict[str, Exception] = {}
     

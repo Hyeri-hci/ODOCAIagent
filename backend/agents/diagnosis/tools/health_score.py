@@ -12,10 +12,7 @@ class HealthScore:
   overall_score: int
 
 def score_commit_activity(metrics: CommitActivityMetrics) -> int:
-    """
-        커밋 활동 지표 기반 점수 산출
-        현재는 임시 버전 (커밋 수 + 마지막 커밋 시점 0~100 점수 매핑)
-    """
+    """커밋 활동 지표 기반 점수 (0~100)."""
 
     score = 0
     
@@ -45,10 +42,7 @@ def score_documentation(
         has_readme: bool,
         stats: ReadmeContent | None = None,
 ) -> int:
-    """
-        문서화 품질 점수 산출
-        현재는 임시 버전 (README 존재 여부 기반)
-    """
+    """문서화 품질 점수 (0~100)."""
     if not has_readme:
         return 20 # README 없음
     

@@ -10,23 +10,19 @@ from backend.llm.factory import fetch_llm_client
 
 logger = logging.getLogger(__name__)
 
-# 기본 진단: 통합 요약만 (LLM 1회)
-# 고급 분석: 카테고리별 요약 + 통합 요약 (LLM 5회)
-DEFAULT_ANALYSIS_MODE = "basic"  # "basic" or "advanced"
+DEFAULT_ANALYSIS_MODE = "basic"
 
 
 @dataclass
 class ReadmeUnifiedSummary:
-    """README 통합 요약 결과"""
-    summary_en: str  # 임베딩용 영어 요약
-    summary_ko: str  # 사용자용 한국어 요약
+    summary_en: str
+    summary_ko: str
 
 
 @dataclass
 class ReadmeAdvancedSummary:
-    """고급 분석용 README 요약 결과"""
-    unified: ReadmeUnifiedSummary          # 통합 요약 (en/ko)
-    category_summaries: Dict[str, str]     # 카테고리별 영어 요약 (임베딩용)
+    unified: ReadmeUnifiedSummary
+    category_summaries: Dict[str, str]
 
 
 def summarize_diagnosis_repository(
@@ -34,7 +30,7 @@ def summarize_diagnosis_repository(
     user_level: str = "beginner",
     language: str = "ko",
 ) -> str:
-    """Diagnosis Agent 전체 결과를 요약하는 LLM 호출"""
+    """진단 결과 전체를 LLM으로 요약."""
 
     try:
         diagnosis_json_str = json.dumps(
@@ -118,12 +114,7 @@ def summarize_readme_category_for_embedding(
     category: str,
     text: str,
 ) -> Optional[str]:
-    """
-    README 카테고리 영어 텍스트를 임베딩용 의미 요약으로 변환.
-    
-    [고급 분석 모드에서만 사용]
-    기본 모드에서는 통합 요약(generate_readme_unified_summary)만 사용합니다.
-    """
+    """카테고리 텍스트를 임베딩용 영어 요약으로 변환 (고급 모드용)."""
 
     text = (text or "").strip()
     if not text:
@@ -166,18 +157,7 @@ def summarize_readme_category_for_embedding(
 def generate_readme_category_summaries(
     category_raw_texts: Dict[str, str],
 ) -> Dict[str, str]:
-    """
-    [고급 분석 모드] 카테고리별 영어 요약 생성.
-    
-    각 카테고리마다 LLM 호출 (최대 4회).
-    세밀한 카테고리별 임베딩이 필요한 고급 분석/연구에 사용.
-    
-    Args:
-        category_raw_texts: {카테고리명: raw_text} 딕셔너리
-        
-    Returns:
-        {카테고리명: 영어요약} 딕셔너리
-    """
+    """카테고리별 영어 요약 생성 (고급 모드, LLM 4회)."""
     results: Dict[str, str] = {}
     target_categories = ["WHAT", "WHY", "HOW", "CONTRIBUTING"]
     
@@ -196,15 +176,7 @@ def generate_readme_category_summaries(
 def generate_readme_advanced_summary(
     category_raw_texts: Dict[str, str],
 ) -> ReadmeAdvancedSummary:
-    """
-    [고급 분석 모드] 카테고리별 요약 + 통합 요약 생성.
-    
-    LLM 5회 호출 (카테고리 4회 + 통합 1회).
-    카테고리별 세밀한 임베딩과 통합 요약이 모두 필요할 때 사용.
-    
-    Returns:
-        ReadmeAdvancedSummary(unified, category_summaries)
-    """
+    """카테고리별 + 통합 요약 생성 (고급 모드, LLM 5회)."""
     # 1) 카테고리별 요약 (4회)
     category_summaries = generate_readme_category_summaries(category_raw_texts)
     
@@ -220,18 +192,7 @@ def generate_readme_advanced_summary(
 def generate_readme_unified_summary(
     category_raw_texts: Dict[str, str],
 ) -> ReadmeUnifiedSummary:
-    """
-    카테고리별 raw_text를 합쳐 통합 README 요약 생성.
-    
-    LLM 1회 호출로 영어(임베딩용) + 한국어(사용자용) 동시 생성.
-    기존 카테고리별 semantic_summary 4회 호출 → 1회로 통합하여 성능 최적화.
-    
-    Args:
-        category_raw_texts: {카테고리명: raw_text} 딕셔너리
-        
-    Returns:
-        ReadmeUnifiedSummary(summary_en, summary_ko)
-    """
+    """통합 README 요약 생성 (LLM 1회, en+ko 동시)."""
     # 카테고리별 원문 합치기 (중요 카테고리 우선, 길이 제한)
     parts = []
     priority_order = ["WHAT", "WHY", "HOW", "CONTRIBUTING"]

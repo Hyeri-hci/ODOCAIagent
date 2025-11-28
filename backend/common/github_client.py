@@ -36,11 +36,9 @@ def fetch_repo(owner: str, repo: str) -> Dict[str, Any]:
     return resp.json()
 
 
-@cached(ttl=300)  # 5분 캐싱
+@cached(ttl=300)
 def fetch_readme(owner: str, repo: str) -> Optional[Dict[str, Any]]:
-    """
-        repos/{owner}/{repo}/readme 정보 조회 (없으면 None 반환)
-    """
+    """README 정보 조회 (없으면 None)."""
     logger.debug("GitHub API: fetch_readme %s/%s", owner, repo)
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/readme"
     resp = requests.get(url, headers=_build_headers(), timeout=10)
@@ -51,16 +49,14 @@ def fetch_readme(owner: str, repo: str) -> Optional[Dict[str, Any]]:
     return resp.json()
 
 
-@cached(ttl=180)  # 3분 캐싱 (커밋은 더 자주 변경될 수 있음)
+@cached(ttl=180)
 def fetch_recent_commits(
     owner: str,
     repo: str,
     days: int = DEFAULT_ACTIVITY_DAYS,
     per_page: int = 100,
 ) -> List[Dict[str, Any]]:
-    """
-        최근 커밋 내역 조회(최대 per_page 개)
-    """
+    """최근 커밋 내역 조회."""
     logger.debug("GitHub API: fetch_recent_commits %s/%s (days=%d)", owner, repo, days)
     since_dt = dt.datetime.now() - dt.timedelta(days=days)
     since_iso = since_dt.isoformat() + "Z"  
@@ -79,12 +75,12 @@ def fetch_recent_commits(
 
 
 def clear_repo_cache(owner: str, repo: str) -> None:
-    """특정 repo의 캐시 무효화"""
+    """repo 캐시 무효화."""
     fetch_repo.invalidate(owner, repo)
     fetch_readme.invalidate(owner, repo)
     fetch_recent_commits.invalidate(owner, repo)
 
 
 def clear_all_cache() -> None:
-    """전체 GitHub 캐시 삭제"""
+    """GitHub 캐시 전체 삭제."""
     github_cache.clear()

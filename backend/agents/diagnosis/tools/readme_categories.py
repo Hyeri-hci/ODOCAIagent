@@ -303,7 +303,7 @@ MAX_RAW_CHARS_PER_CAT = 2000  # LLM에 넘길 때 카테고리별 최대 길이
 
 
 def _classify_section_rule_based(section: ReadmeSection) -> SectionClassification:
-    """헤딩/본문 키워드를 기반으로 섹션 카테고리와 confidence를 계산한다."""
+    """헤딩/본문 키워드 기반 섹션 분류."""
     heading = (section.heading or "").strip()
     body = section.content or ""
 
@@ -358,10 +358,7 @@ def _classify_section_rule_based(section: ReadmeSection) -> SectionClassificatio
 
 
 def _apply_last_section_bias(category: ReadmeCategory, section: ReadmeSection) -> ReadmeCategory:
-    """
-    README 마지막 섹션은 CONTRIBUTING / WHO / REFERENCES / LICENSE일 가능성이 높으므로
-    간단한 키워드 기반 보정을 해 준다.
-    """
+    """마지막 섹션 키워드 기반 보정."""
     text = ((section.heading or "") + "\n" + (section.content or "")).lower()
 
     if "contributing" in text or "기여" in text or "pull request" in text:
@@ -403,11 +400,7 @@ def _refine_with_llm(
     initial: List[SectionClassification],
     score_threshold: float = 0.3,
 ) -> List[ReadmeCategory]:
-    """
-    규칙 기반 confidence가 낮은 섹션들만 LLM에 한 번에 보내 재분류한다.
-    - README 1개당 LLM 호출은 최대 1회
-    - LLM 실패 시에는 규칙 기반 결과를 그대로 사용
-    """
+    """confidence 낮은 섹션들만 LLM으로 재분류."""
     indices = [i for i, cls in enumerate(initial) if cls.score < score_threshold]
     if not indices:
         return [cls.category for cls in initial]
@@ -502,9 +495,7 @@ def _summarize_category_sections(
     total_chars: int,
     enable_semantic_summary: bool = True,
 ) -> CategoryInfo:
-    """
-    카테고리별로 섹션을 묶어 coverage/요약/임베딩용 요약을 생성한다.
-    """
+    """카테고리별 섹션 요약 생성."""
     if not sections:
         return CategoryInfo(
             present=False,
@@ -568,11 +559,7 @@ def _compute_documentation_score(
     grouped: Dict[ReadmeCategory, List[ReadmeSection]],
     total_chars: int,
 ) -> int:
-    """
-    간단 coverage + diversity 기반 문서 품질 점수 (0~100).
-    - coverage_total: 각 카테고리별 텍스트 비율을 0~1로 잘라 더한 값 (최대 8)
-    - diversity: 실제로 등장한 카테고리 수 / 8
-    """
+    """coverage + diversity 기반 문서 품질 점수 (0~100)."""
     if total_chars <= 0:
         return 0
 
@@ -599,24 +586,9 @@ def classify_readme_sections(
     advanced_mode: bool = False,
 ) -> Tuple[Dict[str, Dict], int, ReadmeUnifiedSummary]:
     """
-    README 원문 전체를 섹션으로 나눈 뒤:
-    1) 규칙 기반으로 섹션 카테고리를 분류하고
-    2) 필요 시 confidence가 낮은 섹션만 LLM으로 재분류한 다음
-    3) 카테고리별 coverage/요약/임베딩용 요약을 생성한다.
-    4) 통합 README 요약 생성 (영어+한국어)
-
-    Args:
-        markdown_text: README 원문
-        use_llm_refine: 애매한 섹션 LLM 재분류 여부
-        enable_semantic_summary: 요약 생성 여부
-        advanced_mode: 고급 분석 모드 (카테고리별 요약 포함, LLM 5회)
-                      False(기본): 통합 요약만 (LLM 1회, 빠름)
-                      True: 카테고리별 + 통합 요약 (LLM 5회, 상세)
-
-    반환값:
-    - categories: {카테고리명(문자열) -> CategoryInfo(dict)}
-    - documentation_score: 0~100
-    - unified_summary: ReadmeUnifiedSummary (summary_en, summary_ko)
+    README 분류 및 요약.
+    - advanced_mode=False: 통합 요약만 (LLM 1회)
+    - advanced_mode=True: 카테고리별 + 통합 (LLM 5회)
     """
     empty_summary = ReadmeUnifiedSummary(summary_en="", summary_ko="")
     
