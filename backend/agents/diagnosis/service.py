@@ -22,10 +22,9 @@ from .llm_summarizer import summarize_diagnosis_repository
 
 USE_LLM_SUMMARY = True
 
+
 def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> str:
-    """
-        간단 자연어 요약 (현재는 규칙 기반)
-    """
+    """간단 규칙 기반 자연어 요약"""
     parts: List[str] = []
     parts.append(f"Repository: {repo_info.full_name}")
     if repo_info.description:
@@ -47,7 +46,7 @@ def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> st
         if commit_metrics.days_since_last_commit is not None:
             parts.append(
                 f"Total Commits in last {commit_metrics.window_days} days: {commit_metrics.total_commits}, "
-                f"Days since last commit: {commit_metrics.days_since_last_commit} "
+                f"Days since last commit: {commit_metrics.days_since_last_commit}"
             )
         else:
             parts.append(
@@ -59,9 +58,9 @@ def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> st
 
 def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Diagnosis Agent 최소 버전
+    Diagnosis Agent 진입점
 
-    입력 payload 예시:
+    payload 예시
     {
         "owner": "microsoft",
         "repo": "vscode",
@@ -71,7 +70,6 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
     """
 
-    # 0) 입력 파싱
     owner = (payload.get("owner") or "").strip()
     repo = (payload.get("repo") or "").strip()
     if not owner or not repo:
@@ -82,43 +80,44 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     user_context = payload.get("user_context") or {}
     user_level = user_context.get("level", "beginner")
 
-    # 기본 Repository 정보
+    # 기본 저장소 정보
     repo_info = fetch_repo_info(owner, repo)
 
-    # README 내용 + 기본 메트릭
+    # README 원문 및 기본 메트릭
     readme_text = fetch_readme_content(owner, repo) or ""
     readme_metrics = None
     if readme_text:
         readme_metrics = compute_reademe_metrics(readme_text)
 
-    # README 섹션 분류 (8 카테고리)
+    # README 8카테고리 분류 결과
     if readme_text:
         readme_categories, readme_category_score = classify_readme_sections(readme_text)
     else:
         readme_categories, readme_category_score = {}, 0
 
-    # 세부 정보 기본값 구성
+    # details 기본 구성
     details: Dict[str, Any] = {
         "repo_info": asdict(repo_info),
     }
     if readme_metrics is not None:
         details["readme_metrics"] = asdict(readme_metrics)
-    details["readme_categories"] = readme_categories
-    details["readme_category_score"] = readme_category_score
 
-    # task_type 별로 commit_metrics / scores 계산
+    details["docs"] = {
+        "readme_categories": readme_categories,
+        "readme_category_score": readme_category_score,
+    }
+
+    # task_type 별 점수 계산
     commit_metrics = None   # type: ignore[assignment]
     scores: HealthScore
 
     if task_type == DiagnosisTaskType.FULL:
-        # 활동성 메트릭
         commit_metrics = compute_commit_activity(
             owner=owner,
             repo=repo,
             days=DEFAULT_ACTIVITY_DAYS,
         )
 
-        # HealthScore 집계 (문서 + 활동성)
         scores = aggregate_health_scores(
             has_readme=repo_info.has_readme,
             commit_metrics=commit_metrics,
@@ -171,14 +170,14 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             overall_score=0,
         )
 
-    # 규칙 기반 요약 (fallback)
+    # 규칙 기반 기본 요약
     natural_summary = _summarize_common(
         repo_info=repo_info,
         scores=scores,
         commit_metrics=commit_metrics,
     )
 
-    # JSON 결과 구성
+    # 최종 JSON 결과
     result_json: Dict[str, Any] = {
         "input": {
             "owner": owner,
@@ -191,7 +190,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         "details": details,
     }
 
-    # 8) LLM 요약 (Kanana / Ollama)
+    # LLM 기반 요약
     if USE_LLM_SUMMARY:
         natural_summary = summarize_diagnosis_repository(
             diagnosis_result=result_json,
@@ -201,5 +200,3 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     result_json["natural_language_summary_for_user"] = natural_summary
     return result_json
-
-

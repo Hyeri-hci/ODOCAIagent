@@ -29,6 +29,7 @@ class CategoryInfo:
     coverage_score: float           # 해당 카테고리 커버리지 점수 (0.0 ~ 1.0)
     summary: str                    # 해당 카테고리 요약
     example_snippets: List[str]     # 해당 카테고리 예제 코드 조각
+    raw_text: str                   # 원본 텍스트
 
 
 # 가중치 상수
@@ -203,22 +204,78 @@ def classify_section_rule_based(section: ReadmeSection) -> ReadmeCategory:
 
     return best_cat
 
+MAX_RAW_CHARS_PER_CAT = 4000  # LLM에 넘길 때 카테고리별 최대 길이 (임의값, 필요하면 조정)
 
-def _summarize_category_sections(sections: List[ReadmeSection], total_chars: int) -> CategoryInfo:
+def _summarize_category_sections(
+    sections: List[ReadmeSection],
+    total_chars: int,
+) -> CategoryInfo:
+    """
+    한 카테고리에 속한 섹션들을 받아:
+    - coverage_score (README 전체 대비 비율)
+    - 사람이 보기 좋은 summary (앞부분의 의미 있는 줄 위주로)
+    - example_snippets (summary 일부)
+    - raw_text (LLM용 원문 텍스트, 너무 길면 잘라냄)
+    을 채운 CategoryInfo를 반환.
+    """
     if not sections:
-        return CategoryInfo(False, 0.0, "", [])
+        return CategoryInfo(
+            present=False,
+            coverage_score=0.0,
+            summary="",
+            example_snippets=[],
+            raw_text="",
+        )
 
-    char_sum = sum(len(sec.content) for sec in sections)
-    coverage = min(1.0, char_sum / max(total_chars, 1))
-    snippet_lines = sections[0].content.strip().splitlines()
-    snippet = "\n".join(snippet_lines[:3]).strip()[:500]
+    # 카테고리 전체 길이
+    cat_chars = sum(len(s.content) for s in sections)
+    coverage = cat_chars / total_chars if total_chars > 0 else 0.0
+
+    # 1) 첫 섹션에서 의미 있는 줄만 골라 summary 만들기
+    first_lines = sections[0].content.strip().splitlines()
+
+    meaningful_lines: List[str] = []
+    for line in first_lines:
+        line = line.strip()
+        if not line:
+            continue
+        # 이미지/뱃지/장식 줄은 summary에서 제외
+        if line.startswith("![](") or line.startswith("!["):
+            continue
+        if "<img " in line:
+            continue
+        if "shields.io" in line:
+            continue
+        if set(line) <= {"#", "=", "-", "_", "*"}:
+            continue
+
+        meaningful_lines.append(line)
+        if len(meaningful_lines) >= 3:
+            break
+
+    if meaningful_lines:
+        summary_text = "\n".join(meaningful_lines)
+    else:
+        # 의미 있는 줄을 못 찾으면 앞 3줄 그대로 사용
+        summary_text = "\n".join(first_lines[:3])
+
+    summary_snippet = summary_text[:500]
+    example_snippet = summary_snippet[:200]
+
+    # 2) LLM용 raw_text: 해당 카테고리 섹션을 전부 이어붙이되, 너무 길면 잘라냄
+    full_text = "\n\n".join(s.content.strip() for s in sections)
+    if len(full_text) > MAX_RAW_CHARS_PER_CAT:
+        full_text = full_text[:MAX_RAW_CHARS_PER_CAT]
 
     return CategoryInfo(
         present=True,
         coverage_score=coverage,
-        summary=snippet,
-        example_snippets=[snippet[:200]] if snippet else [],
+        summary=summary_snippet,
+        example_snippets=[example_snippet],
+        raw_text=full_text,
     )
+
+
 
 
 def _compute_documentation_score(category_map: Dict[ReadmeCategory, List[ReadmeSection]], total_chars: int) -> int:
