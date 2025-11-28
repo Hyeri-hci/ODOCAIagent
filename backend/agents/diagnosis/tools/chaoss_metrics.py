@@ -51,7 +51,8 @@ def _parse_commit_date(commit: Dict[str, Any]) -> Optional[date]:
     if not dt_str:
         return None
     
-    return _parse_iso8601(dt_str)
+    dt = _parse_iso8601(dt_str)
+    return dt.date() if dt else None
 
 def _extract_author_id(commit: Dict[str, Any]) -> Optional[str]:
     if not isinstance(commit, dict):
@@ -109,9 +110,9 @@ def compute_commit_activity(
         if author_id:
             author_ids.add(author_id)
         
-        dt= _parse_commit_date(c)
+        dt = _parse_commit_date(c)
         if dt is not None:
-            commit_dates.append(dt.date())
+            commit_dates.append(dt)
 
     unique_authors = len(author_ids)
 
