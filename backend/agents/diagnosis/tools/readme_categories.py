@@ -4,19 +4,20 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Dict, List, Tuple
-from collections import defaultdict
-
+import json
+import logging
 import re
+import textwrap
+
+from backend.llm.base import ChatMessage, ChatRequest
+from backend.llm.factory import fetch_llm_client
 
 from .readme_sections import ReadmeSection, split_readme_into_sections
 from .llm_summarizer import summarize_readme_category_for_embedding
-from .readme_lang_normalizer import (
-    detect_readme_language,
-    translate_section_to_english_for_rules,
-)
+
+logger = logging.getLogger(__name__)
 
 
-# README 카테고리 정의 및 분류 로직
 class ReadmeCategory(Enum):
     """8가지 README 카테고리."""
 
@@ -29,15 +30,21 @@ class ReadmeCategory(Enum):
     CONTRIBUTING = "CONTRIBUTING"
     OTHER = "OTHER"
 
-# 카테고리 정보 데이터 클래스
+
 @dataclass
 class CategoryInfo:
     present: bool
     coverage_score: float
     summary: str               # 디버깅/간단 표시용
     example_snippets: List[str]
-    raw_text: str              # 영어 기반 원문 텍스트 일부
-    semantic_summary_en: str   # LLM이 만든 의미 중심 요약
+    raw_text: str              # 원문 텍스트 일부 (다국어 가능)
+    semantic_summary_en: str   # LLM이 만든 의미 중심 영어 요약
+
+
+@dataclass
+class SectionClassification:
+    category: ReadmeCategory
+    score: float  # rule-based confidence (0.0 ~ 1.0)
 
 
 # 가중치 상수
@@ -46,7 +53,7 @@ WEIGHT_BODY = 1.5
 WEIGHT_POSITION_FIRST = 2.0
 WEIGHT_STRUCT_HOW = 2.0
 
-# 카테고리 우선순위 리스트
+# 카테고리 우선순위 (동점일 때 우선 적용)
 CATEGORY_PRIORITY: List[ReadmeCategory] = [
     ReadmeCategory.WHAT,
     ReadmeCategory.HOW,
@@ -58,10 +65,33 @@ CATEGORY_PRIORITY: List[ReadmeCategory] = [
     ReadmeCategory.OTHER,
 ]
 
-# 카테고리별 제목 키워드 매핑
+# 카테고리별 제목 키워드 (영어 + 한국어)
 HEADING_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
-    ReadmeCategory.WHAT: ["overview", "introduction", "about", "project description"],
-    ReadmeCategory.WHY: ["motivation", "why", "background", "goals", "objectives"],
+    ReadmeCategory.WHAT: [
+        "overview",
+        "introduction",
+        "about",
+        "project description",
+        "project overview",
+        "소개",
+        "개요",
+        "프로젝트 소개",
+        "프로젝트 개요",
+        "프로젝트 설명",
+    ],
+    ReadmeCategory.WHY: [
+        "motivation",
+        "why",
+        "background",
+        "goals",
+        "objectives",
+        "problem statement",
+        "배경",
+        "동기",
+        "목표",
+        "문제 정의",
+        "왜 이 프로젝트인가",
+    ],
     ReadmeCategory.HOW: [
         "installation",
         "install",
@@ -70,23 +100,92 @@ HEADING_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
         "usage",
         "how to use",
         "setup",
+        "examples",
+        "예제",
+        "사용법",
+        "사용 방법",
+        "시작하기",
+        "빠른 시작",
+        "설치",
+        "실행 방법",
+        "예시 코드",
     ],
-    ReadmeCategory.WHEN: ["changelog", "release notes", "releases", "roadmap", "version history"],
-    ReadmeCategory.WHO: ["authors", "maintainers", "contributors", "team", "license", "credits"],
-    ReadmeCategory.REFERENCES: ["references", "documentation", "docs", "further reading"],
+    ReadmeCategory.WHEN: [
+        "changelog",
+        "release notes",
+        "releases",
+        "roadmap",
+        "version history",
+        "변경 로그",
+        "업데이트 내역",
+        "릴리스 노트",
+        "로드맵",
+        "버전 기록",
+    ],
+    ReadmeCategory.WHO: [
+        "authors",
+        "maintainers",
+        "contributors",
+        "team",
+        "license",
+        "credits",
+        "people",
+        "작성자",
+        "기여자",
+        "관리자",
+        "팀",
+        "라이선스",
+        "저작권",
+        "문의",
+        "연락처",
+    ],
+    ReadmeCategory.REFERENCES: [
+        "references",
+        "documentation",
+        "docs",
+        "further reading",
+        "related work",
+        "참고 문헌",
+        "참고 자료",
+        "추가 문서",
+        "관련 자료",
+        "인용",
+    ],
     ReadmeCategory.CONTRIBUTING: [
         "contributing",
         "how to contribute",
-        "CONTRIBUTING guidelines",
+        "contributing guidelines",
         "code of conduct",
         "development",
+        "기여",
+        "기여 방법",
+        "기여 가이드",
+        "기여하기",
+        "개발 가이드",
+        "참여 방법",
+        "이슈 등록",
+        "풀 리퀘스트",
+        "pull request",
+        "pull requests",
+        "pr 가이드",
     ],
     ReadmeCategory.OTHER: [],
 }
 
-# 카테고리별 본문 키워드 매핑
+# 카테고리별 본문 키워드 (영어 + 한국어)
 BODY_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
-    ReadmeCategory.WHAT: ["is a library", "is a framework", "provides", "allows you to"],
+    ReadmeCategory.WHAT: [
+        "is a library",
+        "is a framework",
+        "provides",
+        "allows you to",
+        "used for",
+        "라이브러리입니다",
+        "프레임워크입니다",
+        "제공합니다",
+        "위해 사용됩니다",
+        "도와줍니다",
+    ],
     ReadmeCategory.WHY: [
         "we aim to",
         "the goal is",
@@ -94,6 +193,11 @@ BODY_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
         "in order to",
         "to solve this problem",
         "designed to",
+        "목표는",
+        "우리는",
+        "문제를 해결하기 위해",
+        "위해 설계되었습니다",
+        "필요성이 있습니다",
     ],
     ReadmeCategory.HOW: [
         "run the following command",
@@ -110,10 +214,55 @@ BODY_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
         "build",
         "execute",
         "step",
+        "다음 명령을 실행",
+        "예제",
+        "사용 예시",
+        "설치",
+        "실행",
+        "환경 설정",
+        "순서대로",
+        "단계별",
     ],
-    ReadmeCategory.WHEN: ["released on", "since version", "this release", "upcoming", "milestone"],
-    ReadmeCategory.WHO: ["maintained by", "developed by", "thanks to", "contact", "email", "slack"],
-    ReadmeCategory.REFERENCES: ["see also", "documentation", "wiki", "read the docs", "arxiv", "doi", "bibtex", "citation"],
+    ReadmeCategory.WHEN: [
+        "released on",
+        "since version",
+        "this release",
+        "upcoming",
+        "milestone",
+        "version",
+        "릴리스",
+        "버전",
+        "업데이트",
+        "다음과 같이 변경",
+    ],
+    ReadmeCategory.WHO: [
+        "maintained by",
+        "developed by",
+        "thanks to",
+        "contact",
+        "email",
+        "slack",
+        "discord",
+        "문의는",
+        "연락처",
+        "개발자",
+        "기여자",
+        "작성자",
+    ],
+    ReadmeCategory.REFERENCES: [
+        "see also",
+        "documentation",
+        "wiki",
+        "read the docs",
+        "arxiv",
+        "doi",
+        "bibtex",
+        "citation",
+        "참고",
+        "문서",
+        "위키",
+        "인용",
+    ],
     ReadmeCategory.CONTRIBUTING: [
         "pull request",
         "pull requests",
@@ -128,97 +277,192 @@ BODY_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
         "clone",
         "create a pull request",
         "development environment",
+        "기여하려면",
+        "이슈를 생성",
+        "버그 리포트",
+        "기능 요청",
+        "PR을 보내주세요",
     ],
     ReadmeCategory.OTHER: [],
 }
 
 
-def _normalize(text: str | None) -> str:
-    return (text or "").strip().lower()
+EMBED_SUMMARY_TARGET_CATEGORIES = {
+    ReadmeCategory.WHAT,
+    ReadmeCategory.WHY,
+    ReadmeCategory.HOW,
+    ReadmeCategory.CONTRIBUTING,
+}
+
+MAX_RAW_CHARS_PER_CAT = 2000  # LLM에 넘길 때 카테고리별 최대 길이
 
 
-def _count_matches(text: str, keywords: List[str]) -> int:
-    return sum(text.count(kw) for kw in keywords)
+def _classify_section_rule_based(section: ReadmeSection) -> SectionClassification:
+    """헤딩/본문 키워드를 기반으로 섹션 카테고리와 confidence를 계산한다."""
+    heading = (section.heading or "").strip()
+    body = section.content or ""
 
-
-def _looks_like_code_block(text: str | None) -> bool:
-    body = text or ""
-    if not body:
-        return False
-    if "```" in body or "$ " in body:
-        return True
-    return bool(re.search(r"^\s*[-*+]\s+`?.+`?", body, re.MULTILINE))
-
-
-def _looks_like_list(text: str | None) -> bool:
-    body = (text or "").strip()
-    if not body:
-        return False
-    return bool(re.search(r"(^|\n)\s*[-*+]\s+", body))
-
-
-def _apply_last_section_bias(category: ReadmeCategory, section: ReadmeSection) -> ReadmeCategory:
-    text = _normalize(section.heading) + "\n" + _normalize(section.content)
-    if any(token in text for token in ["license", "copyright"]):
-        return ReadmeCategory.WHO
-    if any(token in text for token in ["reference", "see also", "documentation"]):
-        return ReadmeCategory.REFERENCES
-    if any(token in text for token in ["contributing", "pull request", "issues"]):
-        return ReadmeCategory.CONTRIBUTING
-    return category
-
-
-def classify_section_rule_based(section: ReadmeSection) -> ReadmeCategory:
-    heading_norm = _normalize(section.heading)
-    body_norm = _normalize(section.content)
-    combined = (heading_norm + "\n" + body_norm).strip()
-    if not combined:
-        return ReadmeCategory.OTHER
+    heading_lower = heading.lower()
+    body_lower = body.lower()
 
     scores: Dict[ReadmeCategory, float] = {cat: 0.0 for cat in ReadmeCategory}
 
+    # 1) 제목 키워드
     for cat, keywords in HEADING_KEYWORDS.items():
-        matches = _count_matches(heading_norm, keywords)
-        if matches:
-            scores[cat] += matches * WEIGHT_HEADING
+        for kw in keywords:
+            if kw.lower() in heading_lower:
+                scores[cat] += WEIGHT_HEADING
 
+    # 2) 본문 키워드
     for cat, keywords in BODY_KEYWORDS.items():
-        matches = _count_matches(body_norm, keywords)
-        if matches:
-            scores[cat] += matches * WEIGHT_BODY
+        for kw in keywords:
+            if kw.lower() in body_lower:
+                scores[cat] += WEIGHT_BODY
 
-    if _looks_like_code_block(section.content) or _looks_like_list(section.content):
+    # 3) HOW에 자주 등장하는 구조적인 패턴
+    if re.search(r"```", body) or re.search(r"\binstall\b", body_lower):
         scores[ReadmeCategory.HOW] += WEIGHT_STRUCT_HOW
 
+    # 4) 첫 번째 섹션 위치 보정
     if section.index == 0:
         scores[ReadmeCategory.WHAT] += WEIGHT_POSITION_FIRST
         scores[ReadmeCategory.WHY] += WEIGHT_POSITION_FIRST * 0.7
 
     max_score = max(scores.values()) if scores else 0.0
-    if max_score <= 0:
+    if max_score <= 0.0:
+        # 아무 키워드도 못 찾은 경우: 위치 기반 기본값
         if section.index == 0:
-            return ReadmeCategory.WHAT
-        if section.index == 1:
-            return ReadmeCategory.HOW
-        return ReadmeCategory.OTHER
+            base_cat = ReadmeCategory.WHAT
+        elif section.index == 1:
+            base_cat = ReadmeCategory.HOW
+        else:
+            base_cat = ReadmeCategory.OTHER
+        return SectionClassification(category=base_cat, score=0.0)
 
     best_cat = ReadmeCategory.OTHER
-    best_score = -1.0
+    best_raw_score = -1.0
     for cat in CATEGORY_PRIORITY:
-        score = scores.get(cat, 0.0)
-        if score > best_score:
-            best_score = score
+        sc = scores[cat]
+        if sc > best_raw_score:
+            best_raw_score = sc
             best_cat = cat
 
-    return best_cat
+    # 규칙 기반 confidence를 대략 0~1 범위로 정규화 (경험적 파라미터)
+    norm_score = min(best_raw_score / 10.0, 1.0)
+    return SectionClassification(category=best_cat, score=norm_score)
 
-MAX_RAW_CHARS_PER_CAT = 4000  # LLM에 넘길 때 카테고리별 최대 길이 (임의값, 필요하면 조정)
+
+def _apply_last_section_bias(category: ReadmeCategory, section: ReadmeSection) -> ReadmeCategory:
+    """
+    README 마지막 섹션은 CONTRIBUTING / WHO / REFERENCES / LICENSE일 가능성이 높으므로
+    간단한 키워드 기반 보정을 해 준다.
+    """
+    text = ((section.heading or "") + "\n" + (section.content or "")).lower()
+
+    if "contributing" in text or "기여" in text or "pull request" in text:
+        return ReadmeCategory.CONTRIBUTING
+    if "license" in text or "licence" in text or "mit license" in text or "apache license" in text:
+        return ReadmeCategory.WHO
+    if "reference" in text or "참고" in text or "citation" in text or "인용" in text:
+        return ReadmeCategory.REFERENCES
+    if "contact" in text or "문의" in text or "이메일" in text or "email" in text:
+        return ReadmeCategory.WHO
+
+    return category
+
+
+def _refine_with_llm(
+    sections: List[ReadmeSection],
+    initial: List[SectionClassification],
+    score_threshold: float = 0.3,
+) -> List[ReadmeCategory]:
+    """
+    규칙 기반 confidence가 낮은 섹션들만 LLM에 한 번에 보내 재분류한다.
+    - README 1개당 LLM 호출은 최대 1회
+    - LLM 실패 시에는 규칙 기반 결과를 그대로 사용
+    """
+    indices = [i for i, cls in enumerate(initial) if cls.score < score_threshold]
+    if not indices:
+        return [cls.category for cls in initial]
+
+    payload = []
+    for i in indices:
+        sec = sections[i]
+        cls = initial[i]
+        payload.append(
+            {
+                "index": sec.index,
+                "heading": sec.heading or "",
+                "content": (sec.content or "")[:1200],
+                "initial_category": cls.category.value,
+                "initial_score": cls.score,
+            }
+        )
+
+    system_prompt = (
+        "You classify GitHub README sections into one of 8 categories: "
+        "WHAT, WHY, HOW, WHEN, WHO, REFERENCES, CONTRIBUTING, OTHER.\n"
+        "You are given a JSON array of sections with their index, heading, content, "
+        "and an initial_category suggestion.\n"
+        "For each item, choose the most appropriate category and return a JSON array "
+        "of objects with fields 'index' and 'category' (one of the 8 labels). "
+        "Return ONLY the JSON output, no explanation."
+    )
+
+    user_prompt = textwrap.dedent(
+        f"""
+        Sections to classify (JSON):
+        {json.dumps(payload, ensure_ascii=False, indent=2)}
+
+        Return a JSON array with the same length as input.
+        """
+    ).strip()
+
+    messages = [
+        ChatMessage(role="system", content=system_prompt),
+        ChatMessage(role="user", content=user_prompt),
+    ]
+
+    try:
+        client = fetch_llm_client()
+        request = ChatRequest(messages=messages, max_tokens=512, temperature=0.0)
+        response = client.chat(request)
+        text = response.content.strip()
+        data = json.loads(text)
+    except Exception as exc:
+        logger.warning("LLM-based README section classification failed: %s", exc)
+        return [cls.category for cls in initial]
+
+    category_map: Dict[int, ReadmeCategory] = {}
+    if isinstance(data, list):
+        for item in data:
+            try:
+                idx = int(item.get("index"))
+                cat_str = str(item.get("category") or "").upper()
+                cat_enum = ReadmeCategory[cat_str]
+            except Exception:
+                continue
+            category_map[idx] = cat_enum
+
+    final_categories: List[ReadmeCategory] = []
+    for sec, cls in zip(sections, initial):
+        if sec.index in category_map:
+            final_categories.append(category_map[sec.index])
+        else:
+            final_categories.append(cls.category)
+
+    return final_categories
+
 
 def _summarize_category_sections(
+    category: ReadmeCategory,
     sections: List[ReadmeSection],
     total_chars: int,
-    lang_code: str,
+    enable_semantic_summary: bool = True,
 ) -> CategoryInfo:
+    """
+    카테고리별로 섹션을 묶어 coverage/요약/임베딩용 요약을 생성한다.
+    """
     if not sections:
         return CategoryInfo(
             present=False,
@@ -229,10 +473,10 @@ def _summarize_category_sections(
             semantic_summary_en="",
         )
 
-    # 카테고리 전체 길이
     cat_chars = sum(len(s.content) for s in sections)
     coverage = cat_chars / total_chars if total_chars > 0 else 0.0
 
+    # 간단 summary / example_snippet: 첫 섹션 앞부분만 사용
     first_lines = sections[0].content.strip().splitlines()
     meaningful_lines: List[str] = []
     for line in first_lines:
@@ -254,121 +498,130 @@ def _summarize_category_sections(
     if meaningful_lines:
         summary_text = "\n".join(meaningful_lines)
     else:
-        # 의미 있는 줄을 못 찾으면 앞 3줄 그대로 사용
         summary_text = "\n".join(first_lines[:3])
 
     summary_snippet = summary_text[:1000]
     example_snippet = summary_snippet[:500]
 
+    # 원문 raw_text는 길이 제한 후 그대로 저장
     full_text = "\n\n".join(s.content.strip() for s in sections)
     if len(full_text) > MAX_RAW_CHARS_PER_CAT:
         full_text = full_text[:MAX_RAW_CHARS_PER_CAT]
 
-    raw_text_en = full_text
-
+    raw_text = full_text
     semantic_summary_en = ""
-    try:
-        semantic_summary = summarize_readme_category_for_embedding(
-            category_name="unknown" if not sections else sections[0].heading or "",
-            raw_text_en=raw_text_en,
-        )
-        if semantic_summary:
-            semantic_summary_en = semantic_summary
-    except Exception:
-        semantic_summary_en = ""
+
+    if enable_semantic_summary and category in EMBED_SUMMARY_TARGET_CATEGORIES:
+        try:
+            semantic_summary_en = summarize_readme_category_for_embedding(
+                category_name=category.value,
+                raw_text=raw_text,
+            )
+        except Exception as exc:
+            logger.warning(
+                "semantic summary generation failed for category %s: %s",
+                category.value,
+                exc,
+            )
+            semantic_summary_en = ""
 
     return CategoryInfo(
         present=True,
         coverage_score=coverage,
         summary=summary_snippet,
-        example_snippets=[example_snippet],
-        raw_text=raw_text_en,
+        example_snippets=[example_snippet] if example_snippet else [],
+        raw_text=raw_text,
         semantic_summary_en=semantic_summary_en,
     )
 
 
-
-
-def _compute_documentation_score(category_map: Dict[ReadmeCategory, List[ReadmeSection]], total_chars: int) -> int:
-    if not total_chars:
+def _compute_documentation_score(
+    grouped: Dict[ReadmeCategory, List[ReadmeSection]],
+    total_chars: int,
+) -> int:
+    """
+    간단 coverage + diversity 기반 문서 품질 점수 (0~100).
+    - coverage_total: 각 카테고리별 텍스트 비율을 0~1로 잘라 더한 값 (최대 8)
+    - diversity: 실제로 등장한 카테고리 수 / 8
+    """
+    if total_chars <= 0:
         return 0
 
-    coverage_total = 0.0
     present_categories = 0
+    coverage_total = 0.0
 
-    for cat in ReadmeCategory:
-        sections = category_map.get(cat, [])
+    for cat, sections in grouped.items():
         if not sections:
             continue
         present_categories += 1
-        coverage_total += min(1.0, sum(len(sec.content) for sec in sections) / total_chars)
+        coverage_total += min(
+            1.0, sum(len(sec.content) for sec in sections) / float(total_chars)
+        )
 
-    diversity = present_categories / len(ReadmeCategory)
-    score = int(round((coverage_total * 60) + (diversity * 40)))
+    diversity = present_categories / float(len(ReadmeCategory))
+    score = int(round((coverage_total * 60.0) + (diversity * 40.0)))
     return max(0, min(score, 100))
 
-def classify_readme_sections(markdown_text: str) -> Tuple[Dict[str, dict], int]:
+
+def classify_readme_sections(
+    markdown_text: str,
+    use_llm_refine: bool = True,
+    enable_semantic_summary: bool = True,
+) -> Tuple[Dict[str, Dict], int]:
     """
-    README 원문 전체를 섹션으로 나눈 뒤,
-    섹션 단위로 영어 텍스트를 만들어 Prana 8카테고리(rule-based)로 분류한다.
-    요약/coverage 계산은 항상 원문 길이 기준으로 한다.
+    README 원문 전체를 섹션으로 나눈 뒤:
+    1) 규칙 기반으로 섹션 카테고리를 분류하고
+    2) 필요 시 confidence가 낮은 섹션만 LLM으로 재분류한 다음
+    3) 카테고리별 coverage/요약/임베딩용 요약을 생성한다.
+
+    반환값:
+    - categories: {카테고리명(문자열) -> CategoryInfo(dict)}
+    - documentation_score: 0~100
     """
     original_text = markdown_text or ""
     if not original_text.strip():
         return {}, 0
 
-    # 1) 원문 전체 기준으로 섹션 나누기
-    sections_original = split_readme_into_sections(original_text)
-    if not sections_original:
+    sections = split_readme_into_sections(original_text)
+    if not sections:
         return {}, 0
 
-    # 2) README 언어 한 번만 감지
-    lang = detect_readme_language(original_text)
+    # 1) 규칙 기반 1차 분류
+    initial: List[SectionClassification] = [
+        _classify_section_rule_based(sec) for sec in sections
+    ]
 
-    classified: List[Tuple[ReadmeSection, ReadmeCategory]] = []
+    # 2) LLM으로 애매한 섹션만 재분류
+    if use_llm_refine:
+        categories: List[ReadmeCategory] = _refine_with_llm(sections, initial)
+    else:
+        categories = [cls.category for cls in initial]
 
-    # 3) 각 섹션마다 rule-based용 영어 텍스트 생성 후 카테고리 분류
-    for sec in sections_original:
-        # 섹션 내용을 영어로 정규화 (이미 영어면 그대로, 비영어면 번역)
-        section_en = translate_section_to_english_for_rules(
-            section_text=sec.content,
-            lang_code=lang,
+    # 3) 마지막 섹션 bias
+    if categories:
+        last_idx = len(categories) - 1
+        categories[last_idx] = _apply_last_section_bias(
+            categories[last_idx],
+            sections[last_idx],
         )
 
-        # rule-based 분류는 영어 텍스트 기준으로 수행
-        tmp_sec_for_rules = ReadmeSection(
-            index=sec.index,       # 원래 섹션 index 그대로 사용
-            heading=sec.heading,
-            level=sec.level,       # 원래 heading level 그대로 사용
-            content=section_en,    # 여기만 번역된 텍스트로 교체
-        )
-        cat = classify_section_rule_based(tmp_sec_for_rules)
-
-        # 분류 결과는 "원문 섹션"과 함께 저장
-        classified.append((sec, cat))
-
-    # 4) 마지막 섹션 bias 적용
-    if classified:
-        last_sec, last_cat = classified[-1]
-        classified[-1] = (last_sec, _apply_last_section_bias(last_cat, last_sec))
-
-    # 5) 카테고리별로 원문 섹션을 묶기
+    # 4) 카테고리별 섹션 묶기
     grouped: Dict[ReadmeCategory, List[ReadmeSection]] = defaultdict(list)
-    for sec, category in classified:
-        grouped[category].append(sec)
+    for sec, cat in zip(sections, categories):
+        grouped[cat].append(sec)
 
-    # coverage 계산도 원문 길이 기준
-    total_chars = sum(len(sec.content) for sec, _ in classified) or 1
+    total_chars = sum(len(sec.content) for sec in sections) or 1
 
-    # 6) 카테고리별 요약/점수 구성
-    categories: Dict[str, CategoryInfo] = {}
+    # 5) 카테고리별 요약/점수 구성
+    cat_infos: Dict[str, CategoryInfo] = {}
     for cat in ReadmeCategory:
-        sections_for_cat = grouped.get(cat, [])
-        categories[cat.value] = _summarize_category_sections(
-            sections=sections_for_cat,
+        info = _summarize_category_sections(
+            category=cat,
+            sections=grouped.get(cat, []),
             total_chars=total_chars,
-            lang_code=lang,
+            enable_semantic_summary=enable_semantic_summary,
         )
+        cat_infos[cat.value] = info
 
     score = _compute_documentation_score(grouped, total_chars)
-    return {name: asdict(info) for name, info in categories.items()}, score
+    return {name: asdict(info) for name, info in cat_infos.items()}, score
