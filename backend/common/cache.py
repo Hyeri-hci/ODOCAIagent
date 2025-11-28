@@ -52,6 +52,9 @@ class SimpleCache:
     def clear(self) -> None:
         self._store.clear()
     
+    def size(self) -> int:
+        return len(self._store)
+    
     def cleanup_expired(self) -> int:
         now = time.time()
         expired_keys = [k for k, v in self._store.items() if now > v.expires_at]
