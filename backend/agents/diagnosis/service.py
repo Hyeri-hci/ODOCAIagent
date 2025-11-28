@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from typing import Any, Dict, List
+import logging
 
 from backend.agents.diagnosis.tools.readme_loader import (
     fetch_readme_content,
@@ -9,6 +10,7 @@ from backend.agents.diagnosis.tools.readme_loader import (
 )
 from backend.agents.diagnosis.tools.readme_categories import classify_readme_sections
 from backend.common.github_client import DEFAULT_ACTIVITY_DAYS
+from backend.common.parallel import run_parallel
 from .tools.repo_parser import fetch_repo_info
 from .tools.chaoss_metrics import compute_commit_activity
 from .tools.health_score import (
@@ -19,6 +21,8 @@ from .tools.health_score import (
 )
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
+
+logger = logging.getLogger(__name__)
 
 USE_LLM_SUMMARY = True
 
@@ -66,7 +70,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         "repo": "vscode",
         "task_type": "full_diagnosis",
         "focus": ["documentation", "activity"],
-        "user_context": {"level": "beginner"}
+        "user_context": {"level": "beginner"},
+        "advanced_analysis": false  // true면 카테고리별 상세 요약 포함 (느림)
     }
     """
 
@@ -79,19 +84,54 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     focus = payload.get("focus") or []
     user_context = payload.get("user_context") or {}
     user_level = user_context.get("level", "beginner")
+    
+    # 고급 분석 모드: 카테고리별 상세 요약 포함 (LLM 5회, 기본 1회보다 느림)
+    advanced_analysis = payload.get("advanced_analysis", False)
 
-    # 기본 저장소 정보
-    repo_info = fetch_repo_info(owner, repo)
+    # ========================================
+    # Phase 1: GitHub API 병렬 호출 (캐시 적용)
+    # ========================================
+    logger.info("Phase 1: Fetching GitHub data in parallel...")
+    
+    if task_type == DiagnosisTaskType.FULL:
+        # FULL 모드: repo_info, readme, commits 병렬 호출
+        parallel_results = run_parallel({
+            "repo_info": lambda: fetch_repo_info(owner, repo),
+            "readme_text": lambda: fetch_readme_content(owner, repo) or "",
+            "commit_metrics": lambda: compute_commit_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+        })
+        repo_info = parallel_results["repo_info"]
+        readme_text = parallel_results["readme_text"]
+        commit_metrics = parallel_results["commit_metrics"]
+    else:
+        # DOCS_ONLY 또는 ACTIVITY_ONLY: 필요한 것만 병렬 호출
+        parallel_results = run_parallel({
+            "repo_info": lambda: fetch_repo_info(owner, repo),
+            "readme_text": lambda: fetch_readme_content(owner, repo) or "",
+        })
+        repo_info = parallel_results["repo_info"]
+        readme_text = parallel_results["readme_text"]
+        commit_metrics = None
 
-    # README 원문 및 기본 메트릭
-    readme_text = fetch_readme_content(owner, repo) or ""
+    # README 메트릭 계산 (로컬, 빠름)
     readme_metrics = None
     if readme_text:
         readme_metrics = compute_reademe_metrics(readme_text)
 
-    # README 8카테고리 분류 결과 + 통합 요약
+    # ========================================
+    # Phase 2: README 분류 + LLM 요약
+    # ========================================
+    logger.info("Phase 2: README classification and summarization...")
+    
     if readme_text:
-        readme_categories, readme_category_score, unified_summary = classify_readme_sections(readme_text)
+        readme_categories, readme_category_score, unified_summary = classify_readme_sections(
+            readme_text,
+            advanced_mode=advanced_analysis,
+        )
     else:
         from backend.agents.diagnosis.tools.llm_summarizer import ReadmeUnifiedSummary
         readme_categories, readme_category_score = {}, 0
@@ -100,6 +140,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     # details 기본 구성
     details: Dict[str, Any] = {
         "repo_info": asdict(repo_info),
+        "analysis_mode": "advanced" if advanced_analysis else "basic",
     }
     if readme_metrics is not None:
         details["readme_metrics"] = asdict(readme_metrics)
@@ -113,17 +154,14 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     details["readme_raw"] = readme_text
 
-    # task_type 별 점수 계산
-    commit_metrics = None   # type: ignore[assignment]
+    # ========================================
+    # Phase 3: 점수 계산
+    # ========================================
+    logger.info("Phase 3: Computing health scores...")
     scores: HealthScore
 
     if task_type == DiagnosisTaskType.FULL:
-        commit_metrics = compute_commit_activity(
-            owner=owner,
-            repo=repo,
-            days=DEFAULT_ACTIVITY_DAYS,
-        )
-
+        # commit_metrics는 Phase 1에서 이미 가져옴
         scores = aggregate_health_scores(
             has_readme=repo_info.has_readme,
             commit_metrics=commit_metrics,

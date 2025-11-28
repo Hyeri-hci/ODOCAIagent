@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import logging
 
@@ -10,12 +10,23 @@ from backend.llm.factory import fetch_llm_client
 
 logger = logging.getLogger(__name__)
 
+# 기본 진단: 통합 요약만 (LLM 1회)
+# 고급 분석: 카테고리별 요약 + 통합 요약 (LLM 5회)
+DEFAULT_ANALYSIS_MODE = "basic"  # "basic" or "advanced"
+
 
 @dataclass
 class ReadmeUnifiedSummary:
     """README 통합 요약 결과"""
     summary_en: str  # 임베딩용 영어 요약
     summary_ko: str  # 사용자용 한국어 요약
+
+
+@dataclass
+class ReadmeAdvancedSummary:
+    """고급 분석용 README 요약 결과"""
+    unified: ReadmeUnifiedSummary          # 통합 요약 (en/ko)
+    category_summaries: Dict[str, str]     # 카테고리별 영어 요약 (임베딩용)
 
 
 def summarize_diagnosis_repository(
@@ -107,7 +118,12 @@ def summarize_readme_category_for_embedding(
     category: str,
     text: str,
 ) -> Optional[str]:
-    """README 카테고리 영어 텍스트를 임베딩용 의미 요약으로 변환"""
+    """
+    README 카테고리 영어 텍스트를 임베딩용 의미 요약으로 변환.
+    
+    [고급 분석 모드에서만 사용]
+    기본 모드에서는 통합 요약(generate_readme_unified_summary)만 사용합니다.
+    """
 
     text = (text or "").strip()
     if not text:
@@ -133,14 +149,72 @@ def summarize_readme_category_for_embedding(
         ChatMessage(role="user", content=user_prompt),
     ]
 
-    client = fetch_llm_client()
-    request = ChatRequest(
-        messages=messages,
-        max_tokens=300,
-        temperature=0.2,
+    try:
+        client = fetch_llm_client()
+        request = ChatRequest(
+            messages=messages,
+            max_tokens=300,
+            temperature=0.2,
+        )
+        response = client.chat(request)
+        return response.content.strip() or None
+    except Exception as exc:
+        logger.warning("Category summary failed for %s: %s", category, exc)
+        return None
+
+
+def generate_readme_category_summaries(
+    category_raw_texts: Dict[str, str],
+) -> Dict[str, str]:
+    """
+    [고급 분석 모드] 카테고리별 영어 요약 생성.
+    
+    각 카테고리마다 LLM 호출 (최대 4회).
+    세밀한 카테고리별 임베딩이 필요한 고급 분석/연구에 사용.
+    
+    Args:
+        category_raw_texts: {카테고리명: raw_text} 딕셔너리
+        
+    Returns:
+        {카테고리명: 영어요약} 딕셔너리
+    """
+    results: Dict[str, str] = {}
+    target_categories = ["WHAT", "WHY", "HOW", "CONTRIBUTING"]
+    
+    for cat in target_categories:
+        raw_text = category_raw_texts.get(cat, "")
+        if not raw_text or not raw_text.strip():
+            continue
+            
+        summary = summarize_readme_category_for_embedding(cat, raw_text)
+        if summary:
+            results[cat] = summary
+            
+    return results
+
+
+def generate_readme_advanced_summary(
+    category_raw_texts: Dict[str, str],
+) -> ReadmeAdvancedSummary:
+    """
+    [고급 분석 모드] 카테고리별 요약 + 통합 요약 생성.
+    
+    LLM 5회 호출 (카테고리 4회 + 통합 1회).
+    카테고리별 세밀한 임베딩과 통합 요약이 모두 필요할 때 사용.
+    
+    Returns:
+        ReadmeAdvancedSummary(unified, category_summaries)
+    """
+    # 1) 카테고리별 요약 (4회)
+    category_summaries = generate_readme_category_summaries(category_raw_texts)
+    
+    # 2) 통합 요약 (1회)
+    unified = generate_readme_unified_summary(category_raw_texts)
+    
+    return ReadmeAdvancedSummary(
+        unified=unified,
+        category_summaries=category_summaries,
     )
-    response = client.chat(request)
-    return response.content.strip() or None
 
 
 def generate_readme_unified_summary(

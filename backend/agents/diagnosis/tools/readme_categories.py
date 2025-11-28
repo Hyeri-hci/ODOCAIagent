@@ -15,7 +15,9 @@ from backend.llm.factory import fetch_llm_client
 from .readme_sections import ReadmeSection, split_readme_into_sections
 from .llm_summarizer import (
     generate_readme_unified_summary,
+    generate_readme_advanced_summary,
     ReadmeUnifiedSummary,
+    ReadmeAdvancedSummary,
 )
 
 logger = logging.getLogger(__name__)
@@ -594,13 +596,22 @@ def classify_readme_sections(
     markdown_text: str,
     use_llm_refine: bool = True,
     enable_semantic_summary: bool = True,
+    advanced_mode: bool = False,
 ) -> Tuple[Dict[str, Dict], int, ReadmeUnifiedSummary]:
     """
     README 원문 전체를 섹션으로 나눈 뒤:
     1) 규칙 기반으로 섹션 카테고리를 분류하고
     2) 필요 시 confidence가 낮은 섹션만 LLM으로 재분류한 다음
     3) 카테고리별 coverage/요약/임베딩용 요약을 생성한다.
-    4) 카테고리별 요약을 합쳐 통합 README 요약 생성 (영어+한국어)
+    4) 통합 README 요약 생성 (영어+한국어)
+
+    Args:
+        markdown_text: README 원문
+        use_llm_refine: 애매한 섹션 LLM 재분류 여부
+        enable_semantic_summary: 요약 생성 여부
+        advanced_mode: 고급 분석 모드 (카테고리별 요약 포함, LLM 5회)
+                      False(기본): 통합 요약만 (LLM 1회, 빠름)
+                      True: 카테고리별 + 통합 요약 (LLM 5회, 상세)
 
     반환값:
     - categories: {카테고리명(문자열) -> CategoryInfo(dict)}
@@ -656,7 +667,7 @@ def classify_readme_sections(
 
     score = _compute_documentation_score(grouped, total_chars)
     
-    # 6) 카테고리별 raw_text를 모아서 통합 요약 생성 (LLM 1회 호출)
+    # 6) 요약 생성 (모드에 따라 분기)
     unified_summary = empty_summary
     if enable_semantic_summary:
         category_raw_texts = {
@@ -665,6 +676,23 @@ def classify_readme_sections(
             if info.raw_text and name in ["WHAT", "WHY", "HOW", "CONTRIBUTING"]
         }
         if category_raw_texts:
-            unified_summary = generate_readme_unified_summary(category_raw_texts)
+            if advanced_mode:
+                # 고급 분석: 카테고리별 요약 + 통합 요약 (LLM 5회)
+                advanced = generate_readme_advanced_summary(category_raw_texts)
+                unified_summary = advanced.unified
+                # 카테고리별 semantic_summary_en 채우기
+                for cat_name, cat_summary in advanced.category_summaries.items():
+                    if cat_name in cat_infos:
+                        cat_infos[cat_name] = CategoryInfo(
+                            present=cat_infos[cat_name].present,
+                            coverage_score=cat_infos[cat_name].coverage_score,
+                            summary=cat_infos[cat_name].summary,
+                            example_snippets=cat_infos[cat_name].example_snippets,
+                            raw_text=cat_infos[cat_name].raw_text,
+                            semantic_summary_en=cat_summary,
+                        )
+            else:
+                # 기본 모드: 통합 요약만 (LLM 1회, 빠름)
+                unified_summary = generate_readme_unified_summary(category_raw_texts)
     
     return {name: asdict(info) for name, info in cat_infos.items()}, score, unified_summary
