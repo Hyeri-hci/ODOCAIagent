@@ -17,6 +17,7 @@ class SupervisorInput:
     language: str = "ko"
     owner: Optional[str] = None
     repo: Optional[str] = None
+    advanced_analysis: bool = False  # 고급 분석 모드 (카테고리별 상세 요약 포함)
 
 
 @dataclass
@@ -29,6 +30,7 @@ def _call_diagnosis_agent(
     owner: str,
     repo: str,
     user_level: UserLevel,
+    advanced_analysis: bool = False,
 ) -> Dict[str, Any]:
     """진단 에이전트 호출"""
     payload = {
@@ -39,6 +41,7 @@ def _call_diagnosis_agent(
         "user_context": {
             "level": user_level,
         },
+        "advanced_analysis": advanced_analysis,
     }
     result = run_diagnosis(payload)
     return result
@@ -90,6 +93,7 @@ def run_supervisor(input_data: SupervisorInput) -> SupervisorOutput:
         owner=input_data.owner,
         repo=input_data.repo,
         user_level=input_data.user_level,
+        advanced_analysis=input_data.advanced_analysis,
     )
 
     # 2. LLM을 사용해 최종 요약 생성 (Supervisor 역할)
