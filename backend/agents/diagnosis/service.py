@@ -12,7 +12,11 @@ from backend.agents.diagnosis.tools.readme_categories import classify_readme_sec
 from backend.common.github_client import DEFAULT_ACTIVITY_DAYS
 from backend.common.parallel import run_parallel
 from .tools.repo_parser import fetch_repo_info
-from .tools.chaoss_metrics import compute_commit_activity
+from .tools.chaoss_metrics import (
+    compute_commit_activity,
+    compute_issue_activity,
+    compute_pr_activity,
+)
 from .tools.health_score import (
     aggregate_health_scores,
     HealthScore,
@@ -83,7 +87,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Phase 1: Fetching GitHub data...")
     
     if task_type == DiagnosisTaskType.FULL:
-        # FULL 모드: repo_info, readme, commits 병렬 호출
+        # FULL 모드: repo_info, readme, commits, issues, prs 병렬 호출
         parallel_results = run_parallel({
             "repo_info": lambda: fetch_repo_info(owner, repo),
             "readme_text": lambda: fetch_readme_content(owner, repo) or "",
@@ -92,10 +96,22 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
                 repo=repo,
                 days=DEFAULT_ACTIVITY_DAYS,
             ),
+            "issue_metrics": lambda: compute_issue_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+            "pr_metrics": lambda: compute_pr_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
         })
         repo_info = parallel_results["repo_info"]
         readme_text = parallel_results["readme_text"]
         commit_metrics = parallel_results["commit_metrics"]
+        issue_metrics = parallel_results["issue_metrics"]
+        pr_metrics = parallel_results["pr_metrics"]
     else:
         # DOCS_ONLY 또는 ACTIVITY_ONLY: 필요한 것만 병렬 호출
         parallel_results = run_parallel({
@@ -105,6 +121,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         repo_info = parallel_results["repo_info"]
         readme_text = parallel_results["readme_text"]
         commit_metrics = None
+        issue_metrics = None
+        pr_metrics = None
 
     # README 메트릭 계산 (로컬, 빠름)
     readme_metrics = None
@@ -153,10 +171,11 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             readme_stats=repo_info.readme_stats,
         )
 
-        details["commit_metrics"] = {
-            "total_commits": commit_metrics.total_commits,
-            "days_since_last_commit": commit_metrics.days_since_last_commit,
-            "window_days": commit_metrics.window_days,
+        # CHAOSS 기반 activity 블록 (commit, issue, pr)
+        details["activity"] = {
+            "commit": asdict(commit_metrics),
+            "issue": asdict(issue_metrics),
+            "pr": asdict(pr_metrics),
         }
 
     elif task_type == DiagnosisTaskType.DOCS_ONLY:
@@ -172,11 +191,27 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     elif task_type == DiagnosisTaskType.ACTIVITY_ONLY:
-        commit_metrics = compute_commit_activity(
-            owner=owner,
-            repo=repo,
-            days=DEFAULT_ACTIVITY_DAYS,
-        )
+        # ACTIVITY_ONLY: commit, issue, pr 메트릭 병렬 호출
+        activity_results = run_parallel({
+            "commit_metrics": lambda: compute_commit_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+            "issue_metrics": lambda: compute_issue_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+            "pr_metrics": lambda: compute_pr_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+        })
+        commit_metrics = activity_results["commit_metrics"]
+        issue_metrics = activity_results["issue_metrics"]
+        pr_metrics = activity_results["pr_metrics"]
 
         activity_score = score_commit_activity(commit_metrics)
 
@@ -186,7 +221,11 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             overall_score=activity_score,
         )
 
-        details["commit_metrics"] = asdict(commit_metrics)
+        details["activity"] = {
+            "commit": asdict(commit_metrics),
+            "issue": asdict(issue_metrics),
+            "pr": asdict(pr_metrics),
+        }
 
     else:
         scores = HealthScore(
