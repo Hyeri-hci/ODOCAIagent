@@ -36,16 +36,9 @@ class IssueActivityMetrics:
     repo: str
     window_days: int
 
-    # 파생 지표: 윈도우 내 업데이트된 이슈 중 현재 OPEN 상태
     open_issues: int
-    
-    # 파생 지표: 윈도우 내 새로 생성된 이슈 수 (createdAt >= since_dt)
     opened_issues_in_window: int
-    
-    # 파생 지표: 윈도우 내 생성되어 닫힌 이슈 수
     closed_issues_in_window: int
-
-    # 파생 지표: 이슈 해결률 (closed_in_window / opened_in_window)
     issue_closure_ratio: float
     
     # CHAOSS: Issue Resolution Duration (median) - 닫힌 이슈의 해결 시간 중앙값
@@ -53,6 +46,27 @@ class IssueActivityMetrics:
     
     # CHAOSS: Issue Age (mean) - 현재 열려있는 이슈의 평균 개방 기간
     avg_open_issue_age_days: Optional[float]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PullRequestActivityMetrics:
+    owner: str
+    repo: str
+    window_days: int
+
+    open_prs: int
+    prs_in_window: int
+    merged_in_window: int
+    pr_merge_ratio: float
+    
+    # CHAOSS: Change Requests Duration (median) - 머지된 PR의 머지 시간 중앙값
+    median_time_to_merge_days: Optional[float]
+    
+    # CHAOSS: Change Request Age (mean) - 현재 열린 PR의 평균 개방 기간
+    avg_open_pr_age_days: Optional[float]
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -271,4 +285,86 @@ def compute_issue_activity(
         issue_closure_ratio=issue_closure_ratio,
         median_time_to_close_days=median_time_to_close,
         avg_open_issue_age_days=avg_open_issue_age,
+    )
+
+
+def compute_pr_activity(
+        owner: str,
+        repo: str,
+        days: int = 90,
+    ) -> PullRequestActivityMetrics:
+    try:
+        prs: List[Dict[str, Any]] = fetch_recent_pull_requests(owner, repo, days=days) or []
+    except Exception:
+        return PullRequestActivityMetrics(
+            owner=owner,
+            repo=repo,
+            window_days=max(days, 1),
+            open_prs=0,
+            prs_in_window=0,
+            merged_in_window=0,
+            pr_merge_ratio=0.0,
+            median_time_to_merge_days=None,
+            avg_open_pr_age_days=None,
+        )
+
+    now = datetime.now(timezone.utc)
+    prs_in_window = 0
+    merged_in_window = 0
+    open_prs = 0
+
+    merge_durations: List[float] = []
+    open_ages: List[float] = []
+
+    for pr in prs:
+        state = (pr.get("state") or "").upper()
+        created_dt = _parse_iso8601(pr.get("createdAt"))
+        merged_dt = _parse_iso8601(pr.get("mergedAt"))
+
+        if created_dt:
+            prs_in_window += 1
+
+        if state == "OPEN":
+            open_prs += 1
+            if created_dt:
+                age_days = (now - created_dt).total_seconds() / 86400.0
+                open_ages.append(age_days)
+
+        # Change Requests Duration: merged PR만 대상
+        if state == "MERGED" and created_dt and merged_dt:
+            merged_in_window += 1
+            delta_days = (merged_dt - created_dt).total_seconds() / 86400.0
+            if delta_days >= 0:
+                merge_durations.append(delta_days)
+
+    pr_merge_ratio = (
+        float(merged_in_window) / float(prs_in_window)
+        if prs_in_window > 0 else 0.0
+    )
+
+    # Median time to merge
+    median_time_to_merge: Optional[float] = None
+    if merge_durations:
+        sorted_durations = sorted(merge_durations)
+        mid = len(sorted_durations) // 2
+        if len(sorted_durations) % 2 == 0:
+            median_time_to_merge = (sorted_durations[mid - 1] + sorted_durations[mid]) / 2.0
+        else:
+            median_time_to_merge = sorted_durations[mid]
+
+    # Average open PR age
+    avg_open_pr_age: Optional[float] = None
+    if open_ages:
+        avg_open_pr_age = sum(open_ages) / len(open_ages)
+
+    return PullRequestActivityMetrics(
+        owner=owner,
+        repo=repo,
+        window_days=max(days, 1),
+        open_prs=open_prs,
+        prs_in_window=prs_in_window,
+        merged_in_window=merged_in_window,
+        pr_merge_ratio=pr_merge_ratio,
+        median_time_to_merge_days=median_time_to_merge,
+        avg_open_pr_age_days=avg_open_pr_age,
     )
