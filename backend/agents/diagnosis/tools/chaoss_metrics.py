@@ -25,6 +25,22 @@ class CommitActivityMetrics:
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
     
+@dateclass
+class IssueActivityMetrics:
+    owner: str
+    repo: str
+    window_days: int
+
+    open_issues: int
+    opened_issues_in_window: int
+    closed_issues_in_window: int
+
+    issue_closure_ratio: float  # closed / opened (window 기준)
+    median_time_to_close_days: Optional[float]  # 닫힌 이슈의 중앙값 (일 단위)
+
+    avg_open_issue_age_days: Optional[float]  # 현재 열려있는 이슈의 평균 개방 기간 (일 단위)
+
+    
 def _parse_iso8601(dt_str: str) -> Optional[datetime]:
     if not isinstance(dt_str, str) or not dt_str:
         return None
@@ -148,3 +164,10 @@ def compute_commit_activity(
         first_commit_date=first_commit_date,
         last_commit_date=last_commit_date,
     )
+
+def compute_issue_activity(
+        owner: str,
+        repo: str,
+        days: int = 90,
+    ) -> IssueActivityMetrics:
+    
