@@ -186,11 +186,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             overall_score=activity_score,
         )
 
-        details["commit_metrics"] = {
-            "total_commits": commit_metrics.total_commits,
-            "days_since_last_commit": commit_metrics.days_since_last_commit,
-            "window_days": commit_metrics.window_days,
-        }
+        details["commit_metrics"] = asdict(commit_metrics)
 
     else:
         scores = HealthScore(

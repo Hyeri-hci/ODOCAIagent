@@ -26,7 +26,7 @@ class CommitActivityMetrics:
         return asdict(self)
     
 def _parse_iso8601(dt_str: str) -> Optional[datetime]:
-    if not instance(dt_str, str) or not dt_str:
+    if not isinstance(dt_str, str) or not dt_str:
         return None
     
     text = dt_str.strip()
