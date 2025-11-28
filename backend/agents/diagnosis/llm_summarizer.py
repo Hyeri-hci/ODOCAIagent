@@ -13,8 +13,12 @@ def summarize_diagnosis_repository(
     user_level: str = "beginner",
     language: str = "ko",
 ) -> str:
-    """Diagnosis Agent 전체 결과 요약"""
-
+    """
+    Diagnosis Agent 전체 JSON 결과를 LLM으로 요약한다.
+    - diagnosis_result 전체를 그대로 JSON 문자열로 넘겨 숫자 값은
+      LLM이 임의로 수정하지 않도록 한다.
+    - language == "ko" 인 경우 한국어 설명, 그 외에는 영어 설명을 생성한다.
+    """
     try:
         diagnosis_json_str = json.dumps(
             diagnosis_result,
@@ -32,9 +36,8 @@ def summarize_diagnosis_repository(
     overall_score = scores.get("overall_score")
     docs_score = scores.get("documentation_quality")
     activity_score = scores.get("activity_maintainability")
-    readme_dsa = docs_block.get("readme_category_score")
+    readme_dsa = docs_block.get("readme_dsa", {})
 
-    # README 원문 일부를 project_glimpse로 사용
     raw_readme = details.get("readme_raw", "")
     if isinstance(raw_readme, str) and raw_readme.strip():
         readme_lines = raw_readme.splitlines()
@@ -48,53 +51,50 @@ def summarize_diagnosis_repository(
             "초보 개발자에게 프로젝트 상태를 설명하는 전문가이다. "
             "항상 먼저 '이 프로젝트가 어떤 프로젝트인지'를 설명하고, "
             "그 다음에 문서 품질과 활동성, 개선점, 온보딩 경로를 순서대로 요약해라. "
-            "입력 JSON 안의 숫자 점수는 임의로 바꾸거나 새로 만들지 말고 그대로 사용해라."
+            "입력 JSON 안의 숫자 점수(overall_score 등)는 임의로 바꾸거나 새로 만들지 말고, "
+            "설명할 때 그대로 사용해라."
         )
 
         user_prompt = textwrap.dedent(
             f"""
-            사용자 수준: {user_level}
+            [사용자 수준]
+            - {user_level}
 
-            아래 정보들을 바탕으로 프로젝트를 설명해라.
-
-            [리포지토리 요약 정보]
+            [리포지토리 기본 정보]
             - name: {repo_info.get("full_name")}
             - description: {repo_info.get("description")}
 
-            [주요 점수 요약] (없으면 None)
+            [주요 점수 요약]
             - overall_score: {overall_score}
             - documentation_quality: {docs_score}
             - activity_maintainability: {activity_score}
-            - readme_category_score(DSA): {readme_dsa}
 
-            [README 원문 일부]
-            이 텍스트는 '이 프로젝트가 무엇을 하는지'를 파악하는 데 사용해라.
-            구조 자체를 설명하기보다는, 프로젝트의 목적과 주요 기능을 이해하는 데 집중해라.
+            [README DSA 요약 정보]
+            - keys: {list(readme_dsa.keys()) if isinstance(readme_dsa, dict) else readme_dsa}
 
+            [README 상단 일부]
             {project_glimpse}
 
-            이제 아래 JSON 전체를 참고해서, 다음 순서로 한국어로 답변해라.
+            위 정보를 참고하되, 최종적으로는 아래 Diagnosis JSON 전체를 기반으로
+            다음 구조로 한국어 설명을 작성해라.
 
             1. 프로젝트 소개
-               - 이 프로젝트가 무엇을 하는지, 어떤 문제를 해결하는지, 어떤 주요 기능이 있는지
-                 여러 문장으로 자연스럽게 설명해라.
+               - 무엇을 하는 프로젝트인지, 어떤 문제를 해결하는지, 주요 기능은 무엇인지
 
-            2. 문서 품질과 온보딩 관점
-               - README와 관련 문서 구조, DSA 점수를 기반으로 "
-                 "문서 품질과 온보딩 난이도를 설명해라.
+            2. 문서 품질과 온보딩 난이도
+               - README/문서 구조와 점수를 기반으로 초보 기여자가 이해하기 쉬운지 설명
 
-            3. 활동성과 유지보수성
-               - 커밋, 이슈, PR 관련 지표를 기반으로 프로젝트가 얼마나 활발하게 유지보수되는지 설명해라.
+            3. 활동성 및 유지보수성
+               - 최근 커밋, 이슈, PR 흐름을 점수와 함께 요약
 
-            4. 개선이 필요한 점
-               - 가장 중요한 개선 포인트를 여러 개 bullet 형태로 제시하되,
-                 각 bullet은 한두 문장으로 이유와 방향을 함께 설명해라.
+            4. 개선이 필요한 부분
+               - 문서, 활동성, 보안 등에서 보완하면 좋을 점을 제안
 
-            5. 초보 기여자를 위한 온보딩 제안
-               - 초보 개발자가 이 프로젝트에 기여를 시작할 때 어떤 순서로 문서와 이슈를 보면 좋은지
-                 간단한 단계형 가이드로 제안해라.
+            5. 초보 기여자를 위한 온보딩 경로
+               - 어떤 파일/문서를 먼저 보면 좋을지,
+                 어떤 종류의 이슈나 작업부터 시작하면 좋을지 제안
 
-            진단 결과 JSON:
+            [Diagnosis JSON 원본]
             {diagnosis_json_str}
             """
         ).strip()
@@ -102,9 +102,26 @@ def summarize_diagnosis_repository(
         system_prompt = (
             "You explain open source diagnosis results to help new contributors. "
             "Start by explaining what the project is about, then discuss documentation, "
-            "activity, improvements, and onboarding."
+            "activity, suggested improvements, and recommended onboarding paths. "
+            "Do not change or invent numeric scores; use them as given in the JSON."
         )
-        user_prompt = f"Diagnosis JSON:\n{diagnosis_json_str}"
+        user_prompt = textwrap.dedent(
+            f"""
+            User level: {user_level}
+
+            Below is the full diagnosis JSON. Write a concise but detailed English summary
+            following this structure:
+
+            1. Project overview
+            2. Documentation quality & onboarding difficulty
+            3. Activity & maintainability
+            4. Key issues / risks
+            5. Suggested next steps for a new contributor
+
+            Diagnosis JSON:
+            {diagnosis_json_str}
+            """
+        ).strip()
 
     messages = [
         ChatMessage(role="system", content=system_prompt),
@@ -118,4 +135,49 @@ def summarize_diagnosis_repository(
         temperature=0.2,
     )
     response = client.chat(request)
-    return response.content
+    return response.content.strip()
+
+
+def summarize_readme_category_for_embedding(
+    category_name: str,
+    raw_text: str,
+) -> str:
+    """LLM을 사용해 README 카테고리별 요약문 생성 (임베딩 용도)"""
+    raw_text = raw_text or ""
+    if not raw_text.strip():
+        return ""
+
+    system_prompt = (
+        "You summarize sections of GitHub READMEs. "
+        "The input text may contain any language. "
+        "Your task is to produce a short English paragraph (3-6 sentences) "
+        "that captures the core purpose and intent of the section, "
+        "suitable for semantic embedding. "
+        "Do not include Markdown syntax, code, or bullet lists; "
+        "write plain English sentences only."
+    )
+
+    user_prompt = textwrap.dedent(
+        f"""
+        Category: {category_name}
+
+        Section text:
+        {raw_text}
+
+        Write only the English summary paragraph.
+        """
+    ).strip()
+
+    messages = [
+        ChatMessage(role="system", content=system_prompt),
+        ChatMessage(role="user", content=user_prompt),
+    ]
+
+    client = fetch_llm_client()
+    request = ChatRequest(
+        messages=messages,
+        max_tokens=512,
+        temperature=0.2,
+    )
+    response = client.chat(request)
+    return response.content.strip()
