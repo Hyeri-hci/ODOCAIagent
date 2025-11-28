@@ -17,6 +17,10 @@ from .tools.chaoss_metrics import (
     compute_issue_activity,
     compute_pr_activity,
 )
+from .tools.activity_scores import (
+    aggregate_activity_score,
+    activity_score_to_100,
+)
 from .tools.health_score import (
     aggregate_health_scores,
     HealthScore,
@@ -164,18 +168,33 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     scores: HealthScore
 
     if task_type == DiagnosisTaskType.FULL:
+        # CHAOSS 기반 activity 점수 계산
+        activity_breakdown = aggregate_activity_score(
+            commit=commit_metrics,
+            issue=issue_metrics,
+            pr=pr_metrics,
+        )
+        
         # commit_metrics는 Phase 1에서 이미 가져옴
         scores = aggregate_health_scores(
             has_readme=repo_info.has_readme,
             commit_metrics=commit_metrics,
             readme_stats=repo_info.readme_stats,
         )
+        
+        # activity_maintainability를 CHAOSS 기반 점수로 대체
+        scores = HealthScore(
+            documentation_quality=scores.documentation_quality,
+            activity_maintainability=activity_score_to_100(activity_breakdown),
+            overall_score=round((scores.documentation_quality + activity_score_to_100(activity_breakdown)) / 2),
+        )
 
-        # CHAOSS 기반 activity 블록 (commit, issue, pr)
+        # CHAOSS 기반 activity 블록 (commit, issue, pr + scores)
         details["activity"] = {
             "commit": asdict(commit_metrics),
             "issue": asdict(issue_metrics),
             "pr": asdict(pr_metrics),
+            "scores": activity_breakdown.to_dict(),
         }
 
     elif task_type == DiagnosisTaskType.DOCS_ONLY:
@@ -213,18 +232,24 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         issue_metrics = activity_results["issue_metrics"]
         pr_metrics = activity_results["pr_metrics"]
 
-        activity_score = score_commit_activity(commit_metrics)
+        # CHAOSS 기반 activity 점수 계산
+        activity_breakdown = aggregate_activity_score(
+            commit=commit_metrics,
+            issue=issue_metrics,
+            pr=pr_metrics,
+        )
 
         scores = HealthScore(
             documentation_quality=0,
-            activity_maintainability=activity_score,
-            overall_score=activity_score,
+            activity_maintainability=activity_score_to_100(activity_breakdown),
+            overall_score=activity_score_to_100(activity_breakdown),
         )
 
         details["activity"] = {
             "commit": asdict(commit_metrics),
             "issue": asdict(issue_metrics),
             "pr": asdict(pr_metrics),
+            "scores": activity_breakdown.to_dict(),
         }
 
     else:
