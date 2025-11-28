@@ -370,6 +370,28 @@ def _apply_last_section_bias(category: ReadmeCategory, section: ReadmeSection) -
 
     return category
 
+def _safe_json_loads(text: str):
+    if not isinstance(text, str):
+        raise ValueError("text must be str")
+
+    cleaned = text.strip()
+
+    # 코드블록 형태일 때 ```json ... ``` 제거
+    if cleaned.startswith("```"):
+        # 첫 줄: ``` 또는 ```json 같은 것 제거
+        cleaned = re.sub(r"^```[a-zA-Z0-9]*\n", "", cleaned)
+        if cleaned.endswith("```"):
+            cleaned = cleaned[: -3].strip()
+
+    # 문자열 안에서 JSON 배열 부분만 추출
+    start = cleaned.find("[")
+    end = cleaned.rfind("]")
+    if start != -1 and end != -1 and end > start:
+        cleaned = cleaned[start : end + 1]
+
+    return json.loads(cleaned)
+
+
 
 def _refine_with_llm(
     sections: List[ReadmeSection],
@@ -425,10 +447,25 @@ def _refine_with_llm(
 
     try:
         client = fetch_llm_client()
-        request = ChatRequest(messages=messages, max_tokens=512, temperature=0.0)
+        request = ChatRequest(messages=messages, max_tokens=1024, temperature=0.0)
         response = client.chat(request)
         text = response.content.strip()
-        data = json.loads(text)
+        
+        if len(text) > 3000:
+            logger.warning(
+                "LLM classification response may be truncated (length: %d chars). "
+                "Consider reducing section count or increasing max_tokens.",
+                len(text),
+            )
+        
+        data = _safe_json_loads(text)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "LLM-based README section classification failed - invalid JSON: %s. Response was: %s",
+            exc,
+            text[:300] if 'text' in locals() else "(no response)",
+        )
+        return [cls.category for cls in initial]
     except Exception as exc:
         logger.warning("LLM-based README section classification failed: %s", exc)
         return [cls.category for cls in initial]
@@ -514,8 +551,8 @@ def _summarize_category_sections(
     if enable_semantic_summary and category in EMBED_SUMMARY_TARGET_CATEGORIES:
         try:
             semantic_summary_en = summarize_readme_category_for_embedding(
-                category_name=category.value,
-                raw_text=raw_text,
+                category=category.value,
+                text=raw_text,
             )
         except Exception as exc:
             logger.warning(

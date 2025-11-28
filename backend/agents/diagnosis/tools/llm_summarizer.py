@@ -93,12 +93,12 @@ def summarize_diagnosis_repository(
 
 
 def summarize_readme_category_for_embedding(
-    category_name: str,
-    raw_text_en: str,
+    category: str,
+    text: str,
 ) -> Optional[str]:
     """README 카테고리 영어 텍스트를 임베딩용 의미 요약으로 변환"""
 
-    text = (raw_text_en or "").strip()
+    text = (text or "").strip()
     if not text:
         return None
 
@@ -110,7 +110,7 @@ def summarize_readme_category_for_embedding(
     )
 
     user_prompt = (
-        f"Category: {category_name}\n\n"
+        f"Category: {category}\n\n"
         "Section text:\n"
         f"{text}\n\n"
         "Write a concise English summary describing the purpose and intent "

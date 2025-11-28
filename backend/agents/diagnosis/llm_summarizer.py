@@ -139,12 +139,12 @@ def summarize_diagnosis_repository(
 
 
 def summarize_readme_category_for_embedding(
-    category_name: str,
-    raw_text: str,
+    category: str,
+    text: str,
 ) -> str:
     """LLM을 사용해 README 카테고리별 요약문 생성 (임베딩 용도)"""
-    raw_text = raw_text or ""
-    if not raw_text.strip():
+    text = text or ""
+    if not text.strip():
         return ""
 
     system_prompt = (
@@ -159,10 +159,10 @@ def summarize_readme_category_for_embedding(
 
     user_prompt = textwrap.dedent(
         f"""
-        Category: {category_name}
+        Category: {category}
 
         Section text:
-        {raw_text}
+        {text}
 
         Write only the English summary paragraph.
         """
