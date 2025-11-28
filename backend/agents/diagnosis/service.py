@@ -89,11 +89,13 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     if readme_text:
         readme_metrics = compute_reademe_metrics(readme_text)
 
-    # README 8카테고리 분류 결과
+    # README 8카테고리 분류 결과 + 통합 요약
     if readme_text:
-        readme_categories, readme_category_score = classify_readme_sections(readme_text)
+        readme_categories, readme_category_score, unified_summary = classify_readme_sections(readme_text)
     else:
+        from backend.agents.diagnosis.tools.llm_summarizer import ReadmeUnifiedSummary
         readme_categories, readme_category_score = {}, 0
+        unified_summary = ReadmeUnifiedSummary(summary_en="", summary_ko="")
 
     # details 기본 구성
     details: Dict[str, Any] = {
@@ -105,6 +107,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     details["docs"] = {
         "readme_categories": readme_categories,
         "readme_category_score": readme_category_score,
+        "readme_summary_for_embedding": unified_summary.summary_en,
+        "readme_summary_for_user": unified_summary.summary_ko,
     }
 
     details["readme_raw"] = readme_text

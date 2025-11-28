@@ -13,7 +13,10 @@ from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
 
 from .readme_sections import ReadmeSection, split_readme_into_sections
-from .llm_summarizer import summarize_readme_category_for_embedding
+from .llm_summarizer import (
+    generate_readme_unified_summary,
+    ReadmeUnifiedSummary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -546,21 +549,8 @@ def _summarize_category_sections(
         full_text = full_text[:MAX_RAW_CHARS_PER_CAT]
 
     raw_text = full_text
+    # 카테고리별 LLM 요약은 비활성화 (통합 요약에서 1회 처리로 최적화)
     semantic_summary_en = ""
-
-    if enable_semantic_summary and category in EMBED_SUMMARY_TARGET_CATEGORIES:
-        try:
-            semantic_summary_en = summarize_readme_category_for_embedding(
-                category=category.value,
-                text=raw_text,
-            )
-        except Exception as exc:
-            logger.warning(
-                "semantic summary generation failed for category %s: %s",
-                category.value,
-                exc,
-            )
-            semantic_summary_en = ""
 
     return CategoryInfo(
         present=True,
@@ -604,24 +594,28 @@ def classify_readme_sections(
     markdown_text: str,
     use_llm_refine: bool = True,
     enable_semantic_summary: bool = True,
-) -> Tuple[Dict[str, Dict], int]:
+) -> Tuple[Dict[str, Dict], int, ReadmeUnifiedSummary]:
     """
     README 원문 전체를 섹션으로 나눈 뒤:
     1) 규칙 기반으로 섹션 카테고리를 분류하고
     2) 필요 시 confidence가 낮은 섹션만 LLM으로 재분류한 다음
     3) 카테고리별 coverage/요약/임베딩용 요약을 생성한다.
+    4) 카테고리별 요약을 합쳐 통합 README 요약 생성 (영어+한국어)
 
     반환값:
     - categories: {카테고리명(문자열) -> CategoryInfo(dict)}
     - documentation_score: 0~100
+    - unified_summary: ReadmeUnifiedSummary (summary_en, summary_ko)
     """
+    empty_summary = ReadmeUnifiedSummary(summary_en="", summary_ko="")
+    
     original_text = markdown_text or ""
     if not original_text.strip():
-        return {}, 0
+        return {}, 0, empty_summary
 
     sections = split_readme_into_sections(original_text)
     if not sections:
-        return {}, 0
+        return {}, 0, empty_summary
 
     # 1) 규칙 기반 1차 분류
     initial: List[SectionClassification] = [
@@ -661,4 +655,16 @@ def classify_readme_sections(
         cat_infos[cat.value] = info
 
     score = _compute_documentation_score(grouped, total_chars)
-    return {name: asdict(info) for name, info in cat_infos.items()}, score
+    
+    # 6) 카테고리별 raw_text를 모아서 통합 요약 생성 (LLM 1회 호출)
+    unified_summary = empty_summary
+    if enable_semantic_summary:
+        category_raw_texts = {
+            name: info.raw_text
+            for name, info in cat_infos.items()
+            if info.raw_text and name in ["WHAT", "WHY", "HOW", "CONTRIBUTING"]
+        }
+        if category_raw_texts:
+            unified_summary = generate_readme_unified_summary(category_raw_texts)
+    
+    return {name: asdict(info) for name, info in cat_infos.items()}, score, unified_summary

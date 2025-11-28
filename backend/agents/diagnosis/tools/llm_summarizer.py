@@ -1,10 +1,21 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, Optional, Tuple
 import json
+import logging
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ReadmeUnifiedSummary:
+    """README 통합 요약 결과"""
+    summary_en: str  # 임베딩용 영어 요약
+    summary_ko: str  # 사용자용 한국어 요약
 
 
 def summarize_diagnosis_repository(
@@ -130,3 +141,91 @@ def summarize_readme_category_for_embedding(
     )
     response = client.chat(request)
     return response.content.strip() or None
+
+
+def generate_readme_unified_summary(
+    category_raw_texts: Dict[str, str],
+) -> ReadmeUnifiedSummary:
+    """
+    카테고리별 raw_text를 합쳐 통합 README 요약 생성.
+    
+    LLM 1회 호출로 영어(임베딩용) + 한국어(사용자용) 동시 생성.
+    기존 카테고리별 semantic_summary 4회 호출 → 1회로 통합하여 성능 최적화.
+    
+    Args:
+        category_raw_texts: {카테고리명: raw_text} 딕셔너리
+        
+    Returns:
+        ReadmeUnifiedSummary(summary_en, summary_ko)
+    """
+    # 카테고리별 원문 합치기 (중요 카테고리 우선, 길이 제한)
+    parts = []
+    priority_order = ["WHAT", "WHY", "HOW", "CONTRIBUTING"]
+    max_chars_per_cat = 800
+    
+    for cat in priority_order:
+        raw = category_raw_texts.get(cat, "")
+        if raw and raw.strip():
+            truncated = raw.strip()[:max_chars_per_cat]
+            parts.append(f"[{cat}]\n{truncated}")
+    
+    if not parts:
+        return ReadmeUnifiedSummary(summary_en="", summary_ko="")
+    
+    combined_text = "\n\n".join(parts)
+    
+    # 전체 입력 길이 제한 (LLM 토큰 절약)
+    if len(combined_text) > 3500:
+        combined_text = combined_text[:3500]
+    
+    system_prompt = (
+        "You summarize GitHub README content into two formats:\n"
+        "1. 'en': English summary for semantic search/embedding (3-5 sentences, focus on project purpose, features, usage)\n"
+        "2. 'ko': Korean summary for users (4-6 sentences, friendly tone, explain what the project does)\n\n"
+        "Return ONLY a JSON object: {\"en\": \"...\", \"ko\": \"...\"}. No markdown, no explanation."
+    )
+    
+    user_prompt = (
+        "Below is README content organized by category.\n"
+        "Create a unified project summary.\n\n"
+        f"{combined_text}\n\n"
+        "Return JSON with 'en' and 'ko' keys."
+    )
+    
+    messages = [
+        ChatMessage(role="system", content=system_prompt),
+        ChatMessage(role="user", content=user_prompt),
+    ]
+    
+    try:
+        client = fetch_llm_client()
+        request = ChatRequest(
+            messages=messages,
+            max_tokens=700,
+            temperature=0.2,
+        )
+        response = client.chat(request)
+        raw = response.content.strip()
+        
+        # JSON 파싱
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        
+        data = json.loads(raw)
+        summary_en = data.get("en", "").strip()
+        summary_ko = data.get("ko", "").strip()
+        
+        return ReadmeUnifiedSummary(summary_en=summary_en, summary_ko=summary_ko)
+        
+    except Exception as exc:
+        logger.warning("README unified summary generation failed: %s", exc)
+        # 실패 시 간단 fallback
+        fallback_en = " ".join(
+            s.strip()[:200] for s in category_raw_texts.values() if s and s.strip()
+        )[:500]
+        return ReadmeUnifiedSummary(
+            summary_en=fallback_en,
+            summary_ko="README 요약을 생성하지 못했습니다.",
+        )
