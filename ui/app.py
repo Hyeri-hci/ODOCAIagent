@@ -16,8 +16,8 @@ from backend.agents.supervisor.service import run_supervisor, SupervisorInput
 st.set_page_config(page_title="ODOC Diagnosis Agent", layout="centered")
 st.title("ODOC Diagnosis Agent")
 
-owner = st.text_input("GitHub Repository Owner", value="microsoft")
-repo = st.text_input("GitHub Repository Name", value="vscode")
+owner = st.text_input("GitHub Repository Owner", value="Hyeri-hci")
+repo = st.text_input("GitHub Repository Name", value="OSSDoctor")
 task_type = st.selectbox(
     "Task Type", 
     ["full_diagnosis", "docs_only", "activity_only"],

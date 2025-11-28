@@ -4,10 +4,17 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from enum import Enum
 from typing import Dict, List, Tuple
+from collections import defaultdict
 
 import re
 
 from .readme_sections import ReadmeSection, split_readme_into_sections
+from .llm_summarizer import summarize_readme_category_for_embedding
+from .readme_lang_normalizer import (
+    detect_readme_language,
+    translate_section_to_english_for_rules,
+)
+
 
 # README 카테고리 정의 및 분류 로직
 class ReadmeCategory(Enum):
@@ -25,11 +32,12 @@ class ReadmeCategory(Enum):
 # 카테고리 정보 데이터 클래스
 @dataclass
 class CategoryInfo:
-    present: bool                   # 해당 카테고리 존재 여부
-    coverage_score: float           # 해당 카테고리 커버리지 점수 (0.0 ~ 1.0)
-    summary: str                    # 해당 카테고리 요약
-    example_snippets: List[str]     # 해당 카테고리 예제 코드 조각
-    raw_text: str                   # 원본 텍스트
+    present: bool
+    coverage_score: float
+    summary: str               # 디버깅/간단 표시용
+    example_snippets: List[str]
+    raw_text: str              # 영어 기반 원문 텍스트 일부
+    semantic_summary_en: str   # LLM이 만든 의미 중심 요약
 
 
 # 가중치 상수
@@ -209,15 +217,8 @@ MAX_RAW_CHARS_PER_CAT = 4000  # LLM에 넘길 때 카테고리별 최대 길이 
 def _summarize_category_sections(
     sections: List[ReadmeSection],
     total_chars: int,
+    lang_code: str,
 ) -> CategoryInfo:
-    """
-    한 카테고리에 속한 섹션들을 받아:
-    - coverage_score (README 전체 대비 비율)
-    - 사람이 보기 좋은 summary (앞부분의 의미 있는 줄 위주로)
-    - example_snippets (summary 일부)
-    - raw_text (LLM용 원문 텍스트, 너무 길면 잘라냄)
-    을 채운 CategoryInfo를 반환.
-    """
     if not sections:
         return CategoryInfo(
             present=False,
@@ -225,21 +226,19 @@ def _summarize_category_sections(
             summary="",
             example_snippets=[],
             raw_text="",
+            semantic_summary_en="",
         )
 
     # 카테고리 전체 길이
     cat_chars = sum(len(s.content) for s in sections)
     coverage = cat_chars / total_chars if total_chars > 0 else 0.0
 
-    # 1) 첫 섹션에서 의미 있는 줄만 골라 summary 만들기
     first_lines = sections[0].content.strip().splitlines()
-
     meaningful_lines: List[str] = []
     for line in first_lines:
         line = line.strip()
         if not line:
             continue
-        # 이미지/뱃지/장식 줄은 summary에서 제외
         if line.startswith("![](") or line.startswith("!["):
             continue
         if "<img " in line:
@@ -248,7 +247,6 @@ def _summarize_category_sections(
             continue
         if set(line) <= {"#", "=", "-", "_", "*"}:
             continue
-
         meaningful_lines.append(line)
         if len(meaningful_lines) >= 3:
             break
@@ -259,20 +257,33 @@ def _summarize_category_sections(
         # 의미 있는 줄을 못 찾으면 앞 3줄 그대로 사용
         summary_text = "\n".join(first_lines[:3])
 
-    summary_snippet = summary_text[:500]
-    example_snippet = summary_snippet[:200]
+    summary_snippet = summary_text[:1000]
+    example_snippet = summary_snippet[:500]
 
-    # 2) LLM용 raw_text: 해당 카테고리 섹션을 전부 이어붙이되, 너무 길면 잘라냄
     full_text = "\n\n".join(s.content.strip() for s in sections)
     if len(full_text) > MAX_RAW_CHARS_PER_CAT:
         full_text = full_text[:MAX_RAW_CHARS_PER_CAT]
+
+    raw_text_en = full_text
+
+    semantic_summary_en = ""
+    try:
+        semantic_summary = summarize_readme_category_for_embedding(
+            category_name="unknown" if not sections else sections[0].heading or "",
+            raw_text_en=raw_text_en,
+        )
+        if semantic_summary:
+            semantic_summary_en = semantic_summary
+    except Exception:
+        semantic_summary_en = ""
 
     return CategoryInfo(
         present=True,
         coverage_score=coverage,
         summary=summary_snippet,
         example_snippets=[example_snippet],
-        raw_text=full_text,
+        raw_text=raw_text_en,
+        semantic_summary_en=semantic_summary_en,
     )
 
 
@@ -296,29 +307,68 @@ def _compute_documentation_score(category_map: Dict[ReadmeCategory, List[ReadmeS
     score = int(round((coverage_total * 60) + (diversity * 40)))
     return max(0, min(score, 100))
 
-
 def classify_readme_sections(markdown_text: str) -> Tuple[Dict[str, dict], int]:
-    text = markdown_text or ""
-    sections = split_readme_into_sections(text)
-    if not sections:
+    """
+    README 원문 전체를 섹션으로 나눈 뒤,
+    섹션 단위로 영어 텍스트를 만들어 Prana 8카테고리(rule-based)로 분류한다.
+    요약/coverage 계산은 항상 원문 길이 기준으로 한다.
+    """
+    original_text = markdown_text or ""
+    if not original_text.strip():
         return {}, 0
 
+    # 1) 원문 전체 기준으로 섹션 나누기
+    sections_original = split_readme_into_sections(original_text)
+    if not sections_original:
+        return {}, 0
+
+    # 2) README 언어 한 번만 감지
+    lang = detect_readme_language(original_text)
+
     classified: List[Tuple[ReadmeSection, ReadmeCategory]] = []
-    for section in sections:
-        classified.append((section, classify_section_rule_based(section)))
 
+    # 3) 각 섹션마다 rule-based용 영어 텍스트 생성 후 카테고리 분류
+    for sec in sections_original:
+        # 섹션 내용을 영어로 정규화 (이미 영어면 그대로, 비영어면 번역)
+        section_en = translate_section_to_english_for_rules(
+            section_text=sec.content,
+            lang_code=lang,
+        )
+
+        # rule-based 분류는 영어 텍스트 기준으로 수행
+        tmp_sec_for_rules = ReadmeSection(
+            index=sec.index,       # 원래 섹션 index 그대로 사용
+            heading=sec.heading,
+            level=sec.level,       # 원래 heading level 그대로 사용
+            content=section_en,    # 여기만 번역된 텍스트로 교체
+        )
+        cat = classify_section_rule_based(tmp_sec_for_rules)
+
+        # 분류 결과는 "원문 섹션"과 함께 저장
+        classified.append((sec, cat))
+
+    # 4) 마지막 섹션 bias 적용
     if classified:
-        last_section, last_cat = classified[-1]
-        classified[-1] = (last_section, _apply_last_section_bias(last_cat, last_section))
+        last_sec, last_cat = classified[-1]
+        classified[-1] = (last_sec, _apply_last_section_bias(last_cat, last_sec))
 
+    # 5) 카테고리별로 원문 섹션을 묶기
     grouped: Dict[ReadmeCategory, List[ReadmeSection]] = defaultdict(list)
-    for section, category in classified:
-        grouped[category].append(section)
+    for sec, category in classified:
+        grouped[category].append(sec)
 
+    # coverage 계산도 원문 길이 기준
     total_chars = sum(len(sec.content) for sec, _ in classified) or 1
+
+    # 6) 카테고리별 요약/점수 구성
     categories: Dict[str, CategoryInfo] = {}
     for cat in ReadmeCategory:
-        categories[cat.value] = _summarize_category_sections(grouped.get(cat, []), total_chars)
+        sections_for_cat = grouped.get(cat, [])
+        categories[cat.value] = _summarize_category_sections(
+            sections=sections_for_cat,
+            total_chars=total_chars,
+            lang_code=lang,
+        )
 
     score = _compute_documentation_score(grouped, total_chars)
     return {name: asdict(info) for name, info in categories.items()}, score

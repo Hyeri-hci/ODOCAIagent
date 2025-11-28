@@ -28,7 +28,9 @@ def score_commit_activity(metrics: CommitActivityMetrics) -> int:
     else:
         score += 10
     
-    if metrics.days_since_last_commit <= 7:
+    if metrics.days_since_last_commit is None:
+        score += 0
+    elif metrics.days_since_last_commit <= 7:
         score += 40
     elif metrics.days_since_last_commit <= 30:
         score += 25

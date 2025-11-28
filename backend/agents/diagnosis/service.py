@@ -107,6 +107,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         "readme_category_score": readme_category_score,
     }
 
+    details["readme_raw"] = readme_text
+
     # task_type 별 점수 계산
     commit_metrics = None   # type: ignore[assignment]
     scores: HealthScore
