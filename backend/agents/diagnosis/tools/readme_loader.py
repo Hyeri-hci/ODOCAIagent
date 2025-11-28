@@ -9,14 +9,16 @@ from backend.common.github_client import fetch_readme
 
 @dataclass
 class ReadmeContent:
-    length_chars: int
-    heading_count: int
-    code_block_count: int
-    link_count: int
-    image_count: int
+    length_chars: int           # README 전체 문자 수
+    heading_count: int          # #, ##, ### 등 헤딩 개수
+    code_block_count: int       # ```로 감싸인 코드 블록 개수
+    link_count: int             # [text](url) 형식 링크 개수
+    image_count: int            # ![alt](url) 형식 이미지 개수
+    list_item_count: int        # - , * , + 등 리스트 아이템 개수
+    external_doc_count: int     # 외부 문서(예: Wiki) 링크 개수  
 
+# README 디코딩 함수
 def _decode_readme_content(readme_data: Dict[str, Any]) -> str:
-    """GitHub API readme 응답에서 Base64로 인코딩된 내용 utf-8 문자열로 디코딩"""
     content_base64 = readme_data.get("content", "")
     if not content_base64:
         return ""
@@ -25,17 +27,16 @@ def _decode_readme_content(readme_data: Dict[str, Any]) -> str:
         return raw_bytes.decode("utf-8", errors="replace")
     except Exception:
         return ""
-    
+
+# README 내용 가져오기 함수
 def fetch_readme_content(owner: str, repo: str) -> Optional[str]:
-    """README 파일 내용을 전체 반환, 없으면 None 반환"""
     readme_data = fetch_readme(owner, repo)
     if not readme_data:
         return None
     return _decode_readme_content(readme_data)
 
+# README 메트릭 계산 함수
 def compute_reademe_metrics(readme_text: str) -> ReadmeContent:
-    """README 텍스트에서 간단한 메트릭 계산"""
-
     # Heading 개수 (#, ##, ### 등)
     heading_pattern = re.compile(r"^(#{1,6})\s+", re.MULTILINE)
     headings: List[str] = heading_pattern.findall(readme_text)
@@ -53,10 +54,22 @@ def compute_reademe_metrics(readme_text: str) -> ReadmeContent:
     image_pattern = re.compile(r"!\[([^\]]*)\]\((http[s]?://[^\)]+)\)")
     images = image_pattern.findall(readme_text)
 
+    # List item 개수 (- , * , + 등)
+    list_pattern = re.compile(r"^\s*[-\*\+]\s+", re.MULTILINE)
+    list_items = list_pattern.findall(readme_text)
+
+    # External document 링크 개수 (예: docs/ 링크, wiki, readthedocs 등)
+    external_doc_pattern = re.compile(
+        r"\((https?://[^\)]+(readthedocs\.io|github\.io|/docs/|/wiki/)[^\)]*)\)"
+    )
+    external_docs = external_doc_pattern.findall(readme_text)
+
     return ReadmeContent(
         length_chars=len(readme_text),
         heading_count=len(headings),
         code_block_count=code_blocks,
         link_count=len(links),
         image_count=len(images),
+        list_item_count=len(list_items),
+        external_doc_count=len(external_docs)
     )
