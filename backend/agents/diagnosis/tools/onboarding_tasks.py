@@ -177,15 +177,31 @@ def determine_kind_from_labels(labels: List[str]) -> TaskKind:
 # GitHub 이슈 기반 Task 생성
 # ============================================================
 
+# 온보딩에 적합한 라벨 (우선순위 순)
+PRIORITY_LABELS = [
+    "good first issue",
+    "good-first-issue", 
+    "beginner",
+    "beginner-friendly",
+    "first-timers-only",
+    "help wanted",
+    "help-wanted",
+    "documentation",
+    "docs",
+    "hacktoberfest",
+]
+
+
 def fetch_open_issues_for_tasks(
     owner: str,
     repo: str,
     limit: int = 50,
 ) -> List[Dict[str, Any]]:
     """
-    기여 가능한 Open 이슈 목록 조회.
+    GraphQL로 기여 가능한 Open 이슈 목록 조회.
     
-    good-first-issue, help-wanted 등 라벨 우선으로 가져옴.
+    - 최신 업데이트 순으로 정렬
+    - 필요한 필드만 가져와서 응답 크기 최적화
     """
     from backend.common.github_client import _github_graphql
     
@@ -201,16 +217,14 @@ def fetch_open_issues_for_tasks(
             number
             title
             url
-            state
             createdAt
             updatedAt
             labels(first: 10) {
               nodes { name }
             }
             comments { totalCount }
-            author { login }
-            assignees(first: 3) {
-              nodes { login }
+            assignees(first: 1) {
+              totalCount
             }
           }
         }
@@ -222,14 +236,28 @@ def fetch_open_issues_for_tasks(
         data = _github_graphql(query, {"owner": owner, "name": repo, "limit": limit})
         repo_data = data.get("repository")
         if not repo_data:
+            logger.warning("Repository not found: %s/%s", owner, repo)
             return []
         
-        issues = repo_data.get("issues", {}).get("nodes", [])
-        return issues
+        issues = repo_data.get("issues", {}).get("nodes", []) or []
+        
+        # 우선순위 라벨이 있는 이슈를 앞으로 정렬
+        def priority_score(issue: Dict[str, Any]) -> int:
+            label_nodes = issue.get("labels", {}).get("nodes", []) or []
+            labels_lower = {node.get("name", "").lower() for node in label_nodes}
+            
+            for i, priority_label in enumerate(PRIORITY_LABELS):
+                if priority_label.lower() in labels_lower:
+                    return i  # 낮을수록 우선순위 높음
+            return len(PRIORITY_LABELS)  # 우선순위 라벨 없음
+        
+        issues_sorted = sorted(issues, key=priority_score)
+        return issues_sorted
     
     except Exception as e:
-        logger.warning("Failed to fetch issues for tasks: %s", e)
-        return []
+        logger.warning("GraphQL fetch failed, falling back to REST: %s", e)
+        # GraphQL 실패 시 REST로 폴백
+        return fetch_open_issues_for_tasks_rest(owner, repo, limit)
 
 
 def fetch_open_issues_for_tasks_rest(
@@ -517,9 +545,9 @@ def compute_onboarding_tasks(
     """
     repo_url = f"https://github.com/{owner}/{repo}"
     
-    # 1. GitHub 이슈 기반 Task
+    # 1. GitHub 이슈 기반 Task (GraphQL 우선, 실패 시 REST 폴백)
     logger.info("Fetching open issues for onboarding tasks...")
-    issues = fetch_open_issues_for_tasks_rest(owner, repo, limit=max_issues)
+    issues = fetch_open_issues_for_tasks(owner, repo, limit=max_issues)
     issue_tasks = create_tasks_from_issues(issues, repo_url)
     logger.info("Created %d tasks from %d issues", len(issue_tasks), len(issues))
     
