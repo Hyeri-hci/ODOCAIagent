@@ -22,6 +22,7 @@ from .tools.activity_scores import (
     activity_score_to_100,
 )
 from .tools.health_score import HealthScore, create_health_score
+from .tools.diagnosis_labels import create_diagnosis_labels
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
 
@@ -235,6 +236,19 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         commit_metrics=commit_metrics,
     )
 
+    # 규칙 기반 라벨 생성
+    readme_categories = details.get("docs", {}).get("readme_categories")
+    activity_scores_dict = details.get("activity", {}).get("scores")
+    
+    labels = create_diagnosis_labels(
+        health_score=scores.health_score,
+        onboarding_score=scores.onboarding_score,
+        doc_score=scores.documentation_quality,
+        activity_score=scores.activity_maintainability,
+        readme_categories=readme_categories,
+        activity_scores=activity_scores_dict,
+    )
+
     # 최종 JSON 결과
     result_json: Dict[str, Any] = {
         "input": {
@@ -245,6 +259,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             "user_context": user_context,
         },
         "scores": asdict(scores),
+        "labels": labels.to_dict(),
         "details": details,
     }
 
