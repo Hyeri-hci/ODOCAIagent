@@ -80,18 +80,39 @@ TASK_ENRICHMENT_PROMPT = """당신은 오픈소스 기여 멘토입니다.
 - 경험 수준: {user_level}
 - 목표: {user_goal}
 
+## 프로젝트 상태
+- 건강 상태: {health_level}
+- 아카이브 여부: {is_archived}
+
 ## Task 목록 (규칙으로 이미 분류됨)
 {tasks_json}
+
+## 중요 정책
+
+### Intent(목적) 해석 지침
+- **contribute**: 실제 코드/문서 기여가 가능한 Task. 건강한 프로젝트에서만 적극 권장.
+- **study**: 학습 목적의 Task. 비활성/아카이브 프로젝트에서 주로 활용.
+- **evaluate**: 프로젝트 평가 목적. 아카이브 프로젝트나 대안 검토 시 활용.
+
+### Task Score 해석 지침
+- 80점 이상: 최근 활동이 활발하고 적정 난이도 → 최우선 추천
+- 50-79점: 보통 수준 → 관심사에 따라 추천
+- 50점 미만: 오래된 이슈이거나 복잡도 높음 → 신중하게 추천
+
+### 비건강/아카이브 프로젝트 지침
+{unhealthy_project_guidance}
 
 ## 작성 지침
 
 1. 각 Task에 대해 한글로 1-2문장의 **추천 이유(reason_text)**를 작성하세요.
-   - reason_tags와 meta_flags를 참고하여 작성
+   - intent와 task_score를 고려하여 작성
+   - reason_tags와 meta_flags를 참고
    - 왜 이 Task가 사용자에게 적합한지 설명
    - 친근하지만 전문적인 톤
 
 2. 같은 난이도 내에서 **우선순위(priority_rank)**를 매기세요.
    - 1이 가장 우선 추천
+   - task_score가 높은 Task 우선
    - 사용자 수준과 목표에 맞춰 결정
 
 3. 가능하면 **예상 소요 시간(estimated_time)**도 추정하세요.
@@ -111,6 +132,22 @@ TASK_ENRICHMENT_PROMPT = """당신은 오픈소스 기여 멘토입니다.
   "top_3_tasks": ["issue#123", "meta:create_contributing", "issue#456"]
 }}
 ```
+"""
+
+# 비건강/아카이브 프로젝트용 LLM 가이던스
+UNHEALTHY_PROJECT_GUIDANCE_TEMPLATE = """
+이 프로젝트는 현재 **{status}** 상태입니다.
+- 직접 기여(contribute)보다는 **학습(study)** 또는 **평가(evaluate)** 목적의 Task를 우선 추천하세요.
+- 코드 리딩, 아키텍처 분석, 대안 프로젝트 검토 등을 강조하세요.
+- "이 프로젝트에서 배울 수 있는 것"에 초점을 맞추세요.
+- PR 제출보다는 개인 학습 결과물 정리를 권장하세요.
+"""
+
+HEALTHY_PROJECT_GUIDANCE = """
+이 프로젝트는 **활발하게 유지보수**되고 있습니다.
+- 기여(contribute) Task를 적극 추천하세요.
+- 최근 이슈(task_score 높음)를 우선 추천하세요.
+- 메인테이너와의 소통을 장려하세요.
 """
 
 ONBOARDING_SCENARIO_PROMPT = """당신은 오픈소스 기여 멘토입니다.
@@ -174,6 +211,8 @@ def enrich_tasks_with_llm(
     tasks: OnboardingTasks,
     user_level: str = "beginner",
     user_goal: str = "오픈소스 기여 시작",
+    health_level: str = "good",
+    is_archived: bool = False,
 ) -> LLMEnrichedTasks:
     """
     LLM을 사용해 Task에 자연어 추천 이유와 우선순위 추가.
@@ -182,6 +221,8 @@ def enrich_tasks_with_llm(
         tasks: 규칙 기반으로 생성된 OnboardingTasks
         user_level: 사용자 경험 수준 (beginner/intermediate/advanced)
         user_goal: 사용자의 목표
+        health_level: 프로젝트 건강 상태 (good/warning/critical)
+        is_archived: 아카이브된 프로젝트 여부
     
     Returns:
         LLMEnrichedTasks: LLM이 보강한 결과
@@ -190,7 +231,7 @@ def enrich_tasks_with_llm(
         from backend.llm.factory import fetch_llm_client
         from backend.llm.base import ChatRequest, ChatMessage
         
-        # Task 목록을 JSON으로 변환
+        # Task 목록을 JSON으로 변환 (intent, task_score 포함)
         all_tasks = tasks.beginner + tasks.intermediate + tasks.advanced
         tasks_data = []
         for task in all_tasks[:15]:  # 최대 15개로 제한 (토큰 절약)
@@ -200,15 +241,36 @@ def enrich_tasks_with_llm(
                 "difficulty": task.difficulty,
                 "level": task.level,
                 "kind": task.kind,
+                "intent": task.intent,
+                "task_score": task.task_score,
                 "reason_tags": task.reason_tags,
                 "meta_flags": task.meta_flags,
                 "labels": task.labels,
             })
         
+        # 비건강/아카이브 프로젝트 가이던스 결정
+        if is_archived:
+            unhealthy_guidance = UNHEALTHY_PROJECT_GUIDANCE_TEMPLATE.format(
+                status="아카이브됨 (더 이상 유지보수되지 않음)"
+            )
+        elif health_level == "critical":
+            unhealthy_guidance = UNHEALTHY_PROJECT_GUIDANCE_TEMPLATE.format(
+                status="심각한 건강 문제 (장기간 업데이트 없음)"
+            )
+        elif health_level == "warning":
+            unhealthy_guidance = UNHEALTHY_PROJECT_GUIDANCE_TEMPLATE.format(
+                status="주의 필요 (활동 저조)"
+            )
+        else:
+            unhealthy_guidance = HEALTHY_PROJECT_GUIDANCE
+        
         prompt = TASK_ENRICHMENT_PROMPT.format(
             user_level=user_level,
             user_goal=user_goal,
+            health_level=health_level,
+            is_archived="예" if is_archived else "아니오",
             tasks_json=json.dumps(tasks_data, ensure_ascii=False, indent=2),
+            unhealthy_project_guidance=unhealthy_guidance,
         )
         
         client = fetch_llm_client()
@@ -502,6 +564,7 @@ def enrich_onboarding_tasks(
     user_goal: str = "오픈소스 기여 시작",
     hours_per_week: int = 5,
     use_llm: bool = True,
+    is_archived: bool = False,
 ) -> Dict[str, Any]:
     """
     온보딩 Task를 LLM으로 보강하고 시나리오 생성.
@@ -515,12 +578,15 @@ def enrich_onboarding_tasks(
         user_goal: 사용자 목표
         hours_per_week: 주당 가용 시간
         use_llm: LLM 사용 여부 (False면 Fallback 사용)
+        is_archived: 아카이브된 프로젝트 여부
     
     Returns:
         Dict with enriched_tasks, scenario, top_3_tasks
     """
     if use_llm:
-        enriched = enrich_tasks_with_llm(tasks, user_level, user_goal)
+        enriched = enrich_tasks_with_llm(
+            tasks, user_level, user_goal, health_level, is_archived
+        )
         scenario = generate_onboarding_scenario(
             tasks, enriched, repo,
             health_level, onboarding_level,
