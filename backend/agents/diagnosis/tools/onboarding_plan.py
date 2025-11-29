@@ -101,7 +101,7 @@ def _generate_risks_rule_based(
     
     # is_healthy=False 경고
     if not is_healthy:
-        risks.append("⚠️ 이 프로젝트는 현재 활발하게 유지보수되지 않습니다. 기여가 반영되지 않을 수 있습니다.")
+        risks.append("이 프로젝트는 현재 활발하게 유지보수되지 않습니다. 기여가 반영되지 않을 수 있습니다.")
     
     # 활동성 문제
     if "inactive_project" in activity_issues:

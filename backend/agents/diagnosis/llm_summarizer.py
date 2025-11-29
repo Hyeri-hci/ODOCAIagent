@@ -44,8 +44,8 @@ def summarize_diagnosis_repository(
     warning_section = ""
     if not is_healthy:
         warning_section = (
-            "⚠️ **주의: 이 프로젝트는 현재 활발하게 유지보수되지 않거나 "
-            "더 이상 적극적으로 사용되지 않는 프로젝트입니다.** "
+            "[주의] 이 프로젝트는 현재 활발하게 유지보수되지 않거나 "
+            "더 이상 적극적으로 사용되지 않는 프로젝트입니다. "
             "신규 프로젝트에 도입하기 전에 대안을 검토하는 것을 권장합니다.\n\n"
         )
 
