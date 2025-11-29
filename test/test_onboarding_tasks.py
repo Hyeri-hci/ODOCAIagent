@@ -12,7 +12,8 @@ from backend.agents.diagnosis.tools.onboarding_tasks import (
     determine_difficulty_from_labels,
     determine_level,
     determine_kind_from_labels,
-    generate_issue_reasons,
+    generate_reason_tags,
+    generate_fallback_reason,
     create_tasks_from_issues,
     create_meta_tasks_from_labels,
     compute_onboarding_tasks,
@@ -119,31 +120,58 @@ class TestDetermineKind:
 
 
 # ============================================================
-# 추천 이유 생성 테스트
+# 추천 이유 태그 생성 테스트
 # ============================================================
 
-class TestGenerateIssueReasons:
-    """추천 이유 생성 테스트."""
+class TestGenerateReasonTags:
+    """추천 이유 태그 생성 테스트."""
     
-    def test_good_first_issue_reason(self):
+    def test_good_first_issue_tag(self):
         labels = ["good first issue"]
-        reasons = generate_issue_reasons(labels, "beginner")
-        assert any("good-first-issue" in r for r in reasons)
+        tags = generate_reason_tags(labels, "beginner")
+        assert "good_first_issue" in tags
     
-    def test_help_wanted_reason(self):
+    def test_help_wanted_tag(self):
         labels = ["help wanted"]
-        reasons = generate_issue_reasons(labels, "intermediate")
-        assert any("help-wanted" in r for r in reasons)
+        tags = generate_reason_tags(labels, "intermediate")
+        assert "help_wanted" in tags
     
-    def test_docs_reason(self):
+    def test_docs_tag(self):
         labels = ["documentation"]
-        reasons = generate_issue_reasons(labels, "intermediate")
-        assert any("문서" in r for r in reasons)
+        tags = generate_reason_tags(labels, "intermediate")
+        assert "docs_issue" in tags
     
-    def test_default_reason(self):
+    def test_multiple_tags(self):
+        labels = ["good first issue", "documentation", "hacktoberfest"]
+        tags = generate_reason_tags(labels, "beginner")
+        assert "good_first_issue" in tags
+        assert "docs_issue" in tags
+        assert "hacktoberfest" in tags
+    
+    def test_default_difficulty_tag(self):
         labels = ["question"]
-        reasons = generate_issue_reasons(labels, "beginner")
-        assert len(reasons) > 0
+        tags = generate_reason_tags(labels, "beginner")
+        assert "difficulty_beginner" in tags
+
+
+class TestGenerateFallbackReason:
+    """Fallback 이유 생성 테스트."""
+    
+    def test_good_first_issue_fallback(self):
+        reason = generate_fallback_reason("beginner", ["good_first_issue"])
+        assert "메인테이너" in reason or "초보자" in reason
+    
+    def test_docs_fallback(self):
+        reason = generate_fallback_reason("intermediate", ["docs_issue"])
+        assert "코드" in reason
+    
+    def test_default_beginner_fallback(self):
+        reason = generate_fallback_reason("beginner", ["difficulty_beginner"])
+        assert "초보자" in reason
+    
+    def test_default_advanced_fallback(self):
+        reason = generate_fallback_reason("advanced", ["difficulty_advanced"])
+        assert "경험자" in reason or "도전" in reason
 
 
 # ============================================================
@@ -172,6 +200,10 @@ class TestCreateTasksFromIssues:
         assert task.level == 1
         assert task.kind == "doc"
         assert "good first issue" in task.labels
+        # 새 필드 검증
+        assert "good_first_issue" in task.reason_tags
+        assert "docs_issue" in task.reason_tags
+        assert task.fallback_reason is not None
     
     def test_graphql_format(self):
         issues = [
@@ -190,6 +222,7 @@ class TestCreateTasksFromIssues:
         assert task.id == "issue#456"
         assert task.difficulty == "advanced"
         assert task.kind == "issue"
+        assert "bug_fix" in task.reason_tags
 
 
 # ============================================================
@@ -212,6 +245,10 @@ class TestCreateMetaTasks:
         assert tasks[0].id == "meta:create_contributing"
         assert tasks[0].kind == "meta"
         assert tasks[0].difficulty == "beginner"
+        # 새 필드 검증
+        assert "missing_contributing" in tasks[0].meta_flags
+        assert "docs_issue" in tasks[0].reason_tags
+        assert tasks[0].fallback_reason is not None
     
     def test_missing_what(self):
         docs_issues = ["missing_what"]
@@ -222,7 +259,9 @@ class TestCreateMetaTasks:
             repo_url="",
         )
         
-        assert any(t.id == "meta:improve_readme_what" for t in tasks)
+        task = next(t for t in tasks if t.id == "meta:improve_readme_what")
+        assert "missing_what" in task.meta_flags
+        assert "quick_win" in task.reason_tags
     
     def test_inactive_project(self):
         activity_issues = ["inactive_project"]
@@ -233,10 +272,11 @@ class TestCreateMetaTasks:
             repo_url="",
         )
         
-        assert any(t.id == "meta:check_maintainer_status" for t in tasks)
         task = next(t for t in tasks if t.id == "meta:check_maintainer_status")
         assert task.difficulty == "advanced"
-        assert any("[주의]" in r for r in task.reasons)
+        assert "inactive_project" in task.meta_flags
+        assert "caution_needed" in task.reason_tags
+        assert "주의" in task.fallback_reason
     
     def test_bad_health(self):
         tasks = create_meta_tasks_from_labels(
@@ -246,7 +286,8 @@ class TestCreateMetaTasks:
             repo_url="",
         )
         
-        assert any(t.id == "meta:evaluate_project_health" for t in tasks)
+        task = next(t for t in tasks if t.id == "meta:evaluate_project_health")
+        assert "unhealthy_project" in task.meta_flags
     
     def test_multiple_issues(self):
         docs_issues = ["missing_what", "missing_how", "weak_documentation"]
@@ -277,7 +318,9 @@ class TestOnboardingTasks:
             id="issue#1",
             title="Test",
             labels=["test"],
-            reasons=["reason1"],
+            reason_tags=["good_first_issue"],
+            meta_flags=[],
+            fallback_reason="테스트 이유",
         )
         tasks = OnboardingTasks(
             beginner=[task],
@@ -291,6 +334,8 @@ class TestOnboardingTasks:
         d = tasks.to_dict()
         assert len(d["beginner"]) == 1
         assert d["beginner"][0]["id"] == "issue#1"
+        assert d["beginner"][0]["reason_tags"] == ["good_first_issue"]
+        assert d["beginner"][0]["fallback_reason"] == "테스트 이유"
         assert d["meta"]["total_count"] == 1
 
 

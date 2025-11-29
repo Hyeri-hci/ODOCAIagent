@@ -2,6 +2,7 @@
 Onboarding Tasks 실제 동작 테스트.
 
 실제 GitHub API를 호출하여 저장소의 기여 가능한 Task 목록을 확인합니다.
+새로운 구조: reason_tags, meta_flags, fallback_reason
 """
 import json
 import logging
@@ -62,11 +63,20 @@ def main():
                 kind = task.get("kind", "?")
                 title = task.get("title", "")[:50]
                 task_id = task.get("id", "")
+                
+                # 새로운 필드
+                reason_tags = task.get("reason_tags", [])
+                meta_flags = task.get("meta_flags", [])
+                fallback_reason = task.get("fallback_reason", "")
+                
                 print(f"  [Lv.{level}] [{kind}] {title}")
                 print(f"         ID: {task_id}")
-                reasons = task.get("reasons", [])
-                if reasons:
-                    print(f"         이유: {reasons[0][:60]}...")
+                if reason_tags:
+                    print(f"         태그: {reason_tags}")
+                if meta_flags:
+                    print(f"         플래그: {meta_flags}")
+                if fallback_reason:
+                    print(f"         Fallback: {fallback_reason[:60]}...")
     
     print("\n" + "=" * 70)
     print("테스트 완료!")
