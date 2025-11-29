@@ -24,6 +24,7 @@ from .tools.activity_scores import (
 from .tools.health_score import HealthScore, create_health_score
 from .tools.diagnosis_labels import create_diagnosis_labels
 from .tools.onboarding_plan import create_onboarding_plan
+from .tools.onboarding_tasks import compute_onboarding_tasks
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
 
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 USE_LLM_SUMMARY = True
 USE_LLM_ONBOARDING = False  # v0: 규칙 기반, True로 변경하면 v1: LLM 기반
+USE_ONBOARDING_TASKS = True  # True: onboarding_tasks 블록 포함
 
 
 def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> str:
@@ -261,6 +263,17 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         use_llm=USE_LLM_ONBOARDING,
     )
 
+    # 온보딩 Task 목록 생성 (난이도/레벨별)
+    onboarding_tasks = None
+    if USE_ONBOARDING_TASKS:
+        logger.info("Phase 4: Computing onboarding tasks...")
+        onboarding_tasks = compute_onboarding_tasks(
+            owner=owner,
+            repo=repo,
+            labels=labels.to_dict(),
+            onboarding_plan=onboarding_plan.to_dict(),
+        )
+
     # 최종 JSON 결과
     result_json: Dict[str, Any] = {
         "input": {
@@ -273,6 +286,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         "scores": asdict(scores),
         "labels": labels.to_dict(),
         "onboarding_plan": onboarding_plan.to_dict(),
+        "onboarding_tasks": onboarding_tasks.to_dict() if onboarding_tasks else None,
         "details": details,
     }
 
