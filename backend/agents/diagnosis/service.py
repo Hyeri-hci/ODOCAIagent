@@ -23,12 +23,14 @@ from .tools.activity_scores import (
 )
 from .tools.health_score import HealthScore, create_health_score
 from .tools.diagnosis_labels import create_diagnosis_labels
+from .tools.onboarding_plan import create_onboarding_plan
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
 
 logger = logging.getLogger(__name__)
 
 USE_LLM_SUMMARY = True
+USE_LLM_ONBOARDING = False  # v0: 규칙 기반, True로 변경하면 v1: LLM 기반
 
 
 def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> str:
@@ -249,6 +251,16 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         activity_scores=activity_scores_dict,
     )
 
+    # 온보딩 계획 생성
+    docs_summary = details.get("docs", {}).get("readme_summary_for_user", "")
+    onboarding_plan = create_onboarding_plan(
+        scores=asdict(scores),
+        labels=labels.to_dict(),
+        docs_summary=docs_summary,
+        repo_info=details.get("repo_info"),
+        use_llm=USE_LLM_ONBOARDING,
+    )
+
     # 최종 JSON 결과
     result_json: Dict[str, Any] = {
         "input": {
@@ -260,6 +272,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         },
         "scores": asdict(scores),
         "labels": labels.to_dict(),
+        "onboarding_plan": onboarding_plan.to_dict(),
         "details": details,
     }
 
