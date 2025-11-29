@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List
 import base64
 import re
 
-from backend.common.github_client import fetch_readme
+from backend.common.github_client import fetch_readme, fetch_repo_overview
 
 @dataclass
 class ReadmeContent:
@@ -17,7 +17,7 @@ class ReadmeContent:
     list_item_count: int        # - , * , + 등 리스트 아이템 개수
     external_doc_count: int     # 외부 문서(예: Wiki) 링크 개수  
 
-# README 디코딩 함수
+# README 디코딩 함수 (REST API 하위 호환용)
 def _decode_readme_content(readme_data: Dict[str, Any]) -> str:
     content_base64 = readme_data.get("content", "")
     if not content_base64:
@@ -28,8 +28,15 @@ def _decode_readme_content(readme_data: Dict[str, Any]) -> str:
     except Exception:
         return ""
 
-# README 내용 가져오기 함수
+# README 내용 가져오기 함수 (GraphQL 우선, REST API 폴백)
 def fetch_readme_content(owner: str, repo: str) -> Optional[str]:
+    """GraphQL로 README 내용 조회 (단독 호출시)."""
+    overview = fetch_repo_overview(owner, repo)
+    readme_text = overview.get("readme_content")
+    if readme_text:
+        return readme_text
+    
+    # GraphQL에서 가져오지 못한 경우 REST API 폴백
     readme_data = fetch_readme(owner, repo)
     if not readme_data:
         return None

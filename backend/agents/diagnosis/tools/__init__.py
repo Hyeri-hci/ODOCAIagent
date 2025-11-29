@@ -1,6 +1,6 @@
 """Diagnosis tools module exports."""
 
-from .llm_summarizer import (
+from .readme_summarizer import (
     ReadmeUnifiedSummary,
     ReadmeAdvancedSummary,
     generate_readme_unified_summary,

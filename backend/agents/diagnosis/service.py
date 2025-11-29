@@ -12,19 +12,25 @@ from backend.agents.diagnosis.tools.readme_categories import classify_readme_sec
 from backend.common.github_client import DEFAULT_ACTIVITY_DAYS
 from backend.common.parallel import run_parallel
 from .tools.repo_parser import fetch_repo_info
-from .tools.chaoss_metrics import compute_commit_activity
-from .tools.health_score import (
-    aggregate_health_scores,
-    HealthScore,
-    score_commit_activity,
-    score_documentation,
+from .tools.chaoss_metrics import (
+    compute_commit_activity,
+    compute_issue_activity,
+    compute_pr_activity,
 )
+from .tools.activity_scores import (
+    aggregate_activity_score,
+    activity_score_to_100,
+)
+from .tools.health_score import HealthScore, create_health_score
+from .tools.diagnosis_labels import create_diagnosis_labels
+from .tools.onboarding_plan import create_onboarding_plan
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
 
 logger = logging.getLogger(__name__)
 
 USE_LLM_SUMMARY = True
+USE_LLM_ONBOARDING = False  # v0: 규칙 기반, True로 변경하면 v1: LLM 기반
 
 
 def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> str:
@@ -37,14 +43,12 @@ def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> st
     parts.append(f"Open Issues: {repo_info.open_issues}")
     parts.append(
         f"README Present: {'Yes' if repo_info.has_readme else 'No'} "
-        f"(Documentation Quality Score: {scores.documentation_quality}/100)"
+        f"(Documentation Score: {scores.documentation_quality}/100)"
     )
-    parts.append(
-        f"Activity & Maintainability Score: {scores.activity_maintainability}/100"
-    )
-    parts.append(
-        f"Overall Health Score: {scores.overall_score}/100"
-    )
+    parts.append(f"Activity Score: {scores.activity_maintainability}/100")
+    parts.append(f"Health Score: {scores.health_score}/100")
+    parts.append(f"Onboarding Score: {scores.onboarding_score}/100")
+    parts.append(f"Is Healthy: {'Yes' if scores.is_healthy else 'No'}")
 
     if commit_metrics is not None:
         if commit_metrics.days_since_last_commit is not None:
@@ -83,7 +87,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Phase 1: Fetching GitHub data...")
     
     if task_type == DiagnosisTaskType.FULL:
-        # FULL 모드: repo_info, readme, commits 병렬 호출
+        # FULL 모드: repo_info, readme, commits, issues, prs 병렬 호출
         parallel_results = run_parallel({
             "repo_info": lambda: fetch_repo_info(owner, repo),
             "readme_text": lambda: fetch_readme_content(owner, repo) or "",
@@ -92,10 +96,22 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
                 repo=repo,
                 days=DEFAULT_ACTIVITY_DAYS,
             ),
+            "issue_metrics": lambda: compute_issue_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+            "pr_metrics": lambda: compute_pr_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
         })
         repo_info = parallel_results["repo_info"]
         readme_text = parallel_results["readme_text"]
         commit_metrics = parallel_results["commit_metrics"]
+        issue_metrics = parallel_results["issue_metrics"]
+        pr_metrics = parallel_results["pr_metrics"]
     else:
         # DOCS_ONLY 또는 ACTIVITY_ONLY: 필요한 것만 병렬 호출
         parallel_results = run_parallel({
@@ -105,6 +121,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         repo_info = parallel_results["repo_info"]
         readme_text = parallel_results["readme_text"]
         commit_metrics = None
+        issue_metrics = None
+        pr_metrics = None
 
     # README 메트릭 계산 (로컬, 빠름)
     readme_metrics = None
@@ -120,7 +138,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             advanced_mode=advanced_analysis,
         )
     else:
-        from backend.agents.diagnosis.tools.llm_summarizer import ReadmeUnifiedSummary
+        from backend.agents.diagnosis.tools.readme_summarizer import ReadmeUnifiedSummary
         readme_categories, readme_category_score = {}, 0
         unified_summary = ReadmeUnifiedSummary(summary_en="", summary_ko="")
 
@@ -146,64 +164,101 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     scores: HealthScore
 
     if task_type == DiagnosisTaskType.FULL:
-        # commit_metrics는 Phase 1에서 이미 가져옴
-        scores = aggregate_health_scores(
-            has_readme=repo_info.has_readme,
-            commit_metrics=commit_metrics,
-            readme_stats=repo_info.readme_stats,
+        # CHAOSS 기반 activity 점수 계산
+        activity_breakdown = aggregate_activity_score(
+            commit=commit_metrics,
+            issue=issue_metrics,
+            pr=pr_metrics,
         )
+        
+        # D = readme_category_score, A = CHAOSS activity
+        # health_score = 0.3*D + 0.7*A, onboarding_score = 0.6*D_eff + 0.4*A
+        doc_score = readme_category_score
+        activity_score = activity_score_to_100(activity_breakdown)
+        scores = create_health_score(doc_score, activity_score)
 
-        details["commit_metrics"] = {
-            "total_commits": commit_metrics.total_commits,
-            "days_since_last_commit": commit_metrics.days_since_last_commit,
-            "window_days": commit_metrics.window_days,
+        # CHAOSS 기반 activity 블록 (commit, issue, pr + scores)
+        details["activity"] = {
+            "commit": asdict(commit_metrics),
+            "issue": asdict(issue_metrics),
+            "pr": asdict(pr_metrics),
+            "scores": activity_breakdown.to_dict(),
         }
 
     elif task_type == DiagnosisTaskType.DOCS_ONLY:
-        docs_score = score_documentation(
-            has_readme=repo_info.has_readme,
-            stats=repo_info.readme_stats,
-        )
-
-        scores = HealthScore(
-            documentation_quality=docs_score,
-            activity_maintainability=0,
-            overall_score=docs_score,
-        )
+        # DOCS_ONLY: documentation만 평가
+        scores = create_health_score(readme_category_score, 0)
 
     elif task_type == DiagnosisTaskType.ACTIVITY_ONLY:
-        commit_metrics = compute_commit_activity(
-            owner=owner,
-            repo=repo,
-            days=DEFAULT_ACTIVITY_DAYS,
+        # ACTIVITY_ONLY: commit, issue, pr 메트릭 병렬 호출
+        activity_results = run_parallel({
+            "commit_metrics": lambda: compute_commit_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+            "issue_metrics": lambda: compute_issue_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+            "pr_metrics": lambda: compute_pr_activity(
+                owner=owner,
+                repo=repo,
+                days=DEFAULT_ACTIVITY_DAYS,
+            ),
+        })
+        commit_metrics = activity_results["commit_metrics"]
+        issue_metrics = activity_results["issue_metrics"]
+        pr_metrics = activity_results["pr_metrics"]
+
+        # CHAOSS 기반 activity 점수 계산
+        activity_breakdown = aggregate_activity_score(
+            commit=commit_metrics,
+            issue=issue_metrics,
+            pr=pr_metrics,
         )
 
-        activity_score = score_commit_activity(commit_metrics)
+        scores = create_health_score(0, activity_score_to_100(activity_breakdown))
 
-        scores = HealthScore(
-            documentation_quality=0,
-            activity_maintainability=activity_score,
-            overall_score=activity_score,
-        )
-
-        details["commit_metrics"] = {
-            "total_commits": commit_metrics.total_commits,
-            "days_since_last_commit": commit_metrics.days_since_last_commit,
-            "window_days": commit_metrics.window_days,
+        details["activity"] = {
+            "commit": asdict(commit_metrics),
+            "issue": asdict(issue_metrics),
+            "pr": asdict(pr_metrics),
+            "scores": activity_breakdown.to_dict(),
         }
 
     else:
-        scores = HealthScore(
-            documentation_quality=0,
-            activity_maintainability=0,
-            overall_score=0,
-        )
+        scores = create_health_score(0, 0)
 
     # 규칙 기반 기본 요약
     natural_summary = _summarize_common(
         repo_info=repo_info,
         scores=scores,
         commit_metrics=commit_metrics,
+    )
+
+    # 규칙 기반 라벨 생성
+    readme_categories = details.get("docs", {}).get("readme_categories")
+    activity_scores_dict = details.get("activity", {}).get("scores")
+    
+    labels = create_diagnosis_labels(
+        health_score=scores.health_score,
+        onboarding_score=scores.onboarding_score,
+        doc_score=scores.documentation_quality,
+        activity_score=scores.activity_maintainability,
+        readme_categories=readme_categories,
+        activity_scores=activity_scores_dict,
+    )
+
+    # 온보딩 계획 생성
+    docs_summary = details.get("docs", {}).get("readme_summary_for_user", "")
+    onboarding_plan = create_onboarding_plan(
+        scores=asdict(scores),
+        labels=labels.to_dict(),
+        docs_summary=docs_summary,
+        repo_info=details.get("repo_info"),
+        use_llm=USE_LLM_ONBOARDING,
     )
 
     # 최종 JSON 결과
@@ -216,6 +271,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             "user_context": user_context,
         },
         "scores": asdict(scores),
+        "labels": labels.to_dict(),
+        "onboarding_plan": onboarding_plan.to_dict(),
         "details": details,
     }
 

@@ -13,7 +13,7 @@ from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
 
 from .readme_sections import ReadmeSection, split_readme_into_sections
-from .llm_summarizer import (
+from .readme_summarizer import (
     generate_readme_unified_summary,
     generate_readme_advanced_summary,
     ReadmeUnifiedSummary,
