@@ -16,7 +16,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from backend.agents.diagnosis.tools.readme_sections import split_readme_into_sections
-from backend.agents.diagnosis.tools.llm_summarizer import (
+from backend.agents.diagnosis.tools.readme_summarizer import (
     generate_readme_unified_summary,
     summarize_readme_category_for_embedding,
     ReadmeUnifiedSummary,
