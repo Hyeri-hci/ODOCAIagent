@@ -41,7 +41,11 @@ class TaskSuggestion:
     title: str
     url: Optional[str] = None
     labels: List[str] = field(default_factory=list)
-    reasons: List[str] = field(default_factory=list)  # 왜 추천했는지 (근거 문장)
+    # 구조적 추천 근거 (LLM 프롬프트용 태그/플래그)
+    reason_tags: List[str] = field(default_factory=list)  # ["good_first_issue", "help_wanted", "docs_issue"]
+    meta_flags: List[str] = field(default_factory=list)   # ["missing_contributing", "inactive_project"]
+    # Fallback용 기본 이유 문장 (LLM 실패 시 사용)
+    fallback_reason: Optional[str] = None
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -323,8 +327,9 @@ def create_tasks_from_issues(
         level = determine_level(difficulty, labels, comment_count)
         kind = determine_kind_from_labels(labels)
         
-        # 추천 이유 생성
-        reasons = generate_issue_reasons(labels, difficulty)
+        # 구조적 태그 생성 (LLM 프롬프트용)
+        reason_tags = generate_reason_tags(labels, difficulty)
+        fallback = generate_fallback_reason(difficulty, reason_tags)
         
         task = TaskSuggestion(
             kind=kind,
@@ -334,42 +339,87 @@ def create_tasks_from_issues(
             title=title,
             url=url,
             labels=labels,
-            reasons=reasons,
+            reason_tags=reason_tags,
+            meta_flags=[],
+            fallback_reason=fallback,
         )
         tasks.append(task)
     
     return tasks
 
 
-def generate_issue_reasons(labels: List[str], difficulty: Difficulty) -> List[str]:
-    """이슈에 대한 추천 이유 생성."""
-    reasons: List[str] = []
+# ============================================================
+# 구조적 태그 생성 (LLM 프롬프트용)
+# ============================================================
+
+def generate_reason_tags(labels: List[str], difficulty: Difficulty) -> List[str]:
+    """라벨에서 추천 이유 태그 생성 (LLM 프롬프트용)."""
+    tags: List[str] = []
     labels_lower = {label.lower() for label in labels}
     
     if labels_lower & {"good first issue", "good-first-issue"}:
-        reasons.append("good-first-issue 라벨: 메인테이너가 초보자용으로 표시한 이슈")
+        tags.append("good_first_issue")
     
     if labels_lower & {"help wanted", "help-wanted"}:
-        reasons.append("help-wanted 라벨: 기여자를 적극적으로 찾는 이슈")
+        tags.append("help_wanted")
     
     if labels_lower & {"documentation", "docs"}:
-        reasons.append("문서 관련 이슈: 코드 이해 없이도 기여 가능")
+        tags.append("docs_issue")
     
     if labels_lower & {"tests", "testing"}:
-        reasons.append("테스트 관련 이슈: 코드베이스 학습에 도움")
+        tags.append("test_issue")
     
     if labels_lower & {"hacktoberfest"}:
-        reasons.append("Hacktoberfest 참여 가능 이슈")
+        tags.append("hacktoberfest")
     
-    if not reasons:
-        if difficulty == "beginner":
-            reasons.append("초보자도 도전 가능한 난이도")
-        elif difficulty == "intermediate":
-            reasons.append("중급 수준의 기여 이슈")
-        else:
-            reasons.append("경험자에게 적합한 도전적인 이슈")
+    if labels_lower & {"bug"}:
+        tags.append("bug_fix")
     
-    return reasons
+    if labels_lower & {"security"}:
+        tags.append("security_issue")
+    
+    if labels_lower & {"enhancement", "feature"}:
+        tags.append("feature_request")
+    
+    if labels_lower & {"refactor", "refactoring"}:
+        tags.append("refactoring")
+    
+    # 기본 난이도 태그 (다른 태그가 없을 때)
+    if not tags:
+        tags.append(f"difficulty_{difficulty}")
+    
+    return tags
+
+
+def generate_fallback_reason(difficulty: Difficulty, reason_tags: List[str]) -> str:
+    """태그 기반 기본 추천 이유 문장 생성 (LLM 실패 시 Fallback)."""
+    parts: List[str] = []
+    
+    if "good_first_issue" in reason_tags:
+        parts.append("메인테이너가 초보자용으로 표시한 이슈")
+    if "help_wanted" in reason_tags:
+        parts.append("기여자를 적극적으로 찾는 이슈")
+    if "docs_issue" in reason_tags:
+        parts.append("코드 이해 없이도 기여 가능")
+    if "test_issue" in reason_tags:
+        parts.append("코드베이스 학습에 도움")
+    if "hacktoberfest" in reason_tags:
+        parts.append("Hacktoberfest 참여 가능")
+    if "bug_fix" in reason_tags:
+        parts.append("버그 수정 이슈")
+    if "security_issue" in reason_tags:
+        parts.append("보안 관련 이슈")
+    
+    if parts:
+        return ", ".join(parts)
+    
+    # 기본 난이도별 문장
+    if difficulty == "beginner":
+        return "초보자도 도전 가능한 난이도"
+    elif difficulty == "intermediate":
+        return "중급 수준의 기여 이슈"
+    else:
+        return "경험자에게 적합한 도전적인 이슈"
 
 
 # ============================================================
@@ -386,6 +436,7 @@ def create_meta_tasks_from_labels(
     진단 결과(labels)에서 메타 Task 생성.
     
     실제 이슈가 없어도, 개선이 필요한 영역에 대한 가상 Task 제안.
+    reason_tags와 meta_flags로 구조적 정보 전달, LLM이 자연어 생성.
     """
     tasks: List[TaskSuggestion] = []
     
@@ -399,11 +450,9 @@ def create_meta_tasks_from_labels(
             title="CONTRIBUTING.md 초안 작성",
             url=None,
             labels=["documentation", "meta"],
-            reasons=[
-                "프로젝트에 CONTRIBUTING.md가 없음",
-                "기여 가이드 문서를 만들면 다른 기여자에게 도움",
-                "문서 작성은 코드 이해 없이도 가능",
-            ],
+            reason_tags=["docs_issue", "low_barrier"],
+            meta_flags=["missing_contributing"],
+            fallback_reason="프로젝트에 CONTRIBUTING.md가 없어 기여 가이드 작성이 필요함",
         ))
     
     if "missing_what" in docs_issues:
@@ -415,10 +464,9 @@ def create_meta_tasks_from_labels(
             title="README에 '프로젝트 소개' 섹션 보강",
             url=None,
             labels=["documentation", "meta"],
-            reasons=[
-                "README에 프로젝트가 무엇인지 설명이 부족",
-                "간단한 소개 문구 추가로 큰 기여 가능",
-            ],
+            reason_tags=["docs_issue", "low_barrier", "quick_win"],
+            meta_flags=["missing_what"],
+            fallback_reason="README에 프로젝트 소개가 부족하여 간단한 문구 추가로 기여 가능",
         ))
     
     if "missing_why" in docs_issues:
@@ -430,10 +478,9 @@ def create_meta_tasks_from_labels(
             title="README에 '왜 이 프로젝트가 필요한지' 섹션 추가",
             url=None,
             labels=["documentation", "meta"],
-            reasons=[
-                "프로젝트의 필요성/동기 설명이 부족",
-                "사용 사례나 문제 해결 시나리오 추가 권장",
-            ],
+            reason_tags=["docs_issue", "storytelling"],
+            meta_flags=["missing_why"],
+            fallback_reason="프로젝트의 필요성/동기 설명 추가로 사용자 이해 향상 가능",
         ))
     
     if "missing_how" in docs_issues:
@@ -445,10 +492,9 @@ def create_meta_tasks_from_labels(
             title="설치 및 실행 가이드 작성",
             url=None,
             labels=["documentation", "meta"],
-            reasons=[
-                "Quick Start 또는 Installation 가이드가 없음",
-                "개발 환경 세팅 경험이 있으면 작성 가능",
-            ],
+            reason_tags=["docs_issue", "onboarding_critical"],
+            meta_flags=["missing_how"],
+            fallback_reason="Quick Start 또는 Installation 가이드가 없어 개발 환경 세팅 문서 필요",
         ))
     
     if "weak_documentation" in docs_issues:
@@ -460,10 +506,9 @@ def create_meta_tasks_from_labels(
             title="전반적인 문서 품질 개선",
             url=None,
             labels=["documentation", "meta"],
-            reasons=[
-                "문서화 점수가 낮음 (50점 미만)",
-                "README나 관련 문서의 전반적인 개선 필요",
-            ],
+            reason_tags=["docs_issue", "quality_improvement"],
+            meta_flags=["weak_documentation"],
+            fallback_reason="문서화 점수가 낮아 README 및 관련 문서 전반적 개선 필요",
         ))
     
     # 2. 활동성 관련 메타 Task
@@ -476,11 +521,9 @@ def create_meta_tasks_from_labels(
             title="메인테이너 활동 여부 확인 및 커뮤니케이션",
             url=None,
             labels=["meta", "communication"],
-            reasons=[
-                "[주의] 프로젝트가 비활성 상태로 보임",
-                "기여 전에 메인테이너에게 연락하여 상태 확인 권장",
-                "이슈나 Discussion에 질문 글 작성 고려",
-            ],
+            reason_tags=["caution_needed", "communication_required"],
+            meta_flags=["inactive_project"],
+            fallback_reason="[주의] 프로젝트가 비활성 상태로, 기여 전 메인테이너 연락 권장",
         ))
     
     if "low_issue_closure" in activity_issues:
@@ -492,11 +535,9 @@ def create_meta_tasks_from_labels(
             title="오래된 이슈 정리(triage) 도움",
             url=None,
             labels=["meta", "triage"],
-            reasons=[
-                "이슈 처리율이 낮음",
-                "오래된 이슈에 댓글로 상태 확인 요청",
-                "재현 가능 여부 테스트 후 리포트",
-            ],
+            reason_tags=["community_help", "issue_management"],
+            meta_flags=["low_issue_closure"],
+            fallback_reason="이슈 처리율이 낮아 오래된 이슈 상태 확인 및 정리 도움 필요",
         ))
     
     # 3. 건강 상태 기반 추가 Task
@@ -509,11 +550,9 @@ def create_meta_tasks_from_labels(
             title="프로젝트 건강 상태 평가 및 개선 제안",
             url=None,
             labels=["meta", "analysis"],
-            reasons=[
-                "[주의] 프로젝트 전반적인 건강 상태가 좋지 않음",
-                "기여하기 전에 프로젝트 상태를 신중히 평가 권장",
-                "개선 방향을 Discussion에 제안하는 것도 좋은 기여",
-            ],
+            reason_tags=["caution_needed", "strategic_contribution"],
+            meta_flags=["unhealthy_project"],
+            fallback_reason="[주의] 프로젝트 전반적 건강 상태가 좋지 않아 신중한 평가 필요",
         ))
     
     return tasks
