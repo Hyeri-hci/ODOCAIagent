@@ -21,7 +21,7 @@ from .tools.activity_scores import (
     aggregate_activity_score,
     activity_score_to_100,
 )
-from .tools.health_score import HealthScore
+from .tools.health_score import HealthScore, create_health_score
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
 
@@ -40,14 +40,12 @@ def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> st
     parts.append(f"Open Issues: {repo_info.open_issues}")
     parts.append(
         f"README Present: {'Yes' if repo_info.has_readme else 'No'} "
-        f"(Documentation Quality Score: {scores.documentation_quality}/100)"
+        f"(Documentation Score: {scores.documentation_quality}/100)"
     )
-    parts.append(
-        f"Activity & Maintainability Score: {scores.activity_maintainability}/100"
-    )
-    parts.append(
-        f"Overall Health Score: {scores.overall_score}/100"
-    )
+    parts.append(f"Activity Score: {scores.activity_maintainability}/100")
+    parts.append(f"Health Score: {scores.health_score}/100")
+    parts.append(f"Onboarding Score: {scores.onboarding_score}/100")
+    parts.append(f"Is Healthy: {'Yes' if scores.is_healthy else 'No'}")
 
     if commit_metrics is not None:
         if commit_metrics.days_since_last_commit is not None:
@@ -170,16 +168,11 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             pr=pr_metrics,
         )
         
-        # documentation_quality = readme_category_score (8카테고리 분석)
-        # activity_maintainability = CHAOSS 기반 점수
-        # overall_score = 0.5 * doc + 0.5 * activity
+        # D = readme_category_score, A = CHAOSS activity
+        # health_score = 0.3*D + 0.7*A, onboarding_score = 0.6*D_eff + 0.4*A
         doc_score = readme_category_score
         activity_score = activity_score_to_100(activity_breakdown)
-        scores = HealthScore(
-            documentation_quality=doc_score,
-            activity_maintainability=activity_score,
-            overall_score=round(0.5 * doc_score + 0.5 * activity_score),
-        )
+        scores = create_health_score(doc_score, activity_score)
 
         # CHAOSS 기반 activity 블록 (commit, issue, pr + scores)
         details["activity"] = {
@@ -190,13 +183,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     elif task_type == DiagnosisTaskType.DOCS_ONLY:
-        # DOCS_ONLY: documentation만 평가, overall = doc
-        doc_score = readme_category_score
-        scores = HealthScore(
-            documentation_quality=doc_score,
-            activity_maintainability=0,
-            overall_score=doc_score,
-        )
+        # DOCS_ONLY: documentation만 평가
+        scores = create_health_score(readme_category_score, 0)
 
     elif task_type == DiagnosisTaskType.ACTIVITY_ONLY:
         # ACTIVITY_ONLY: commit, issue, pr 메트릭 병렬 호출
@@ -228,11 +216,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             pr=pr_metrics,
         )
 
-        scores = HealthScore(
-            documentation_quality=0,
-            activity_maintainability=activity_score_to_100(activity_breakdown),
-            overall_score=activity_score_to_100(activity_breakdown),
-        )
+        scores = create_health_score(0, activity_score_to_100(activity_breakdown))
 
         details["activity"] = {
             "commit": asdict(commit_metrics),
@@ -242,11 +226,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     else:
-        scores = HealthScore(
-            documentation_quality=0,
-            activity_maintainability=0,
-            overall_score=0,
-        )
+        scores = create_health_score(0, 0)
 
     # 규칙 기반 기본 요약
     natural_summary = _summarize_common(

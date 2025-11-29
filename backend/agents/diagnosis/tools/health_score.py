@@ -3,14 +3,13 @@ Health Score v1.0 - 프로젝트 건강도 및 온보딩 점수
 
 Scores:
   - health_score: 운영/유지보수 중심 (doc 30% + activity 70%)
-  - onboarding_score: 초보자 친화도 (doc 60% + activity 40%, doc 상한 80)
+  - onboarding_score: 초보자 친화도 (doc 60% + activity 40%)
   - is_healthy: 임계값 기반 플래그 (doc >= 60 AND activity >= 50)
 
 Spec: docs/CHAOSS_ACTIVITY_SCORE_v1.md
 """
 from __future__ import annotations
 from dataclasses import dataclass, asdict
-from typing import Optional
 
 
 @dataclass
@@ -18,7 +17,7 @@ class HealthScore:
     documentation_quality: int           # D (0-100, README 8카테고리 기반)
     activity_maintainability: int        # A (0-100, CHAOSS 기반)
     health_score: int                    # 모델 2: 0.3*D + 0.7*A
-    onboarding_score: int                # 모델 1: 0.6*D_eff + 0.4*A (D_eff = min(D, 80))
+    onboarding_score: int                # 모델 1: 0.6*D + 0.4*A
     overall_score: int                   # = health_score (backward compat)
     is_healthy: bool                     # 모델 3: D >= 60 AND A >= 50
 
@@ -34,9 +33,8 @@ def compute_health_score(doc: int, activity: int) -> int:
 
 
 def compute_onboarding_score(doc: int, activity: int) -> int:
-    """모델 1: 온보딩 친화도 (doc 60% + activity 40%, doc 상한 80)"""
-    doc_effective = min(doc, 80)  # 80 이상은 동일 취급
-    return round(0.6 * doc_effective + 0.4 * activity)
+    """모델 1: 온보딩 친화도 (doc 60% + activity 40%)"""
+    return round(0.6 * doc + 0.4 * activity)
 
 
 def compute_is_healthy(doc: int, activity: int) -> bool:
