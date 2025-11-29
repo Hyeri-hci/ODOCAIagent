@@ -350,7 +350,7 @@ class TestOnboardingTasks:
 class TestComputeOnboardingTasks:
     """compute_onboarding_tasks 통합 테스트."""
     
-    @patch("backend.agents.diagnosis.tools.onboarding_tasks.fetch_open_issues_for_tasks_rest")
+    @patch("backend.agents.diagnosis.tools.onboarding_tasks.fetch_open_issues_for_tasks")
     def test_with_mocked_issues(self, mock_fetch):
         mock_fetch.return_value = [
             {

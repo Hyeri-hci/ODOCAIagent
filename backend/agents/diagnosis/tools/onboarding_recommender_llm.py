@@ -1,14 +1,7 @@
 """
-Onboarding Recommender LLM v1.0
+Onboarding Recommender LLM v1.2
 
-규칙 기반 Task에 LLM을 활용해 자연어 추천 이유, 우선순위, 온보딩 시나리오 생성.
-
-설계 원칙:
-- 규칙 기반(Tool): difficulty/level/kind/reason_tags는 이미 계산됨
-- LLM 기반(Agent): 자연어 추천 이유, 우선순위 조정, 온보딩 스토리 생성
-- Fallback: LLM 실패 시 fallback_reason 사용
-
-Related: onboarding_tasks.py (규칙 기반 Tool)
+규칙 기반 Task에 LLM을 활용해 자연어 추천 이유, 우선순위, 시나리오 생성.
 """
 from __future__ import annotations
 
@@ -18,13 +11,12 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Literal, Optional
 
 from .onboarding_tasks import TaskSuggestion, OnboardingTasks, Difficulty
+from backend.agents.diagnosis.config import DiagnosisMetrics, LLMTimer
 
 logger = logging.getLogger(__name__)
 
 
-# ============================================================
 # 출력 데이터 모델
-# ============================================================
 
 @dataclass
 class EnrichedTask:
@@ -73,8 +65,14 @@ class LLMEnrichedTasks:
 # 프롬프트 템플릿
 # ============================================================
 
+# 프롬프트 버전 (변경 시 업데이트)
+PROMPT_VERSION = "1.2.0"
+
 TASK_ENRICHMENT_PROMPT = """당신은 오픈소스 기여 멘토입니다.
 초보 기여자가 바로 시작할 수 있도록, 각 Task에 대해 친근하고 실용적인 추천 이유를 작성해주세요.
+
+## 버전
+- 프롬프트 버전: {prompt_version}
 
 ## 사용자 정보
 - 경험 수준: {user_level}
@@ -118,7 +116,13 @@ TASK_ENRICHMENT_PROMPT = """당신은 오픈소스 기여 멘토입니다.
 3. 가능하면 **예상 소요 시간(estimated_time)**도 추정하세요.
    - "30분", "1-2시간", "반나절" 등
 
-## 응답 형식 (JSON)
+## 제약 조건 (필수)
+- **JSON 형식만 출력하세요. JSON 외의 텍스트는 절대 포함하지 마세요.**
+- **task_id는 반드시 위 Task 목록에 있는 ID만 사용하세요.**
+- **새로운 task_id를 만들지 마세요.**
+- **top_3_tasks에는 위 Task 목록의 ID만 포함하세요.**
+
+## 응답 형식 (JSON만 출력)
 ```json
 {{
   "enriched_tasks": [
@@ -153,6 +157,9 @@ HEALTHY_PROJECT_GUIDANCE = """
 ONBOARDING_SCENARIO_PROMPT = """당신은 오픈소스 기여 멘토입니다.
 선택된 Task들을 바탕으로 초보 기여자를 위한 **첫 1주일 온보딩 로드맵**을 작성해주세요.
 
+## 버전
+- 프롬프트 버전: {prompt_version}
+
 ## 사용자 정보
 - 경험 수준: {user_level}
 - 주당 가용 시간: {hours_per_week}시간
@@ -177,7 +184,12 @@ ONBOARDING_SCENARIO_PROMPT = """당신은 오픈소스 기여 멘토입니다.
 
 3. **tips**: 초보자를 위한 실용적인 팁 2-3개
 
-## 응답 형식 (JSON)
+## 제약 조건 (필수)
+- **JSON 형식만 출력하세요. JSON 외의 텍스트는 절대 포함하지 마세요.**
+- **task_id는 반드시 위 Task 목록에 있는 ID만 사용하세요. 없으면 null.**
+- **steps 배열의 각 step에는 step, task_id, description 필드가 반드시 있어야 합니다.**
+
+## 응답 형식 (JSON만 출력)
 ```json
 {{
   "title": "첫 1주일 온보딩 로드맵",
@@ -227,6 +239,8 @@ def enrich_tasks_with_llm(
     Returns:
         LLMEnrichedTasks: LLM이 보강한 결과
     """
+    metrics = DiagnosisMetrics()
+    
     try:
         from backend.llm.factory import fetch_llm_client
         from backend.llm.base import ChatRequest, ChatMessage
@@ -265,6 +279,7 @@ def enrich_tasks_with_llm(
             unhealthy_guidance = HEALTHY_PROJECT_GUIDANCE
         
         prompt = TASK_ENRICHMENT_PROMPT.format(
+            prompt_version=PROMPT_VERSION,
             user_level=user_level,
             user_goal=user_goal,
             health_level=health_level,
@@ -285,15 +300,20 @@ def enrich_tasks_with_llm(
             temperature=0.7,
             max_tokens=2000,
         )
-        response = client.chat(request)
         
-        # JSON 파싱
-        result = _parse_enrichment_response(response.content, all_tasks)
+        # LLM 호출
+        with LLMTimer(metrics) as timer:
+            response = client.chat(request)
+            result = _parse_enrichment_response(response.content, all_tasks)
+            timer.mark_success()
+        
         logger.info("LLM enrichment successful: %d tasks enriched", len(result.enriched_tasks))
         return result
     
     except Exception as e:
+        # Fallback 사용 (메트릭은 LLMCallTimer에서 자동 기록)
         logger.warning("LLM enrichment failed, using fallback: %s", e)
+        metrics.record_fallback(reason="enrichment_failure")
         return _create_fallback_enrichment(tasks)
 
 
@@ -323,6 +343,8 @@ def generate_onboarding_scenario(
     Returns:
         OnboardingScenario: 단계별 온보딩 계획
     """
+    metrics = DiagnosisMetrics()
+    
     try:
         from backend.llm.factory import fetch_llm_client
         from backend.llm.base import ChatRequest, ChatMessage
@@ -344,6 +366,7 @@ def generate_onboarding_scenario(
                 })
         
         prompt = ONBOARDING_SCENARIO_PROMPT.format(
+            prompt_version=PROMPT_VERSION,
             user_level=user_level,
             hours_per_week=hours_per_week,
             user_goal=user_goal,
@@ -365,15 +388,21 @@ def generate_onboarding_scenario(
             temperature=0.7,
             max_tokens=1500,
         )
-        response = client.chat(request)
         
-        # JSON 파싱
-        scenario = _parse_scenario_response(response.content)
+        # LLM 호출
+        with LLMTimer(metrics) as timer:
+            response = client.chat(request)
+            scenario = _parse_scenario_response(response.content)
+            timer.mark_success()
+        
+        metrics.record_scenario(success=True)
         logger.info("LLM scenario generation successful")
         return scenario
     
     except Exception as e:
         logger.warning("LLM scenario generation failed, using fallback: %s", e)
+        metrics.record_fallback(reason="scenario_failure")
+        metrics.record_scenario(success=False)
         return _create_fallback_scenario(tasks, enriched, repo)
 
 

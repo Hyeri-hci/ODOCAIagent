@@ -49,3 +49,6 @@ pnpm-debug.log*
 *.sqlite
 *.db
 *.pkl
+
+
+docs/
