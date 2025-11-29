@@ -18,6 +18,10 @@ from backend.agents.diagnosis.tools.onboarding_tasks import (
     create_meta_tasks_from_labels,
     compute_onboarding_tasks,
     filter_tasks_by_user_level,
+    filter_tasks_for_user,
+    compute_task_score,
+    HEALTHY_PROJECT_META_TASKS,
+    STUDY_META_TASKS,
 )
 
 
@@ -433,3 +437,172 @@ class TestFilterTasksByUserLevel:
         
         # 모든 난이도 포함
         assert any(t.id == "a1" for t in filtered)
+
+
+# ============================================================
+# Task Score 계산 테스트
+# ============================================================
+
+class TestComputeTaskScore:
+    """Task score 계산 테스트."""
+    
+    def test_good_first_issue_high_score(self):
+        """good-first-issue 라벨은 높은 점수."""
+        score = compute_task_score("beginner", ["good first issue"], comment_count=1, recency_days=5)
+        assert score >= 80  # label 40 + recency 30 + complexity 30
+    
+    def test_old_issue_low_score(self):
+        """오래된 이슈는 낮은 점수."""
+        score = compute_task_score("beginner", ["good first issue"], comment_count=1, recency_days=200)
+        assert score <= 75  # label 40 + recency 0 + complexity 30
+    
+    def test_complex_issue_lower_score(self):
+        """댓글 많은 이슈는 복잡도 점수가 낮음."""
+        score_simple = compute_task_score("beginner", ["bug"], comment_count=1, recency_days=5)
+        score_complex = compute_task_score("beginner", ["bug"], comment_count=15, recency_days=5)
+        assert score_simple > score_complex
+    
+    def test_recent_issue_higher_score(self):
+        """최근 이슈는 높은 점수."""
+        score_recent = compute_task_score("beginner", ["bug"], comment_count=1, recency_days=3)
+        score_old = compute_task_score("beginner", ["bug"], comment_count=1, recency_days=100)
+        assert score_recent > score_old
+
+
+# ============================================================
+# Intent/Task Score 필드 테스트
+# ============================================================
+
+class TestTaskIntent:
+    """Intent 필드 테스트."""
+    
+    def test_task_suggestion_has_intent(self):
+        """TaskSuggestion에 intent 필드가 있어야 함."""
+        task = TaskSuggestion(
+            id="test#1",
+            title="Test Task",
+            kind="issue",
+            difficulty="beginner",
+            level=1,
+            intent="contribute",
+        )
+        assert task.intent == "contribute"
+    
+    def test_task_suggestion_has_task_score(self):
+        """TaskSuggestion에 task_score 필드가 있어야 함."""
+        task = TaskSuggestion(
+            id="test#1",
+            title="Test Task",
+            kind="issue",
+            difficulty="beginner",
+            level=1,
+            task_score=85,
+        )
+        assert task.task_score == 85
+    
+    def test_default_intent_is_contribute(self):
+        """기본 intent는 contribute."""
+        task = TaskSuggestion(
+            id="test#1",
+            title="Test Task",
+            kind="issue",
+            difficulty="beginner",
+            level=1,
+        )
+        assert task.intent == "contribute"
+
+
+# ============================================================
+# 최소 Task 보장 정책 테스트
+# ============================================================
+
+class TestMinimumTaskGuarantee:
+    """최소 Task 보장 정책 테스트."""
+    
+    def test_healthy_project_gets_meta_tasks(self):
+        """건강한 프로젝트도 최소 메타 Task를 받아야 함."""
+        assert len(HEALTHY_PROJECT_META_TASKS) >= 3
+        for task in HEALTHY_PROJECT_META_TASKS:
+            assert task.intent == "contribute"
+    
+    def test_study_meta_tasks_exist(self):
+        """학습용 메타 Task가 존재해야 함."""
+        assert len(STUDY_META_TASKS) >= 2
+        for task in STUDY_META_TASKS:
+            assert task.intent in ["study", "evaluate"]
+
+
+# ============================================================
+# 사용자 컨텍스트 필터링 테스트
+# ============================================================
+
+class TestFilterTasksForUser:
+    """사용자 컨텍스트 기반 필터링 테스트."""
+    
+    def test_filter_by_kind(self):
+        """kind로 필터링."""
+        docs_task = TaskSuggestion(kind="docs", difficulty="beginner", level=1, id="d1", title="Docs")
+        code_task = TaskSuggestion(kind="issue", difficulty="beginner", level=1, id="c1", title="Code")
+        
+        tasks = OnboardingTasks(
+            beginner=[docs_task, code_task],
+            intermediate=[],
+            advanced=[],
+        )
+        
+        filtered = filter_tasks_for_user(tasks, preferred_kinds=["docs"])
+        assert any(t.id == "d1" for t in filtered)
+    
+    def test_filter_by_intent(self):
+        """intent로 필터링."""
+        contribute_task = TaskSuggestion(
+            kind="issue", difficulty="beginner", level=1, 
+            id="c1", title="Contribute", intent="contribute"
+        )
+        study_task = TaskSuggestion(
+            kind="issue", difficulty="beginner", level=1, 
+            id="s1", title="Study", intent="study"
+        )
+        
+        tasks = OnboardingTasks(
+            beginner=[contribute_task, study_task],
+            intermediate=[],
+            advanced=[],
+        )
+        
+        filtered = filter_tasks_for_user(tasks, intent_filter="study")
+        assert all(t.intent == "study" for t in filtered if t.intent)
+    
+    def test_sorted_by_task_score(self):
+        """task_score로 정렬되어야 함."""
+        low_score = TaskSuggestion(
+            kind="issue", difficulty="beginner", level=1, 
+            id="l1", title="Low", task_score=30
+        )
+        high_score = TaskSuggestion(
+            kind="issue", difficulty="beginner", level=1, 
+            id="h1", title="High", task_score=90
+        )
+        
+        tasks = OnboardingTasks(
+            beginner=[low_score, high_score],
+            intermediate=[],
+            advanced=[],
+        )
+        
+        filtered = filter_tasks_for_user(tasks)
+        assert filtered[0].id == "h1"  # 높은 점수가 먼저
+    
+    def test_beginner_level_filters_advanced(self):
+        """beginner 레벨은 advanced Task 제외."""
+        beginner_task = TaskSuggestion(kind="issue", difficulty="beginner", level=1, id="b1", title="B")
+        advanced_task = TaskSuggestion(kind="issue", difficulty="advanced", level=5, id="a1", title="A")
+        
+        tasks = OnboardingTasks(
+            beginner=[beginner_task],
+            intermediate=[],
+            advanced=[advanced_task],
+        )
+        
+        filtered = filter_tasks_for_user(tasks, user_level="beginner")
+        assert not any(t.id == "a1" for t in filtered)
