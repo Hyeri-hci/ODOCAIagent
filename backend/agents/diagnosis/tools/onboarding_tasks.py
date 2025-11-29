@@ -297,15 +297,31 @@ def compute_task_score(
 
 
 def determine_intent(difficulty: Difficulty, is_healthy: bool, is_active: bool) -> TaskIntent:
-    """Task intent 결정."""
+    """
+    Task intent 결정.
+    
+    정책:
+    - 건강하고 활성 → contribute (실제 기여 가능)
+    - 비활성(inactive/archived) → study 우선 (학습/분석 용도)
+    - 비건강하지만 활성 → 난이도별 차등
+    """
+    # 1. 건강하고 활성 프로젝트 → 기여 권장
     if is_healthy and is_active:
         return "contribute"
+    
+    # 2. 비활성 프로젝트 → 학습/분석 용도 (정책: study >= contribute)
     if not is_active:
-        return "study" if difficulty == "beginner" else "evaluate"
+        # 모든 난이도에서 study 우선
+        # evaluate는 advanced에서만 허용 (대안 평가 목적)
+        if difficulty == "advanced":
+            return "evaluate"
+        return "study"
+    
+    # 3. 활성이지만 비건강 → 난이도별 차등
     if difficulty == "beginner":
         return "study"
     elif difficulty == "intermediate":
-        return "evaluate"
+        return "contribute"  # 활성이면 기여 가능
     return "contribute"
 
 
@@ -651,6 +667,18 @@ def compute_onboarding_tasks(
     intermediate_tasks = sorted([t for t in all_tasks if t.difficulty == "intermediate"], key=sort_key)
     advanced_tasks = sorted([t for t in all_tasks if t.difficulty == "advanced"], key=sort_key)
 
+    # 5. Beginner 보충: beginner task가 적으면 기본 meta task 추가 (정책: 초보자 친화적 시작점 보장)
+    MIN_BEGINNER_TASKS = 2
+    if len(beginner_tasks) < MIN_BEGINNER_TASKS and is_healthy and is_active:
+        existing_ids = {t.id for t in all_tasks}
+        for task in create_minimum_meta_tasks(repo_url):
+            if task.id not in existing_ids and task.difficulty == "beginner":
+                beginner_tasks.append(task)
+                logger.info("Added beginner meta task: %s (beginner shortage)", task.id)
+                if len(beginner_tasks) >= MIN_BEGINNER_TASKS:
+                    break
+        beginner_tasks.sort(key=sort_key)
+
     issue_count = len([t for t in all_tasks if t.kind != "meta"])
     meta_count = len([t for t in all_tasks if t.kind == "meta"])
 
@@ -699,7 +727,12 @@ def filter_tasks_for_user(
     time_budget_hours: Optional[float] = None,
     intent_filter: Optional[str] = None,
 ) -> List[TaskSuggestion]:
-    """사용자 컨텍스트에 맞는 Task 필터링 및 우선순위 정렬."""
+    """사용자 컨텍스트에 맞는 Task 필터링 및 우선순위 정렬.
+    
+    정책:
+    - beginner: docs/test 우선 (코드 이해 없이 시작 가능)
+    - intermediate/advanced: 기존 점수 기반 정렬
+    """
     filtered = filter_tasks_by_user_level(tasks, user_level)
 
     if intent_filter:
@@ -723,7 +756,18 @@ def filter_tasks_for_user(
                 break
         filtered = limited
 
-    filtered.sort(key=lambda t: t.task_score, reverse=True)
+    # Beginner 전용: docs/test/meta를 상위로 끌어올림 (정책: 초보자는 문서/테스트/메타부터)
+    if user_level == "beginner" and not preferred_kinds:
+        # docs/test/meta에 보너스 점수 부여하여 상위 정렬
+        BEGINNER_FRIENDLY_KINDS = ("doc", "test", "meta")
+        BEGINNER_FRIENDLY_BONUS = 15.0
+        def beginner_sort_key(t: TaskSuggestion) -> float:
+            bonus = BEGINNER_FRIENDLY_BONUS if t.kind in BEGINNER_FRIENDLY_KINDS else 0
+            return t.task_score + bonus
+        filtered.sort(key=beginner_sort_key, reverse=True)
+    else:
+        filtered.sort(key=lambda t: t.task_score, reverse=True)
+    
     return filtered
 
 
