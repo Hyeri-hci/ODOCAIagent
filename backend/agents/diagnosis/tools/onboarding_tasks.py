@@ -297,15 +297,31 @@ def compute_task_score(
 
 
 def determine_intent(difficulty: Difficulty, is_healthy: bool, is_active: bool) -> TaskIntent:
-    """Task intent 결정."""
+    """
+    Task intent 결정.
+    
+    정책:
+    - 건강하고 활성 → contribute (실제 기여 가능)
+    - 비활성(inactive/archived) → study 우선 (학습/분석 용도)
+    - 비건강하지만 활성 → 난이도별 차등
+    """
+    # 1. 건강하고 활성 프로젝트 → 기여 권장
     if is_healthy and is_active:
         return "contribute"
+    
+    # 2. 비활성 프로젝트 → 학습/분석 용도 (정책: study >= contribute)
     if not is_active:
-        return "study" if difficulty == "beginner" else "evaluate"
+        # 모든 난이도에서 study 우선
+        # evaluate는 advanced에서만 허용 (대안 평가 목적)
+        if difficulty == "advanced":
+            return "evaluate"
+        return "study"
+    
+    # 3. 활성이지만 비건강 → 난이도별 차등
     if difficulty == "beginner":
         return "study"
     elif difficulty == "intermediate":
-        return "evaluate"
+        return "contribute"  # 활성이면 기여 가능
     return "contribute"
 
 
