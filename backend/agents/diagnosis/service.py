@@ -21,12 +21,7 @@ from .tools.activity_scores import (
     aggregate_activity_score,
     activity_score_to_100,
 )
-from .tools.health_score import (
-    aggregate_health_scores,
-    HealthScore,
-    score_commit_activity,
-    score_documentation,
-)
+from .tools.health_score import HealthScore
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
 
@@ -175,18 +170,15 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             pr=pr_metrics,
         )
         
-        # commit_metrics는 Phase 1에서 이미 가져옴
-        scores = aggregate_health_scores(
-            has_readme=repo_info.has_readme,
-            commit_metrics=commit_metrics,
-            readme_stats=repo_info.readme_stats,
-        )
-        
-        # activity_maintainability를 CHAOSS 기반 점수로 대체
+        # documentation_quality = readme_category_score (8카테고리 분석)
+        # activity_maintainability = CHAOSS 기반 점수
+        # overall_score = 0.5 * doc + 0.5 * activity
+        doc_score = readme_category_score
+        activity_score = activity_score_to_100(activity_breakdown)
         scores = HealthScore(
-            documentation_quality=scores.documentation_quality,
-            activity_maintainability=activity_score_to_100(activity_breakdown),
-            overall_score=round((scores.documentation_quality + activity_score_to_100(activity_breakdown)) / 2),
+            documentation_quality=doc_score,
+            activity_maintainability=activity_score,
+            overall_score=round(0.5 * doc_score + 0.5 * activity_score),
         )
 
         # CHAOSS 기반 activity 블록 (commit, issue, pr + scores)
@@ -198,15 +190,12 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     elif task_type == DiagnosisTaskType.DOCS_ONLY:
-        docs_score = score_documentation(
-            has_readme=repo_info.has_readme,
-            stats=repo_info.readme_stats,
-        )
-
+        # DOCS_ONLY: documentation만 평가, overall = doc
+        doc_score = readme_category_score
         scores = HealthScore(
-            documentation_quality=docs_score,
+            documentation_quality=doc_score,
             activity_maintainability=0,
-            overall_score=docs_score,
+            overall_score=doc_score,
         )
 
     elif task_type == DiagnosisTaskType.ACTIVITY_ONLY:

@@ -1,3 +1,15 @@
+"""
+CHAOSS Activity Score v1.0
+
+Spec: docs/CHAOSS_ACTIVITY_SCORE_v1.md
+
+Score = 0.4×commit + 0.3×issue + 0.3×pr (0~1 scale)
+
+Parameters:
+  - Commit: freq(10/wk), recency(τ=15d), diversity(5 authors)
+  - Issue:  closure(50%), duration(τ=30d), neutral=0.5
+  - PR:     merge_ratio, duration(τ=7d), min_samples=5
+"""
 from __future__ import annotations
 import math
 from dataclasses import dataclass, asdict

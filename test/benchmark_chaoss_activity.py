@@ -1,12 +1,13 @@
 """
-CHAOSS Activity 메트릭 벤치마크 스크립트.
+CHAOSS Activity Score v1.0 Benchmark
 
-다양한 활동 수준의 레포를 비교하여 점수 산정 공식을 검증합니다.
+점수 산정 공식 검증을 위한 벤치마크 스크립트.
+Spec: docs/CHAOSS_ACTIVITY_SCORE_v1.md
 
 사용법:
     python -m test.benchmark_chaoss_activity
+    python -m test.benchmark_chaoss_activity --quick
     python -m test.benchmark_chaoss_activity --output results.json
-    python -m test.benchmark_chaoss_activity --csv results.csv
 """
 from __future__ import annotations
 import argparse
