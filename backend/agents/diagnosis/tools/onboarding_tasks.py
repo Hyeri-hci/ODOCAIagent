@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 
 Difficulty = Literal["beginner", "intermediate", "advanced"]
 TaskKind = Literal["issue", "doc", "test", "refactor", "meta"]
+TaskIntent = Literal["contribute", "study", "evaluate"]  # 기여 / 학습 / 평가
 
 
 # ============================================================
@@ -46,6 +47,11 @@ class TaskSuggestion:
     meta_flags: List[str] = field(default_factory=list)   # ["missing_contributing", "inactive_project"]
     # Fallback용 기본 이유 문장 (LLM 실패 시 사용)
     fallback_reason: Optional[str] = None
+    # 고도화 필드 (v1.1)
+    intent: TaskIntent = "contribute"  # "contribute" | "study" | "evaluate"
+    task_score: float = 0.0  # 우선순위 점수 (0-100, recency/comment/라벨 반영)
+    recency_days: Optional[int] = None  # 마지막 업데이트로부터 경과 일수
+    comment_count: int = 0  # 댓글 수
     
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -302,9 +308,22 @@ def fetch_open_issues_for_tasks_rest(
 def create_tasks_from_issues(
     issues: List[Dict[str, Any]],
     repo_url: str,
+    is_healthy: bool = True,
+    is_active: bool = True,
 ) -> List[TaskSuggestion]:
-    """GitHub 이슈에서 TaskSuggestion 생성."""
+    """
+    GitHub 이슈에서 TaskSuggestion 생성.
+    
+    Args:
+        issues: GitHub 이슈 목록
+        repo_url: 저장소 URL
+        is_healthy: 프로젝트 건강 여부 (intent 결정에 사용)
+        is_active: 프로젝트 활성 여부 (intent 결정에 사용)
+    """
+    from datetime import datetime, timezone
+    
     tasks: List[TaskSuggestion] = []
+    now = datetime.now(timezone.utc)
     
     for issue in issues:
         # GraphQL 형식
@@ -313,14 +332,25 @@ def create_tasks_from_issues(
             labels = [node.get("name", "") for node in label_nodes]
             comment_count = issue.get("comments", {}).get("totalCount", 0)
             url = issue.get("url", "")
+            updated_at_str = issue.get("updatedAt", "")
         # REST API 형식
         else:
             labels = [label.get("name", "") for label in issue.get("labels", [])]
             comment_count = issue.get("comments", 0)
             url = issue.get("html_url", "")
+            updated_at_str = issue.get("updated_at", "")
         
         number = issue.get("number")
         title = issue.get("title", "")
+        
+        # recency 계산
+        recency_days = None
+        if updated_at_str:
+            try:
+                updated_at = datetime.fromisoformat(updated_at_str.replace("Z", "+00:00"))
+                recency_days = (now - updated_at).days
+            except (ValueError, TypeError):
+                pass
         
         # 난이도/레벨 결정
         difficulty = determine_difficulty_from_labels(labels)
@@ -330,6 +360,21 @@ def create_tasks_from_issues(
         # 구조적 태그 생성 (LLM 프롬프트용)
         reason_tags = generate_reason_tags(labels, difficulty)
         fallback = generate_fallback_reason(difficulty, reason_tags)
+        
+        # task_score 계산
+        task_score = compute_task_score(
+            difficulty=difficulty,
+            labels=labels,
+            comment_count=comment_count,
+            recency_days=recency_days,
+        )
+        
+        # intent 결정 (비건강/비활성 프로젝트는 study 중심)
+        intent = determine_intent(
+            difficulty=difficulty,
+            is_healthy=is_healthy,
+            is_active=is_active,
+        )
         
         task = TaskSuggestion(
             kind=kind,
@@ -342,10 +387,119 @@ def create_tasks_from_issues(
             reason_tags=reason_tags,
             meta_flags=[],
             fallback_reason=fallback,
+            intent=intent,
+            task_score=task_score,
+            recency_days=recency_days,
+            comment_count=comment_count,
         )
         tasks.append(task)
     
     return tasks
+
+
+# ============================================================
+# Task 스코어링 (우선순위 결정)
+# ============================================================
+
+def compute_task_score(
+    difficulty: Difficulty,
+    labels: List[str],
+    comment_count: int = 0,
+    recency_days: Optional[int] = None,
+) -> float:
+    """
+    Task 우선순위 점수 계산 (0-100).
+    
+    구성요소:
+    - 라벨 점수 (0-40): good-first-issue, help-wanted 등
+    - 최신성 점수 (0-30): 최근 업데이트일수록 높음
+    - 복잡도 점수 (0-30): 댓글 수 기반 (적정 수준이 좋음)
+    """
+    score = 0.0
+    labels_lower = {label.lower() for label in labels}
+    
+    # 1. 라벨 점수 (0-40)
+    if labels_lower & {"good first issue", "good-first-issue"}:
+        score += 40
+    elif labels_lower & {"help wanted", "help-wanted"}:
+        score += 30
+    elif labels_lower & {"documentation", "docs"}:
+        score += 25
+    elif labels_lower & {"tests", "testing"}:
+        score += 20
+    elif labels_lower & {"hacktoberfest"}:
+        score += 35
+    elif labels_lower & {"bug"}:
+        score += 15
+    else:
+        score += 10  # 기본
+    
+    # 2. 최신성 점수 (0-30)
+    if recency_days is not None:
+        if recency_days <= 7:
+            score += 30
+        elif recency_days <= 30:
+            score += 25
+        elif recency_days <= 90:
+            score += 15
+        elif recency_days <= 180:
+            score += 5
+        # 180일 이상은 0점
+    
+    # 3. 복잡도 점수 (0-30) - 댓글 수 기반
+    # 0-2개: 30점 (논의 적음 = 초보자 친화)
+    # 3-5개: 25점 (적정 수준)
+    # 6-10개: 15점
+    # 11+: 5점 (복잡한 이슈)
+    if comment_count <= 2:
+        score += 30
+    elif comment_count <= 5:
+        score += 25
+    elif comment_count <= 10:
+        score += 15
+    else:
+        score += 5
+    
+    return min(score, 100.0)
+
+
+def determine_intent(
+    difficulty: Difficulty,
+    is_healthy: bool = True,
+    is_active: bool = True,
+) -> TaskIntent:
+    """
+    Task의 intent 결정.
+    
+    건강하고 활성인 프로젝트:
+    - 모든 난이도 → contribute
+    
+    비활성 프로젝트 (no_recent_commits 등):
+    - beginner → study (학습용)
+    - intermediate/advanced → evaluate (평가/분석용)
+    
+    비건강 프로젝트 (health_level != good):
+    - beginner → study
+    - intermediate → evaluate
+    - advanced → contribute (경험자만 기여 권장)
+    """
+    if is_healthy and is_active:
+        return "contribute"
+    
+    # 비활성 프로젝트 (더 엄격하게 study/evaluate)
+    if not is_active:
+        if difficulty == "beginner":
+            return "study"
+        else:
+            return "evaluate"  # intermediate, advanced 모두 evaluate
+    
+    # 비건강하지만 활성인 프로젝트
+    if difficulty == "beginner":
+        return "study"
+    elif difficulty == "intermediate":
+        return "evaluate"
+    else:
+        return "contribute"  # advanced만 기여 권장
 
 
 # ============================================================
@@ -425,6 +579,113 @@ def generate_fallback_reason(difficulty: Difficulty, reason_tags: List[str]) -> 
 # ============================================================
 # 메타 Task 생성 (진단 결과 기반)
 # ============================================================
+
+# 건강한 프로젝트용 메타 Task (이슈가 없어도 기여할 수 있는 Task)
+HEALTHY_PROJECT_META_TASKS: List[TaskSuggestion] = [
+    TaskSuggestion(
+        kind="meta",
+        difficulty="beginner",
+        level=2,
+        id="meta:write_tutorial",
+        title="사용자를 위한 튜토리얼 작성",
+        url=None,
+        labels=["documentation", "meta"],
+        reason_tags=["community_contribution", "docs_improvement"],
+        meta_flags=["healthy_project"],
+        fallback_reason="건강한 프로젝트에 튜토리얼 문서로 기여할 수 있습니다",
+        intent="contribute",
+        task_score=60.0,
+    ),
+    TaskSuggestion(
+        kind="meta",
+        difficulty="beginner",
+        level=2,
+        id="meta:improve_examples",
+        title="코드 예제 보강",
+        url=None,
+        labels=["documentation", "meta"],
+        reason_tags=["community_contribution", "beginner_friendly"],
+        meta_flags=["healthy_project"],
+        fallback_reason="예제 코드 추가/개선으로 다른 사용자에게 도움을 줄 수 있습니다",
+        intent="contribute",
+        task_score=55.0,
+    ),
+    TaskSuggestion(
+        kind="meta",
+        difficulty="intermediate",
+        level=3,
+        id="meta:triage_issues",
+        title="이슈 정리 및 라벨링 도움",
+        url=None,
+        labels=["meta", "community"],
+        reason_tags=["community_contribution", "organization"],
+        meta_flags=["healthy_project"],
+        fallback_reason="이슈 분류, 중복 확인 등 커뮤니티 기여가 가능합니다",
+        intent="contribute",
+        task_score=50.0,
+    ),
+]
+
+# 비건강/아카이브 프로젝트용 학습 메타 Task
+STUDY_META_TASKS: List[TaskSuggestion] = [
+    TaskSuggestion(
+        kind="meta",
+        difficulty="beginner",
+        level=2,
+        id="meta:analyze_architecture",
+        title="프로젝트 아키텍처 분석 및 학습",
+        url=None,
+        labels=["meta", "learning"],
+        reason_tags=["learning_opportunity", "architecture"],
+        meta_flags=["study_mode"],
+        fallback_reason="코드를 읽고 아키텍처를 분석하여 학습할 수 있습니다",
+        intent="study",
+        task_score=70.0,
+    ),
+    TaskSuggestion(
+        kind="meta",
+        difficulty="beginner",
+        level=2,
+        id="meta:document_learnings",
+        title="학습 내용 개인 블로그/노트 정리",
+        url=None,
+        labels=["meta", "learning"],
+        reason_tags=["learning_opportunity", "personal_growth"],
+        meta_flags=["study_mode"],
+        fallback_reason="프로젝트에서 배운 내용을 정리하여 지식을 공고히 할 수 있습니다",
+        intent="study",
+        task_score=65.0,
+    ),
+    TaskSuggestion(
+        kind="meta",
+        difficulty="intermediate",
+        level=3,
+        id="meta:evaluate_alternatives",
+        title="대안 프로젝트 비교/평가",
+        url=None,
+        labels=["meta", "evaluation"],
+        reason_tags=["evaluation", "comparison"],
+        meta_flags=["evaluate_mode", "inactive_project"],
+        fallback_reason="이 프로젝트가 비활성인 경우, 활발한 대안을 찾아볼 수 있습니다",
+        intent="evaluate",
+        task_score=60.0,
+    ),
+    TaskSuggestion(
+        kind="meta",
+        difficulty="intermediate",
+        level=3,
+        id="meta:review_codebase",
+        title="코드베이스 리뷰 및 패턴 학습",
+        url=None,
+        labels=["meta", "learning"],
+        reason_tags=["learning_opportunity", "code_review"],
+        meta_flags=["study_mode"],
+        fallback_reason="실제 프로젝트 코드를 읽으며 베스트 프랙티스를 배울 수 있습니다",
+        intent="study",
+        task_score=55.0,
+    ),
+]
+
 
 def create_meta_tasks_from_labels(
     docs_issues: List[str],
@@ -553,9 +814,115 @@ def create_meta_tasks_from_labels(
             reason_tags=["caution_needed", "strategic_contribution"],
             meta_flags=["unhealthy_project"],
             fallback_reason="[주의] 프로젝트 전반적 건강 상태가 좋지 않아 신중한 평가 필요",
+            intent="evaluate",
+            task_score=30.0,
         ))
     
     return tasks
+
+
+def create_minimum_meta_tasks(repo_url: str) -> List[TaskSuggestion]:
+    """
+    건강한 프로젝트를 위한 최소 메타 Task 생성.
+    
+    이슈가 없어도 항상 제공할 수 있는 "추천 활동" 목록.
+    """
+    return [
+        TaskSuggestion(
+            kind="meta",
+            difficulty="beginner",
+            level=1,
+            id="meta:write_tutorial",
+            title="초보자를 위한 튜토리얼/블로그 포스트 작성",
+            url=None,
+            labels=["documentation", "meta", "community"],
+            reason_tags=["community_contribution", "low_barrier", "external"],
+            meta_flags=["minimum_task"],
+            fallback_reason="프로젝트 사용법을 블로그나 미디엄에 작성하여 커뮤니티에 기여",
+            intent="contribute",
+            task_score=70.0,
+        ),
+        TaskSuggestion(
+            kind="meta",
+            difficulty="beginner",
+            level=2,
+            id="meta:improve_examples",
+            title="예제 코드/샘플 프로젝트 보강",
+            url=None,
+            labels=["documentation", "meta", "examples"],
+            reason_tags=["docs_issue", "quick_win", "practical"],
+            meta_flags=["minimum_task"],
+            fallback_reason="README나 examples/ 폴더에 실용적인 예제 코드 추가",
+            intent="contribute",
+            task_score=65.0,
+        ),
+        TaskSuggestion(
+            kind="meta",
+            difficulty="intermediate",
+            level=3,
+            id="meta:triage_open_issues",
+            title="오픈 이슈 정리/레이블링 도움",
+            url=None,
+            labels=["meta", "triage", "community"],
+            reason_tags=["community_help", "issue_management"],
+            meta_flags=["minimum_task"],
+            fallback_reason="기존 이슈에 댓글로 상태 확인하거나 레이블 제안",
+            intent="contribute",
+            task_score=55.0,
+        ),
+    ]
+
+
+def create_study_meta_tasks(repo_url: str) -> List[TaskSuggestion]:
+    """
+    비건강/비활성 프로젝트를 위한 학습용 메타 Task.
+    
+    적극적인 기여 대신 학습/평가 목적 활동 제안.
+    """
+    return [
+        TaskSuggestion(
+            kind="meta",
+            difficulty="beginner",
+            level=1,
+            id="meta:study_architecture",
+            title="프로젝트 아키텍처 분석 및 학습",
+            url=None,
+            labels=["meta", "study", "learning"],
+            reason_tags=["learning_opportunity", "code_reading"],
+            meta_flags=["study_task", "inactive_friendly"],
+            fallback_reason="코드 구조와 설계 패턴을 분석하여 학습 (기여 없이도 가치 있음)",
+            intent="study",
+            task_score=60.0,
+        ),
+        TaskSuggestion(
+            kind="meta",
+            difficulty="beginner",
+            level=2,
+            id="meta:document_learnings",
+            title="학습 내용 정리 (개인 노트/블로그)",
+            url=None,
+            labels=["meta", "study", "documentation"],
+            reason_tags=["learning_opportunity", "external"],
+            meta_flags=["study_task"],
+            fallback_reason="프로젝트에서 배운 것을 개인 블로그나 노트에 정리",
+            intent="study",
+            task_score=55.0,
+        ),
+        TaskSuggestion(
+            kind="meta",
+            difficulty="intermediate",
+            level=3,
+            id="meta:evaluate_alternatives",
+            title="유사 프로젝트/대안 비교 분석",
+            url=None,
+            labels=["meta", "evaluate", "analysis"],
+            reason_tags=["evaluation", "comparison"],
+            meta_flags=["study_task"],
+            fallback_reason="이 프로젝트와 유사한 다른 프로젝트를 비교 분석",
+            intent="evaluate",
+            task_score=50.0,
+        ),
+    ]
 
 
 # ============================================================
@@ -568,6 +935,7 @@ def compute_onboarding_tasks(
     labels: Dict[str, Any],
     onboarding_plan: Optional[Dict[str, Any]] = None,
     max_issues: int = 30,
+    min_tasks: int = 3,
 ) -> OnboardingTasks:
     """
     진단 결과를 바탕으로 온보딩 Task 목록 생성.
@@ -578,23 +946,32 @@ def compute_onboarding_tasks(
         labels: create_diagnosis_labels() 결과 (to_dict())
         onboarding_plan: create_onboarding_plan() 결과 (to_dict())
         max_issues: 조회할 최대 이슈 수
+        min_tasks: 최소 Task 개수 (건강한 프로젝트라도 이 개수 보장)
     
     Returns:
         OnboardingTasks (난이도별 그룹핑)
     """
     repo_url = f"https://github.com/{owner}/{repo}"
     
+    # 프로젝트 상태 판단
+    health_level = labels.get("health_level", "warning")
+    activity_issues = labels.get("activity_issues", [])
+    docs_issues = labels.get("docs_issues", [])
+    
+    is_healthy = health_level == "good"
+    is_active = "no_recent_commits" not in activity_issues and "inactive_project" not in activity_issues
+    
     # 1. GitHub 이슈 기반 Task (GraphQL 우선, 실패 시 REST 폴백)
     logger.info("Fetching open issues for onboarding tasks...")
     issues = fetch_open_issues_for_tasks(owner, repo, limit=max_issues)
-    issue_tasks = create_tasks_from_issues(issues, repo_url)
+    issue_tasks = create_tasks_from_issues(
+        issues, repo_url,
+        is_healthy=is_healthy,
+        is_active=is_active,
+    )
     logger.info("Created %d tasks from %d issues", len(issue_tasks), len(issues))
     
     # 2. 메타 Task (진단 결과 기반)
-    docs_issues = labels.get("docs_issues", [])
-    activity_issues = labels.get("activity_issues", [])
-    health_level = labels.get("health_level", "warning")
-    
     meta_tasks = create_meta_tasks_from_labels(
         docs_issues=docs_issues,
         activity_issues=activity_issues,
@@ -603,39 +980,75 @@ def compute_onboarding_tasks(
     )
     logger.info("Created %d meta tasks from diagnosis labels", len(meta_tasks))
     
-    # 3. 모든 Task 병합
+    # 3. 최소 Task 보장 정책
     all_tasks = issue_tasks + meta_tasks
     
-    # 4. 난이도별 그룹핑
+    if len(all_tasks) < min_tasks:
+        if is_healthy and is_active:
+            # 건강한 프로젝트: 최소 메타 Task 추가
+            minimum_tasks = create_minimum_meta_tasks(repo_url)
+            # 이미 있는 Task ID 제외
+            existing_ids = {t.id for t in all_tasks}
+            for task in minimum_tasks:
+                if task.id not in existing_ids and len(all_tasks) < min_tasks:
+                    all_tasks.append(task)
+                    logger.info("Added minimum task: %s", task.id)
+        else:
+            # 비건강/비활성 프로젝트: 학습용 메타 Task 추가
+            study_tasks = create_study_meta_tasks(repo_url)
+            existing_ids = {t.id for t in all_tasks}
+            for task in study_tasks:
+                if task.id not in existing_ids and len(all_tasks) < min_tasks:
+                    all_tasks.append(task)
+                    logger.info("Added study task: %s", task.id)
+    
+    # 4. task_score 기준 정렬 후 난이도별 그룹핑
     beginner_tasks = sorted(
         [t for t in all_tasks if t.difficulty == "beginner"],
-        key=lambda t: t.level,
+        key=lambda t: (-t.task_score, t.level),  # 점수 높은 순, 그 다음 레벨 낮은 순
     )
     intermediate_tasks = sorted(
         [t for t in all_tasks if t.difficulty == "intermediate"],
-        key=lambda t: t.level,
+        key=lambda t: (-t.task_score, t.level),
     )
     advanced_tasks = sorted(
         [t for t in all_tasks if t.difficulty == "advanced"],
-        key=lambda t: t.level,
+        key=lambda t: (-t.task_score, t.level),
     )
     
-    # 5. 결과 생성
+    # 5. 메타 정보 계산
+    issue_count = len([t for t in all_tasks if t.kind != "meta"])
+    meta_count = len([t for t in all_tasks if t.kind == "meta"])
+    
+    # 6. 결과 생성
     result = OnboardingTasks(
         beginner=beginner_tasks[:10],  # 각 난이도별 최대 10개
         intermediate=intermediate_tasks[:10],
         advanced=advanced_tasks[:5],  # advanced는 5개로 제한
         total_count=len(all_tasks),
-        issue_count=len(issue_tasks),
-        meta_count=len(meta_tasks),
+        issue_count=issue_count,
+        meta_count=meta_count,
     )
     
     return result
 
 
 # ============================================================
-# 진단 결과 기반 필터링 (optional)
+# 사용자 컨텍스트 기반 필터링/개인화
 # ============================================================
+
+@dataclass
+class UserTaskContext:
+    """사용자 Task 필터링 컨텍스트."""
+    
+    experience_level: str = "beginner"  # beginner/intermediate/advanced
+    preferred_kinds: List[str] = field(default_factory=list)  # ["doc", "test", "issue"]
+    time_budget_hours: Optional[float] = None  # 예: 2.0 (2시간)
+    preferred_intent: Optional[str] = None  # "contribute", "study", "evaluate"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
 
 def filter_tasks_by_user_level(
     tasks: OnboardingTasks,
@@ -654,3 +1067,210 @@ def filter_tasks_by_user_level(
         return tasks.beginner[:3] + tasks.intermediate + tasks.advanced[:2]
     else:  # advanced
         return tasks.beginner[:2] + tasks.intermediate + tasks.advanced
+
+
+def filter_tasks_for_user(
+    tasks: OnboardingTasks,
+    user_level: str = "beginner",
+    preferred_kinds: Optional[List[str]] = None,
+    time_budget_hours: Optional[float] = None,
+    intent_filter: Optional[str] = None,
+) -> List[TaskSuggestion]:
+    """
+    사용자 컨텍스트에 맞는 Task 필터링 및 우선순위 정렬.
+    
+    filter_tasks_by_context의 간단한 래퍼로, UserTaskContext 없이 사용 가능.
+    
+    Args:
+        tasks: OnboardingTasks
+        user_level: 사용자 경험 수준 (beginner/intermediate/advanced)
+        preferred_kinds: 선호하는 Task 종류 ["docs", "test", "issue", ...]
+        time_budget_hours: 가용 시간 (시간 단위)
+        intent_filter: 특정 intent만 필터링 (contribute/study/evaluate)
+    
+    Returns:
+        task_score 순으로 정렬된 TaskSuggestion 리스트
+    """
+    # 1. 레벨 기반 필터링
+    filtered = filter_tasks_by_user_level(tasks, user_level)
+    
+    # 2. intent 필터링
+    if intent_filter:
+        filtered = [t for t in filtered if t.intent == intent_filter]
+    
+    # 3. preferred_kinds 필터 (선호 kind만 남기거나 우선정렬)
+    if preferred_kinds:
+        # 선호 kind가 있는 Task를 앞으로
+        preferred = [t for t in filtered if t.kind in preferred_kinds]
+        others = [t for t in filtered if t.kind not in preferred_kinds]
+        filtered = preferred + others
+    
+    # 4. time_budget_hours 기반 제한
+    if time_budget_hours is not None:
+        limited: List[TaskSuggestion] = []
+        total_hours = 0.0
+        for task in filtered:
+            estimated = _estimate_hours_from_level(task.level)
+            if total_hours + estimated <= time_budget_hours:
+                limited.append(task)
+                total_hours += estimated
+            elif not limited:
+                # 최소 1개는 포함
+                limited.append(task)
+                break
+        filtered = limited
+    
+    # 5. task_score 순 정렬 (높은 점수 우선)
+    filtered.sort(key=lambda t: t.task_score, reverse=True)
+    
+    return filtered
+
+
+def filter_tasks_by_context(
+    tasks: OnboardingTasks,
+    context: UserTaskContext,
+) -> List[TaskSuggestion]:
+    """
+    사용자 컨텍스트 기반 개인화 필터링.
+    
+    1. 레벨 기반 필터링
+    2. 선호 kind 우선 정렬
+    3. time_budget 기반 제한
+    4. intent 필터링
+    """
+    # 1. 레벨 기반 기본 필터링
+    filtered = filter_tasks_by_user_level(tasks, context.experience_level)
+    
+    # 2. intent 필터링 (선호 intent가 있으면)
+    if context.preferred_intent:
+        # 선호 intent 우선, 그 외는 뒤로
+        preferred = [t for t in filtered if t.intent == context.preferred_intent]
+        others = [t for t in filtered if t.intent != context.preferred_intent]
+        filtered = preferred + others
+    
+    # 3. 선호 kind 우선 정렬
+    if context.preferred_kinds:
+        def kind_priority(task: TaskSuggestion) -> int:
+            try:
+                return context.preferred_kinds.index(task.kind)
+            except ValueError:
+                return len(context.preferred_kinds)
+        
+        # 선호 kind 태스크 + 나머지
+        preferred_kind_tasks = sorted(
+            [t for t in filtered if t.kind in context.preferred_kinds],
+            key=kind_priority,
+        )
+        other_tasks = [t for t in filtered if t.kind not in context.preferred_kinds]
+        
+        # 다양성 확보: 선호 2개 + 다른 1개 패턴
+        result: List[TaskSuggestion] = []
+        pref_idx, other_idx = 0, 0
+        while len(result) < len(filtered):
+            # 선호 2개
+            for _ in range(2):
+                if pref_idx < len(preferred_kind_tasks):
+                    result.append(preferred_kind_tasks[pref_idx])
+                    pref_idx += 1
+            # 다른 1개
+            if other_idx < len(other_tasks):
+                result.append(other_tasks[other_idx])
+                other_idx += 1
+            # 남은 선호 태스크
+            if pref_idx >= len(preferred_kind_tasks) and other_idx >= len(other_tasks):
+                break
+        
+        filtered = result
+    
+    # 4. time_budget 기반 제한 (추정 시간 누적)
+    if context.time_budget_hours is not None:
+        time_limited: List[TaskSuggestion] = []
+        total_hours = 0.0
+        
+        for task in filtered:
+            # 레벨 기반 추정 시간 (시간 단위)
+            estimated = _estimate_hours_from_level(task.level)
+            if total_hours + estimated <= context.time_budget_hours:
+                time_limited.append(task)
+                total_hours += estimated
+            elif not time_limited:
+                # 최소 1개는 포함
+                time_limited.append(task)
+                break
+        
+        filtered = time_limited
+    
+    return filtered
+
+
+def _estimate_hours_from_level(level: int) -> float:
+    """레벨에서 예상 소요 시간 추정 (시간 단위)."""
+    hour_map = {
+        1: 0.5,   # 30분
+        2: 1.5,   # 1-2시간
+        3: 2.5,   # 2-3시간
+        4: 4.0,   # 반나절
+        5: 8.0,   # 1일
+        6: 20.0,  # 2-3일
+    }
+    return hour_map.get(level, 2.0)
+
+
+def create_personalized_task_set(
+    tasks: OnboardingTasks,
+    context: UserTaskContext,
+) -> Dict[str, Any]:
+    """
+    개인화된 Task 세트 생성.
+    
+    Returns:
+        {
+            "today_tasks": [...],      # 오늘 할 수 있는 Task
+            "week_tasks": [...],       # 1주일 플랜
+            "challenge_tasks": [...],  # 도전 과제
+            "meta": {...}
+        }
+    """
+    filtered = filter_tasks_by_context(tasks, context)
+    
+    # time_budget 기준으로 분류
+    today_tasks: List[TaskSuggestion] = []
+    week_tasks: List[TaskSuggestion] = []
+    challenge_tasks: List[TaskSuggestion] = []
+    
+    budget = context.time_budget_hours or 2.0
+    
+    for task in filtered:
+        hours = _estimate_hours_from_level(task.level)
+        
+        if hours <= budget:
+            today_tasks.append(task)
+        elif hours <= budget * 5:  # 주간 예산
+            week_tasks.append(task)
+        else:
+            challenge_tasks.append(task)
+    
+    # 레벨 범위 밖의 Task는 challenge로
+    level_threshold = {"beginner": 3, "intermediate": 5, "advanced": 6}
+    max_level = level_threshold.get(context.experience_level, 6)
+    
+    for task in list(today_tasks + week_tasks):
+        if task.level > max_level:
+            if task in today_tasks:
+                today_tasks.remove(task)
+            if task in week_tasks:
+                week_tasks.remove(task)
+            if task not in challenge_tasks:
+                challenge_tasks.append(task)
+    
+    return {
+        "today_tasks": [t.to_dict() for t in today_tasks[:5]],
+        "week_tasks": [t.to_dict() for t in week_tasks[:10]],
+        "challenge_tasks": [t.to_dict() for t in challenge_tasks[:3]],
+        "meta": {
+            "experience_level": context.experience_level,
+            "time_budget_hours": budget,
+            "preferred_kinds": context.preferred_kinds,
+            "total_filtered": len(filtered),
+        },
+    }
