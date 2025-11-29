@@ -50,5 +50,19 @@ pnpm-debug.log*
 *.db
 *.pkl
 
-
 docs/
+
+# ------------------------------------
+# Benchmark results (코드만 커밋, 결과는 제외)
+# ------------------------------------
+test/benchmarks/results/
+test/benchmark_results/
+**/benchmark_*.json
+**/benchmark_*.csv
+**/benchmark_*.log
+**/benchmark_*.png
+**/benchmark_*.html
+
+# 대용량 캐시/결과
+*.cache.json
+*_cache.json
