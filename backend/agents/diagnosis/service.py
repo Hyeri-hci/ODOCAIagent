@@ -135,7 +135,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             advanced_mode=advanced_analysis,
         )
     else:
-        from backend.agents.diagnosis.tools.llm_summarizer import ReadmeUnifiedSummary
+        from backend.agents.diagnosis.tools.readme_summarizer import ReadmeUnifiedSummary
         readme_categories, readme_category_score = {}, 0
         unified_summary = ReadmeUnifiedSummary(summary_en="", summary_ko="")
 
