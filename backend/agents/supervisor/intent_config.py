@@ -40,6 +40,25 @@ UserLevel = Literal["beginner", "intermediate", "advanced"]
 
 VALID_USER_LEVELS: List[UserLevel] = ["beginner", "intermediate", "advanced"]
 
+# Follow-up 타입
+FollowupType = Literal[
+    "refine_easier",       # "더 쉬운 거 없어?"
+    "refine_harder",       # "더 어려운 거?"
+    "refine_different",    # "다른 종류는?"
+    "ask_detail",          # "이거 더 자세히"
+    "compare_similar",     # "비슷한 repo는?"
+    "continue_same",       # 같은 repo 계속 분석
+]
+
+VALID_FOLLOWUP_TYPES: List[FollowupType] = [
+    "refine_easier",
+    "refine_harder", 
+    "refine_different",
+    "ask_detail",
+    "compare_similar",
+    "continue_same",
+]
+
 
 # =============================================================================
 # Intent 설정 구조
@@ -91,8 +110,8 @@ INTENT_CONFIG: dict[SupervisorIntent, IntentConfigEntry] = {
         "needs_diagnosis": False,  # 이전 결과 재사용
         "prompt_kind": "refine_tasks",
         "diagnosis_task_type": "reuse_last_onboarding_result",
-        "is_ready": False,  # 아직 준비 안 됨
-        "description": "Task 필터링 및 재정렬 (준비 중)",
+        "is_ready": True,  # 멀티턴 지원으로 활성화
+        "description": "Task 필터링 및 재정렬 (더 쉬운/어려운 Task 요청)",
     },
 }
 
@@ -147,3 +166,29 @@ def validate_intent(intent: str | None) -> SupervisorIntent:
     if intent in VALID_INTENTS:
         return intent  # type: ignore
     return "diagnose_repo_health"
+
+
+def validate_followup_type(followup_type: str | None) -> FollowupType | None:
+    """
+    Follow-up 타입 유효성 검사.
+    유효하지 않은 값이면 None 반환.
+    """
+    if followup_type in VALID_FOLLOWUP_TYPES:
+        return followup_type  # type: ignore
+    return None
+
+
+def is_refine_intent(intent: str) -> bool:
+    """해당 Intent가 리파인(재필터링) 관련인지 확인"""
+    return intent == "refine_onboarding_tasks"
+
+
+def requires_previous_context(intent: str, followup_type: str | None) -> bool:
+    """
+    해당 Intent/followup이 이전 컨텍스트(last_repo, last_task_list)를 필요로 하는지 확인.
+    """
+    if intent == "refine_onboarding_tasks":
+        return True
+    if followup_type in ["refine_easier", "refine_harder", "refine_different", "continue_same"]:
+        return True
+    return False
