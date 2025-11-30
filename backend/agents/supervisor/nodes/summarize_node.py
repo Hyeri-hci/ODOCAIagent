@@ -94,8 +94,10 @@ def _format_result(result: Any) -> str:
 
 def _generate_summary_with_llm(user_query: str, context: str) -> str:
     """LLM을 사용하여 최종 요약 생성"""
+    import os
     try:
         llm_client = fetch_llm_client()
+        model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
 
         user_message = f"""
 사용자 질문: {user_query}
@@ -107,7 +109,7 @@ def _generate_summary_with_llm(user_query: str, context: str) -> str:
 """
 
         request = ChatRequest(
-            model="gpt-4o-mini",
+            model=model_name,
             messages=[
                 ChatMessage(role="system", content=SUMMARIZE_SYSTEM_PROMPT),
                 ChatMessage(role="user", content=user_message),
