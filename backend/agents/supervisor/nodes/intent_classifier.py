@@ -7,11 +7,14 @@ Agent별 task_type은 여기서 설정하지 않으며, 이후 매핑 노드에�
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
+
+logger = logging.getLogger(__name__)
 
 from ..models import SupervisorState, SupervisorTaskType, RepoInfo, UserContext
 
@@ -89,6 +92,13 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     history = list(state.get("history", []))
     history.append({"role": "user", "content": user_query})
     new_state["history"] = history
+
+    logger.debug(
+        "[classify_intent_node] task_type=%s, repo=%s, user_context=%s",
+        new_state.get("task_type"),
+        new_state.get("repo"),
+        new_state.get("user_context"),
+    )
 
     return new_state
 

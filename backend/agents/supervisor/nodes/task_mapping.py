@@ -7,6 +7,10 @@ Agent별 세부 task_type은 Python 코드에서 통제한다.
 """
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from ..models import (
     SupervisorState,
     SupervisorTaskType,
@@ -66,5 +70,13 @@ def map_task_types_node(state: SupervisorState) -> SupervisorState:
     new_state["diagnosis_task_type"] = map_to_diagnosis_task_type(task_type)
     new_state["security_task_type"] = map_to_security_task_type(task_type)
     new_state["recommend_task_type"] = map_to_recommend_task_type(task_type)
+
+    logger.debug(
+        "[map_task_types_node] task_type=%s -> diagnosis=%s, security=%s, recommend=%s",
+        task_type,
+        new_state.get("diagnosis_task_type"),
+        new_state.get("security_task_type"),
+        new_state.get("recommend_task_type"),
+    )
 
     return new_state
