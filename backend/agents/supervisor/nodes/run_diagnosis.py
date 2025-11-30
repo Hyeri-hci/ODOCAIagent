@@ -35,6 +35,8 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
     repo = state["repo"]
     user_context = state.get("user_context", {})
     intent = state.get("intent", "")
+    diagnosis_needs = state.get("diagnosis_needs")
+    user_query = state.get("user_query", "")
     
     # 진행 상황 콜백
     progress_cb = state.get("_progress_callback")
@@ -43,7 +45,9 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
     if progress_cb:
         progress_cb("저장소 분석 중", f"{repo.get('owner')}/{repo.get('name')} 정보 수집...")
     
-    diagnosis_input = _build_diagnosis_input(repo, diagnosis_task_type, user_context)
+    diagnosis_input = _build_diagnosis_input(
+        repo, diagnosis_task_type, user_context, diagnosis_needs, user_query
+    )
 
     logger.info(
         "[run_diagnosis_node] repo=%s/%s, diagnosis_task_type=%s",
@@ -84,7 +88,9 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
             compare_repo.get("name"),
         )
         
-        compare_input = _build_diagnosis_input(compare_repo, diagnosis_task_type, user_context)
+        compare_input = _build_diagnosis_input(
+            compare_repo, diagnosis_task_type, user_context, diagnosis_needs, user_query
+        )
         compare_result = run_diagnosis(compare_input)
         
         compare_scores = compare_result.get("scores", {}) if isinstance(compare_result, dict) else {}
@@ -102,6 +108,8 @@ def _build_diagnosis_input(
     repo: dict[str, Any],
     diagnosis_task_type: str,
     user_context: dict[str, Any],
+    diagnosis_needs: dict[str, bool] | None = None,
+    user_query: str = "",
 ) -> dict[str, Any]:
     """Diagnosis 서비스 호출을 위한 입력 데이터 구성"""
     return {
@@ -110,6 +118,8 @@ def _build_diagnosis_input(
         "task_type": _map_to_diagnosis_service_task_type(diagnosis_task_type),
         "focus": ["documentation", "activity"],
         "user_context": user_context,
+        "needs": diagnosis_needs,  # Phase 실행 분기용
+        "user_query": user_query,  # 미래 확장용
     }
 
 
