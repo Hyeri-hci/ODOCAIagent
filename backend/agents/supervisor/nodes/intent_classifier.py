@@ -153,7 +153,7 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     history.append({"role": "user", "content": user_query})
     new_state["history"] = history
 
-    logger.debug(
+    logger.info(
         "[classify_intent_node] task_type=%s, repo=%s, user_context=%s",
         new_state.get("task_type"),
         new_state.get("repo"),

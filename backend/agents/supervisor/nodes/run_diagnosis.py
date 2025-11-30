@@ -36,7 +36,7 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
 
     diagnosis_input = _build_diagnosis_input(repo, diagnosis_task_type, user_context)
 
-    logger.debug(
+    logger.info(
         "[run_diagnosis_node] repo=%s/%s, diagnosis_task_type=%s",
         repo.get("owner"),
         repo.get("name"),
@@ -47,7 +47,7 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
 
     # health_score는 scores 딕셔너리 안에 있음
     scores = diagnosis_result.get("scores", {}) if isinstance(diagnosis_result, dict) else {}
-    logger.debug(
+    logger.info(
         "[run_diagnosis_node] diagnosis completed, health_score=%s, onboarding_score=%s",
         scores.get("health_score"),
         scores.get("onboarding_score"),

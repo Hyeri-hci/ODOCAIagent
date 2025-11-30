@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Optional, Union
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
@@ -9,6 +9,17 @@ from backend.llm.factory import fetch_llm_client
 from ..models import SupervisorState
 
 logger = logging.getLogger(__name__)
+
+
+def _safe_round(value: Optional[Union[int, float]], digits: int = 1) -> str:
+    """None-safe round 함수. None이면 'N/A' 반환."""
+    if value is None:
+        return "N/A"
+    try:
+        return str(round(float(value), digits))
+    except (TypeError, ValueError):
+        return "N/A"
+
 
 SUMMARIZE_SYSTEM_PROMPT = """
 당신은 오픈소스 프로젝트 분석 결과를 요약하는 전문가입니다.
@@ -27,12 +38,14 @@ SUMMARIZE_SYSTEM_PROMPT = """
 - 예: "기간 내 생성된 이슈: 229건" → "229건의 이슈 생성"
 - 예: "기간 내 PR 수: 616건, 병합된 PR: 386건" → "616건의 PR 중 386건 병합"
 
-## 점수 해석 가이드 (100점 만점)
+## 점수 해석 가이드 (100점 만점) - 반드시 이 표현만 사용!
 - 90-100점: 매우 우수
 - 80-89점: 우수
 - 70-79점: 양호
 - 60-69점: 보통
 - 60점 미만: 개선 필요
+
+점수 설명에 사용할 표현은 위 구간 정의(매우 우수/우수/양호/보통/개선 필요) 중 하나로 제한하세요.
 
 ## 출력 형식
 
@@ -94,7 +107,10 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
         context = "\n\n".join(context_parts)
         summary = _generate_summary_with_llm(user_query, context)
 
-    logger.debug("[summarize_node] summary_length=%d", len(summary))
+    # 벤치마크용 로깅: repo 정보와 함께 기록
+    repo = state.get("repo", {})
+    repo_id = f"{repo.get('owner', '')}/{repo.get('name', '')}" if repo else "unknown"
+    logger.info("[summarize_node] repo=%s, summary_length=%d", repo_id, len(summary))
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]
 
@@ -152,7 +168,7 @@ def _format_diagnosis(result: Any) -> str:
         if commit:
             parts.append(f"- 총 커밋 수: {commit.get('total_commits', 'N/A')}건")
             parts.append(f"- 고유 기여자 수: {commit.get('unique_authors', 'N/A')}명")
-            parts.append(f"- 일 평균 커밋: {round(commit.get('commits_per_day', 0), 1)}건")
+            parts.append(f"- 일 평균 커밋: {_safe_round(commit.get('commits_per_day'))}건")
             parts.append(f"- 마지막 커밋 이후: {commit.get('days_since_last_commit', 'N/A')}일")
         
         issue = activity.get("issue", {})
@@ -160,18 +176,20 @@ def _format_diagnosis(result: Any) -> str:
             parts.append(f"- 현재 오픈 이슈: {issue.get('open_issues', 'N/A')}건")
             parts.append(f"- 기간 내 생성된 이슈: {issue.get('opened_issues_in_window', 'N/A')}건")
             parts.append(f"- 기간 내 해결된 이슈: {issue.get('closed_issues_in_window', 'N/A')}건")
-            closure_ratio = issue.get('issue_closure_ratio', 0)
-            parts.append(f"- 이슈 해결 비율: {round(closure_ratio * 100, 1)}%")
+            closure_ratio = issue.get('issue_closure_ratio')
+            if closure_ratio is not None:
+                parts.append(f"- 이슈 해결 비율: {_safe_round(closure_ratio * 100)}%")
             avg_age = issue.get('avg_open_issue_age_days')
             if avg_age is not None:
-                parts.append(f"- 오픈 이슈 평균 수명: {round(avg_age, 0)}일")
+                parts.append(f"- 오픈 이슈 평균 수명: {_safe_round(avg_age, 0)}일")
         
         pr = activity.get("pr", {})
         if pr:
             parts.append(f"- 기간 내 PR 수: {pr.get('prs_in_window', 'N/A')}건")
             parts.append(f"- 병합된 PR: {pr.get('merged_in_window', 'N/A')}건")
-            merge_ratio = pr.get('pr_merge_ratio', 0)
-            parts.append(f"- PR 병합 비율: {round(merge_ratio * 100, 1)}%")
+            merge_ratio = pr.get('pr_merge_ratio')
+            if merge_ratio is not None:
+                parts.append(f"- PR 병합 비율: {_safe_round(merge_ratio * 100)}%")
             parts.append(f"- 현재 오픈 PR: {pr.get('open_prs', 'N/A')}건")
     
     # 4. 문서 정보
@@ -206,8 +224,8 @@ def _format_diagnosis(result: Any) -> str:
 
 def _format_result(result: Any) -> str:
     """일반 결과를 문자열로 포맷팅"""
+    import json
     if isinstance(result, dict):
-        import json
         return json.dumps(result, ensure_ascii=False, indent=2)
     return str(result)
 
@@ -215,11 +233,11 @@ def _format_result(result: Any) -> str:
 def _generate_summary_with_llm(user_query: str, context: str) -> str:
     """LLM을 사용하여 최종 요약 생성"""
     import os
-    try:
-        llm_client = fetch_llm_client()
-        model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    
+    llm_client = fetch_llm_client()
+    model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
 
-        user_message = f"""
+    user_message = f"""
 사용자 질문: {user_query}
 
 분석 결과:
@@ -228,16 +246,17 @@ def _generate_summary_with_llm(user_query: str, context: str) -> str:
 위 결과를 바탕으로 사용자 질문에 답변해 주세요.
 """
 
-        request = ChatRequest(
-            model=model_name,
-            messages=[
-                ChatMessage(role="system", content=SUMMARIZE_SYSTEM_PROMPT),
-                ChatMessage(role="user", content=user_message),
-            ],
-            temperature=0.7,
-        )
+    request = ChatRequest(
+        model=model_name,
+        messages=[
+            ChatMessage(role="system", content=SUMMARIZE_SYSTEM_PROMPT),
+            ChatMessage(role="user", content=user_message),
+        ],
+        temperature=0.3,
+    )
 
-        response = llm_client.chat(request)
+    try:
+        response = llm_client.chat(request, timeout=90)
         return response.content
 
     except Exception as e:

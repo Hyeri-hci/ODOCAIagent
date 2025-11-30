@@ -13,9 +13,9 @@ if sys.platform == "win32":
 # 프로젝트 루트를 Python path에 추가
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# 로깅 설정 (DEBUG로 노드별 상태 확인)
+# 로깅 설정 (INFO 레벨로 주요 상태만 확인)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format="%(name)s - %(message)s"
 )
 
@@ -26,21 +26,10 @@ def test_graph():
     # 그래프 빌드
     graph = build_supervisor_graph()
     
-    # 초기 상태
+    # 초기 상태 (필수 필드만 설정, 나머지는 기본값 사용)
     initial_state: SupervisorState = {
         "user_query": "https://github.com/facebook/react 저장소 건강 상태 분석해줘",
-        "repo": None,
-        "user_context": None,
-        "task_type": None,
-        "diagnosis_task_type": None,
-        "security_task_type": None,
-        "recommend_task_type": None,
-        "diagnosis_result": None,
-        "security_result": None,
-        "recommend_result": None,
         "history": [],
-        "final_response": None,
-        "current_turn": None,
     }
     
     print("=" * 60)

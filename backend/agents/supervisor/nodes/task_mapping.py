@@ -71,7 +71,7 @@ def map_task_types_node(state: SupervisorState) -> SupervisorState:
     new_state["security_task_type"] = map_to_security_task_type(task_type)
     new_state["recommend_task_type"] = map_to_recommend_task_type(task_type)
 
-    logger.debug(
+    logger.info(
         "[map_task_types_node] task_type=%s -> diagnosis=%s, security=%s, recommend=%s",
         task_type,
         new_state.get("diagnosis_task_type"),
