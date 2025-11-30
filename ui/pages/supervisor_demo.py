@@ -79,6 +79,9 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 if "last_result" not in st.session_state:
     st.session_state.last_result = None
+if "analysis_history" not in st.session_state:
+    # 분석된 저장소 결과들을 저장 (owner/repo -> result)
+    st.session_state.analysis_history = {}
 
 
 # ============================================================================
@@ -112,7 +115,15 @@ with st.sidebar:
     if st.button("대화 초기화"):
         st.session_state.messages = []
         st.session_state.last_result = None
+        st.session_state.analysis_history = {}
         st.rerun()
+    
+    # 분석된 저장소 히스토리 표시
+    if st.session_state.analysis_history:
+        st.divider()
+        st.markdown("**분석된 저장소**")
+        for repo_key in st.session_state.analysis_history.keys():
+            st.caption(f"- {repo_key}")
 
 
 # ============================================================================
@@ -212,10 +223,16 @@ if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상�
                     prev = st.session_state.last_result
                     if prev.get("repo"):
                         initial_state["last_repo"] = prev.get("repo")
-                    if prev.get("diagnosis_result", {}).get("onboarding_tasks"):
-                        initial_state["last_task_list"] = prev.get("diagnosis_result", {}).get("onboarding_tasks")
+                    # diagnosis_result가 dict인 경우만 처리
+                    diag = prev.get("diagnosis_result")
+                    if isinstance(diag, dict) and diag.get("onboarding_tasks"):
+                        initial_state["last_task_list"] = diag.get("onboarding_tasks")
                     if prev.get("task_type"):
                         initial_state["last_intent"] = prev.get("task_type")
+                
+                # 분석 히스토리 전달 (이전에 분석한 저장소들)
+                if st.session_state.analysis_history:
+                    initial_state["analysis_history"] = st.session_state.analysis_history
                 
                 # 진행 상황 콜백 설정
                 def progress_callback(step: str, detail: str = ""):
@@ -231,6 +248,27 @@ if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상�
                 status_placeholder.empty()  # 진행 상황 제거
                 
                 st.session_state.last_result = result
+                
+                # 분석 히스토리에 저장 (저장소별로 결과 캐싱)
+                repo = result.get("repo")
+                if repo and isinstance(repo, dict):
+                    repo_key = f"{repo.get('owner')}/{repo.get('name')}"
+                    st.session_state.analysis_history[repo_key] = {
+                        "repo": repo,
+                        "diagnosis": result.get("diagnosis_result"),
+                        "task_type": result.get("task_type"),
+                    }
+                
+                compare_repo = result.get("compare_repo")
+                if compare_repo and isinstance(compare_repo, dict):
+                    compare_key = f"{compare_repo.get('owner')}/{compare_repo.get('name')}"
+                    compare_diag = result.get("compare_diagnosis_result")
+                    if isinstance(compare_diag, dict):
+                        st.session_state.analysis_history[compare_key] = {
+                            "repo": compare_repo,
+                            "diagnosis": compare_diag,
+                            "task_type": result.get("task_type"),
+                        }
                 
                 # 응답 표시
                 llm_summary = result.get("llm_summary", "")
@@ -266,10 +304,13 @@ if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상�
                     log_lines.append(f"5. 비교 대상 Health: `{compare_scores.get('health_score', 'N/A')}`")
                 
                 # 메타데이터 구성
+                user_ctx = result.get("user_context")
+                level = user_ctx.get("level", "N/A") if isinstance(user_ctx, dict) else "N/A"
+                
                 metadata = {
                     "elapsed": f"{elapsed:.1f}초",
                     "intent": result.get("task_type", "N/A"),
-                    "level": result.get("user_context", {}).get("level", "N/A"),
+                    "level": level,
                     "is_followup": result.get("is_followup", False),
                     "log_summary": "\n".join(log_lines),
                     "scores": diagnosis.get("scores") if diagnosis and isinstance(diagnosis, dict) else None,
