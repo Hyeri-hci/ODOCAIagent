@@ -78,3 +78,29 @@ class SupervisorState(TypedDict, total=False):
 
     # 대화 히스토리
     history: list[Turn]
+
+    # ========================================
+    # 멀티턴 상태 관리 필드
+    # ========================================
+    
+    # 이전 턴 메타데이터 (follow-up 처리용)
+    last_repo: RepoInfo              # 마지막으로 분석한 저장소
+    last_intent: SupervisorTaskType  # 마지막 intent
+    last_task_list: list[dict]       # 마지막 온보딩 Task 목록 (리랭킹용)
+    
+    # 현재 턴 분류 결과
+    is_followup: bool                # 이전 턴 컨텍스트 참조 여부
+    followup_type: Literal[          # follow-up 유형
+        "refine_easier",             # "더 쉬운 거 없어?"
+        "refine_harder",             # "더 어려운 거?"
+        "refine_different",          # "다른 종류는?"
+        "ask_detail",                # "이거 더 자세히"
+        "compare_similar",           # "비슷한 repo는?"
+        "continue_same",             # 같은 repo 계속 분석
+        None
+    ]
+    
+    # ========================================
+    # 진행 상황 콜백 (UI 표시용)
+    # ========================================
+    _progress_callback: Any  # Callable[[str, str], None] - 단계명, 상세 내용

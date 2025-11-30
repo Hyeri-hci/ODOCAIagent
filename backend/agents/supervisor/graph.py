@@ -9,22 +9,60 @@ from backend.agents.supervisor.nodes.intent_classifier import classify_intent_no
 from backend.agents.supervisor.nodes.task_mapping import map_task_types_node
 from backend.agents.supervisor.nodes.run_diagnosis import run_diagnosis_node
 from backend.agents.supervisor.nodes.summarize_node import summarize_node
+from backend.agents.supervisor.nodes.refine_tasks import refine_tasks_node
+from backend.agents.supervisor.intent_config import (
+    needs_diagnosis, 
+    is_intent_ready, 
+    is_refine_intent,
+    requires_previous_context,
+)
 
 
 def route_after_mapping(state: SupervisorState) -> str:
     """
     mapping 이후 어떤 Agent 노드로 갈지 결정.
-    - 전역 task_type + Agent별 task_type을 함께 보고 분기 가능.
+    
+    INTENT_CONFIG의 needs_diagnosis 값을 기반으로 분기합니다.
+    미지원 Intent는 바로 summarize로 보내서 안내 메시지를 표시합니다.
+    
+    멀티턴 처리:
+    - refine_onboarding_tasks: 이전 컨텍스트가 있으면 refine_tasks, 없으면 run_diagnosis
+    - is_followup + 이전 컨텍스트 필요: refine_tasks 또는 summarize로 분기
     """
     task_type = state.get("task_type", "diagnose_repo_health")
+    is_followup = state.get("is_followup", False)
+    followup_type = state.get("followup_type")
+    
+    # 이전 컨텍스트 존재 여부 확인
+    has_previous_context = bool(
+        state.get("last_task_list") or 
+        state.get("diagnosis_result", {}).get("onboarding_tasks")
+    )
 
-    if task_type in ("diagnose_repo_health", "diagnose_repo_onboarding", "compare_two_repos"):
-        return "run_diagnosis"
-
-    if task_type in ("refine_onboarding_tasks", "explain_scores"):
-        # 추후: 별도 노드 추가 가능
+    # 미지원 Intent는 바로 summarize로 (안내 메시지 표시)
+    if not is_intent_ready(task_type):
         return "summarize"
-
+    
+    # refine_onboarding_tasks 처리
+    if is_refine_intent(task_type):
+        if has_previous_context:
+            # 이전 결과가 있으면 refine_tasks로
+            return "refine_tasks"
+        else:
+            # 이전 결과가 없으면 새로 diagnosis 실행 (온보딩 모드로)
+            # intent를 diagnose_repo_onboarding으로 변경하여 Task 목록 생성
+            return "run_diagnosis"
+    
+    # Follow-up이면서 이전 컨텍스트가 필요한 경우
+    if is_followup and requires_previous_context(task_type, followup_type):
+        if has_previous_context:
+            return "refine_tasks"
+        # 이전 결과가 없으면 새로 diagnosis 실행
+    
+    # INTENT_CONFIG 기반 라우팅
+    if needs_diagnosis(task_type):
+        return "run_diagnosis"
+    
     return "summarize"
 
 
@@ -35,6 +73,7 @@ def build_supervisor_graph():
     graph.add_node("classify_intent", classify_intent_node)
     graph.add_node("map_task_types", map_task_types_node)
     graph.add_node("run_diagnosis", run_diagnosis_node)
+    graph.add_node("refine_tasks", refine_tasks_node)
     graph.add_node("summarize", summarize_node)
 
     # 시작 노드
@@ -49,14 +88,18 @@ def build_supervisor_graph():
         route_after_mapping,
         {
             "run_diagnosis": "run_diagnosis",
+            "refine_tasks": "refine_tasks",
             "summarize": "summarize",
         },
     )
 
     # 3) Diagnosis → 요약
     graph.add_edge("run_diagnosis", "summarize")
+    
+    # 4) Refine Tasks → 요약
+    graph.add_edge("refine_tasks", "summarize")
 
-    # 4) 요약 → 종료
+    # 5) 요약 → 종료
     graph.add_edge("summarize", END)
 
     return graph.compile()

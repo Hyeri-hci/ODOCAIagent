@@ -4,6 +4,10 @@ Task Type 매핑 노드
 Supervisor 전역 task_type을 각 Agent별 task_type으로 변환한다.
 이 계층을 통해 LLM은 전역 task_type만 추론하면 되고,
 Agent별 세부 task_type은 Python 코드에서 통제한다.
+
+## Intent 추가 시
+- intent_config.py의 INTENT_CONFIG에 diagnosis_task_type 정의
+- 이 파일은 수정 불필요 (자동으로 INTENT_CONFIG 참조)
 """
 from __future__ import annotations
 
@@ -18,22 +22,16 @@ from ..models import (
     SecurityTaskType,
     RecommendTaskType,
 )
+from ..intent_config import get_diagnosis_task_type
 
 
 def map_to_diagnosis_task_type(task_type: SupervisorTaskType) -> DiagnosisTaskType:
     """
     Supervisor 전역 task_type -> Diagnosis Agent task_type 매핑
     
-    현재는 임시 문자열이며, Diagnosis 모듈에서 Literal로 확정 필요.
+    INTENT_CONFIG 기반으로 매핑합니다.
     """
-    mapping: dict[SupervisorTaskType, DiagnosisTaskType] = {
-        "diagnose_repo_health": "health_core",
-        "diagnose_repo_onboarding": "health_plus_onboarding",
-        "compare_two_repos": "health_plus_onboarding",
-        "refine_onboarding_tasks": "reuse_last_onboarding_result",
-        "explain_scores": "explain_scores",
-    }
-    return mapping.get(task_type, "none")
+    return get_diagnosis_task_type(task_type)
 
 
 def map_to_security_task_type(task_type: SupervisorTaskType) -> SecurityTaskType:
