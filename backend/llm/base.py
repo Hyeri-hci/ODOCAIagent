@@ -26,12 +26,19 @@ class ChatResponse:
 
 class LLMClient(ABC):
     """
-        LLM 클라이언트 추상 클래스
+    LLM 클라이언트 추상 클래스
     """
 
     @abstractmethod
-    def chat(self, request: ChatRequest) -> ChatResponse:
+    def chat(self, request: ChatRequest, timeout: int = 60) -> ChatResponse:
         """
-          채팅 요청 처리
+        채팅 요청 처리
+        
+        Args:
+            request: 채팅 요청 데이터
+            timeout: 요청 타임아웃 (초)
+        
+        Returns:
+            ChatResponse: LLM 응답
         """
         raise NotImplementedError

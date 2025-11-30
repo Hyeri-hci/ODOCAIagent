@@ -35,7 +35,7 @@ class OpenAILikeClient(LLMClient):
     ) -> List[Dict[str, str]]:
         return [{"role": m.role, "content": m.content} for m in messages]
     
-    def chat(self, request: ChatRequest) -> ChatResponse:
+    def chat(self, request: ChatRequest, timeout: int = 60) -> ChatResponse:
         url = f"{self.api_base}/chat/completions"
         payload: Dict[str, Any] = {
             "model": request.model or self.default_model,
@@ -45,18 +45,25 @@ class OpenAILikeClient(LLMClient):
             "top_p": request.top_p,
         }
 
-        resp = requests.post(
-            url,
-            headers=self._build_headers(),
-            json=payload,
-        )
-        resp.raise_for_status()
+        try:
+            resp = requests.post(
+                url,
+                headers=self._build_headers(),
+                json=payload,
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+        except requests.exceptions.Timeout:
+            raise TimeoutError(f"LLM request timed out after {timeout}s")
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"LLM request failed: {e}") from e
+        
         data = resp.json()
 
         # OpenAI 호환 응답 처리: choices[0].message.content 사용
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError) as e:
-            raise ValueError("Invalid response format from LLM") from e
+            raise ValueError(f"Invalid response format from LLM: {data}") from e
         
         return ChatResponse(content=content, raw=data)

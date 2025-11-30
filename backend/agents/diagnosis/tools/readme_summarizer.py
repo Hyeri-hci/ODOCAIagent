@@ -138,8 +138,9 @@ def generate_readme_unified_summary(
     
     system_prompt = (
         "You summarize GitHub README content into two formats:\n"
-        "1. 'en': English summary for semantic search/embedding (3-5 sentences, focus on project purpose, features, usage)\n"
-        "2. 'ko': Korean summary for users (4-6 sentences, friendly tone, explain what the project does)\n\n"
+        "1. 'en': English summary for semantic search/embedding (3-5 sentences, 150-250 characters, focus on project purpose, features, usage)\n"
+        "2. 'ko': Korean summary for users (4-6 sentences, 300-500 characters in Korean, friendly tone, explain what the project does)\n\n"
+        "IMPORTANT: Keep 'ko' summary within 300-500 Korean characters. Do not exceed 500 characters.\n\n"
         "Return ONLY a JSON object: {\"en\": \"...\", \"ko\": \"...\"}. No markdown, no explanation."
     )
     
