@@ -1,13 +1,13 @@
 """
 Supervisor Agent 서비스
 
-사용자 쿼리를 받아 적절한 하위 Agent를 호출하고,
-결과를 종합하여 최종 응답을 생성한다.
+LangGraph 기반 워크플로우와 레거시 직접 호출 방식을 모두 지원.
+새로운 코드에서는 build_initial_state() + graph.invoke() 방식을 사용할 것.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, Dict
 
 from backend.agents.diagnosis.service import run_diagnosis
 from backend.llm.base import ChatMessage, ChatRequest
