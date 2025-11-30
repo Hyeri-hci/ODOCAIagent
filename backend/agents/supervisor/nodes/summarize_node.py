@@ -82,12 +82,16 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     recommend_result = state.get("recommend_result")
     history = state.get("history", [])
 
-    # 마지막 사용자 질문 추출
+    # 마지막 사용자 질문 추출 (history 우선, 없으면 state의 user_query fallback)
     user_query = ""
     for turn in reversed(history):
         if turn.get("role") == "user":
             user_query = turn.get("content", "")
             break
+    
+    # 첫 턴에서는 history가 비어있으므로 state의 user_query 사용
+    if not user_query:
+        user_query = state.get("user_query", "")
 
     # 결과 조합
     context_parts = []
@@ -198,7 +202,8 @@ def _format_diagnosis(result: Any) -> str:
         parts.append("\n### 문서 분석")
         readme_summary = docs.get("readme_summary_for_user", "")
         if readme_summary:
-            parts.append(f"- README 요약: {readme_summary[:500]}")
+            # 요약은 생성 단계에서 이미 길이 제한됨 (300~500자)
+            parts.append(f"- README 요약: {readme_summary}")
         categories = docs.get("readme_categories", {})
         if categories:
             present = [k for k, v in categories.items() if v]
