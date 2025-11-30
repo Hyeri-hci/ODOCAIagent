@@ -406,7 +406,20 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     context_parts = []
 
     if diagnosis_result:
-        context_parts.append(f"## 진단 결과\n{_format_diagnosis(diagnosis_result, is_onboarding_mode, user_level)}")
+        # 비교 모드인 경우 저장소 이름 명시
+        if intent == "compare_two_repos":
+            repo = state.get("repo", {})
+            repo_name = f"{repo.get('owner', '')}/{repo.get('name', '')}"
+            context_parts.append(f"## 저장소 A: {repo_name}\n{_format_diagnosis(diagnosis_result, is_onboarding_mode, user_level)}")
+        else:
+            context_parts.append(f"## 진단 결과\n{_format_diagnosis(diagnosis_result, is_onboarding_mode, user_level)}")
+
+    # 비교 대상 저장소 결과 (compare_two_repos 모드)
+    compare_result = state.get("compare_diagnosis_result")
+    if compare_result and intent == "compare_two_repos":
+        compare_repo = state.get("compare_repo", {})
+        compare_repo_name = f"{compare_repo.get('owner', '')}/{compare_repo.get('name', '')}"
+        context_parts.append(f"## 저장소 B: {compare_repo_name}\n{_format_diagnosis(compare_result, is_onboarding_mode, user_level)}")
 
     if security_result:
         context_parts.append(f"## 보안 분석\n{_format_result(security_result)}")
@@ -418,6 +431,8 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if not context_parts:
         if intent == "explain_scores":
             summary = "점수를 설명하려면 먼저 저장소 분석이 필요합니다. 저장소 URL과 함께 다시 질문해 주세요."
+        elif intent == "compare_two_repos":
+            summary = "두 저장소를 비교하려면 두 개의 저장소 URL이 필요합니다. 예: 'facebook/react와 vuejs/vue를 비교해줘'"
         else:
             summary = "분석 결과가 없습니다. 다시 시도해 주세요."
     else:

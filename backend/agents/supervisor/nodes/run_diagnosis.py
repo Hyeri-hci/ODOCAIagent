@@ -22,6 +22,7 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
     Diagnosis Agent 호출 노드
     
     state.repo, user_context, diagnosis_task_type을 기반으로 진단을 수행한다.
+    compare_two_repos intent인 경우 compare_repo도 함께 진단한다.
     diagnosis_task_type이 'none'이면 진단을 건너뛴다.
     """
     if "repo" not in state:
@@ -33,7 +34,9 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
 
     repo = state["repo"]
     user_context = state.get("user_context", {})
+    intent = state.get("intent", "")
 
+    # 첫 번째 저장소 진단
     diagnosis_input = _build_diagnosis_input(repo, diagnosis_task_type, user_context)
 
     logger.info(
@@ -55,6 +58,27 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]
     new_state["diagnosis_result"] = diagnosis_result
+    
+    # 비교 모드: 두 번째 저장소도 진단
+    compare_repo = state.get("compare_repo")
+    if intent == "compare_two_repos" and compare_repo:
+        logger.info(
+            "[run_diagnosis_node] compare mode: diagnosing second repo=%s/%s",
+            compare_repo.get("owner"),
+            compare_repo.get("name"),
+        )
+        
+        compare_input = _build_diagnosis_input(compare_repo, diagnosis_task_type, user_context)
+        compare_result = run_diagnosis(compare_input)
+        
+        compare_scores = compare_result.get("scores", {}) if isinstance(compare_result, dict) else {}
+        logger.info(
+            "[run_diagnosis_node] compare diagnosis completed, health_score=%s",
+            compare_scores.get("health_score"),
+        )
+        
+        new_state["compare_diagnosis_result"] = compare_result
+    
     return new_state
 
 

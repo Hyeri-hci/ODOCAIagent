@@ -80,8 +80,8 @@ def _extract_repo_from_query(query: str) -> RepoInfo | None:
             "url": f"https://github.com/{owner}/{name}",
         }
     
-    # owner/repo 형식
-    short_pattern = r"(?:^|\s)([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)(?:\s|$)"
+    # owner/repo 형식 (한글 등 유니코드 문자와 붙어 있어도 매칭)
+    short_pattern = r"([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)"
     match = re.search(short_pattern, query)
     if match:
         owner = match.group(1)
@@ -93,6 +93,41 @@ def _extract_repo_from_query(query: str) -> RepoInfo | None:
         }
     
     return None
+
+
+def _extract_all_repos_from_query(query: str) -> list[RepoInfo]:
+    """
+    사용자 쿼리에서 모든 GitHub 저장소를 추출.
+    비교 질의에서 두 개의 저장소를 찾을 때 사용.
+    """
+    repos = []
+    
+    # URL 형식: https://github.com/owner/repo
+    url_pattern = r"https?://github\.com/([^/\s]+)/([^/\s?#]+)"
+    for match in re.finditer(url_pattern, query):
+        owner = match.group(1)
+        name = match.group(2)
+        if name.endswith(".git"):
+            name = name[:-4]
+        repos.append({
+            "owner": owner,
+            "name": name,
+            "url": f"https://github.com/{owner}/{name}",
+        })
+    
+    # owner/repo 형식
+    if not repos:
+        short_pattern = r"([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)"
+        for match in re.finditer(short_pattern, query):
+            owner = match.group(1)
+            name = match.group(2)
+            repos.append({
+                "owner": owner,
+                "name": name,
+                "url": f"https://github.com/{owner}/{name}",
+            })
+    
+    return repos
 
 
 def classify_intent_node(state: SupervisorState) -> SupervisorState:
@@ -144,6 +179,22 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     compare_repo_info = _parse_repo_url(parsed.get("compare_repo_url"))
     if compare_repo_info:
         new_state["compare_repo"] = compare_repo_info
+
+    # 비교 모드일 때 fallback: LLM이 두 저장소를 못 파싱했으면 정규식으로 추출
+    if task_type == "compare_two_repos":
+        if not new_state.get("repo") or not new_state.get("compare_repo"):
+            all_repos = _extract_all_repos_from_query(user_query)
+            if len(all_repos) >= 2:
+                logger.info(
+                    "[classify_intent_node] 비교 모드 fallback: %s vs %s",
+                    all_repos[0]["name"],
+                    all_repos[1]["name"],
+                )
+                new_state["repo"] = all_repos[0]
+                new_state["compare_repo"] = all_repos[1]
+            elif len(all_repos) == 1 and not new_state.get("repo"):
+                # 하나만 추출된 경우 repo에만 설정
+                new_state["repo"] = all_repos[0]
 
     user_context = _parse_user_context(parsed.get("user_context", {}))
     if user_context:

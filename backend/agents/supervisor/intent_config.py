@@ -84,8 +84,8 @@ INTENT_CONFIG: dict[SupervisorIntent, IntentConfigEntry] = {
         "needs_diagnosis": True,
         "prompt_kind": "compare",
         "diagnosis_task_type": "health_plus_onboarding",
-        "is_ready": False,  # 아직 준비 안 됨
-        "description": "두 저장소 비교 분석 (준비 중)",
+        "is_ready": True,  # 비교 기능 활성화
+        "description": "두 저장소 비교 분석",
     },
     "refine_onboarding_tasks": {
         "needs_diagnosis": False,  # 이전 결과 재사용
