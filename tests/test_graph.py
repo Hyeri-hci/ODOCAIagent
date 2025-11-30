@@ -63,10 +63,12 @@ def test_graph():
         
         llm_summary = result.get("llm_summary") or ""
         print(f"\n최종 응답 (길이: {len(llm_summary)}):")
-        print(llm_summary[:800] if llm_summary else "없음")
+        print(llm_summary if llm_summary else "없음")
         
         # 결과를 파일로도 저장
         output_file = Path(__file__).parent / "test_graph_result.txt"
+        diagnosis_result = result.get('diagnosis_result', {})
+        
         with open(output_file, "w", encoding="utf-8") as f:
             f.write("=" * 60 + "\n")
             f.write("테스트 결과\n")
@@ -74,9 +76,24 @@ def test_graph():
             f.write(f"task_type: {result.get('task_type')}\n")
             f.write(f"diagnosis_task_type: {result.get('diagnosis_task_type')}\n")
             f.write(f"repo: {result.get('repo')}\n\n")
-            f.write(f"scores: {result.get('diagnosis_result', {}).get('scores')}\n\n")
+            
+            # 점수 정보
             f.write("=" * 60 + "\n")
-            f.write("최종 응답\n")
+            f.write("점수 정보\n")
+            f.write("=" * 60 + "\n")
+            f.write(f"scores: {diagnosis_result.get('scores')}\n\n")
+            
+            # 활동성 데이터 (LLM에 전달되는 실제 숫자)
+            f.write("=" * 60 + "\n")
+            f.write("활동성 데이터 (LLM에 전달됨)\n")
+            f.write("=" * 60 + "\n")
+            activity = diagnosis_result.get('details', {}).get('activity', {})
+            f.write(f"commit: {activity.get('commit')}\n")
+            f.write(f"issue: {activity.get('issue')}\n")
+            f.write(f"pr: {activity.get('pr')}\n\n")
+            
+            f.write("=" * 60 + "\n")
+            f.write("최종 응답 (LLM 생성)\n")
             f.write("=" * 60 + "\n\n")
             f.write(llm_summary)
         print(f"\n결과가 {output_file}에 저장되었습니다.")
