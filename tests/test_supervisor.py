@@ -49,30 +49,41 @@ def test_routing():
     print("1. 라우팅 테스트")
     print("=" * 70)
     
-    all_passed = True
     for intent, config in INTENT_CONFIG.items():
-        state = {"task_type": intent}
-        route = route_after_mapping(state)
-        
-        if not is_intent_ready(intent):
-            expected = "summarize"
-        elif is_refine_intent(intent):
-            expected = "refine_tasks"
-        elif config["needs_diagnosis"]:
+        # refine_onboarding_tasks는 이전 컨텍스트에 따라 분기
+        if is_refine_intent(intent):
+            # 이전 컨텍스트 없을 때 → run_diagnosis
+            state_no_context = {"task_type": intent}
+            route = route_after_mapping(state_no_context)
             expected = "run_diagnosis"
+            assert route == expected, f"{intent} without context: {route} != {expected}"
+            print(f"[PASS] {intent:30} (no context) -> {route}")
+            
+            # 이전 컨텍스트 있을 때 → refine_tasks
+            state_with_context = {
+                "task_type": intent,
+                "last_task_list": [{"title": "test task"}],
+            }
+            route = route_after_mapping(state_with_context)
+            expected = "refine_tasks"
+            assert route == expected, f"{intent} with context: {route} != {expected}"
+            print(f"[PASS] {intent:30} (with context) -> {route}")
         else:
-            expected = "summarize"
-        
-        passed = route == expected
-        ready_note = "" if is_intent_ready(intent) else " (not ready)"
-        status = "[PASS]" if passed else "[FAIL]"
-        print(f"{status} {intent:30} -> {route} (expected: {expected}){ready_note}")
-        
-        if not passed:
-            all_passed = False
+            state = {"task_type": intent}
+            route = route_after_mapping(state)
+            
+            if not is_intent_ready(intent):
+                expected = "summarize"
+            elif config["needs_diagnosis"]:
+                expected = "run_diagnosis"
+            else:
+                expected = "summarize"
+            
+            ready_note = "" if is_intent_ready(intent) else " (not ready)"
+            assert route == expected, f"{intent}: {route} != {expected}"
+            print(f"[PASS] {intent:30} -> {route}{ready_note}")
     
     print()
-    return all_passed
 
 
 def test_prompt_mapping():
@@ -84,20 +95,15 @@ def test_prompt_mapping():
     print("2. 프롬프트 매핑 테스트")
     print("=" * 70)
     
-    all_passed = True
     for intent, config in INTENT_CONFIG.items():
         prompt = _get_prompt_for_intent(intent, "beginner")
         prompt_kind = config["prompt_kind"]
         
         has_prompt = prompt is not None and len(prompt) > 100
-        status = "[PASS]" if has_prompt else "[FAIL]"
-        print(f"{status} {intent:30} -> prompt_kind={prompt_kind}, len={len(prompt) if prompt else 0}")
-        
-        if not has_prompt:
-            all_passed = False
+        assert has_prompt, f"{intent}: prompt_kind={prompt_kind}, len={len(prompt) if prompt else 0}"
+        print(f"[PASS] {intent:30} -> prompt_kind={prompt_kind}, len={len(prompt) if prompt else 0}")
     
     print()
-    return all_passed
 
 
 def test_not_ready_guard():
@@ -109,22 +115,18 @@ def test_not_ready_guard():
     print("3. 미지원 Intent 가드 테스트")
     print("=" * 70)
     
-    all_passed = True
     for intent, config in INTENT_CONFIG.items():
         ready = is_intent_ready(intent)
         
         if not ready:
             message = _get_not_ready_message(intent)
             has_message = "준비 중" in message or "개발 중" in message
-            status = "[PASS]" if has_message else "[FAIL]"
-            print(f"{status} {intent:30} -> is_ready=False, message_ok={has_message}")
-            if not has_message:
-                all_passed = False
+            assert has_message, f"{intent}: message doesn't contain expected text"
+            print(f"[PASS] {intent:30} -> is_ready=False, message_ok={has_message}")
         else:
             print(f"[SKIP] {intent:30} -> is_ready=True (가드 불필요)")
     
     print()
-    return all_passed
 
 
 def test_user_level_validation():
@@ -145,17 +147,12 @@ def test_user_level_validation():
         ("BEGINNER", "beginner"),
     ]
     
-    all_passed = True
     for input_val, expected in test_cases:
         result = validate_user_level(input_val)
-        passed = result == expected
-        status = "[PASS]" if passed else "[FAIL]"
-        print(f"{status} validate_user_level({repr(input_val):15}) -> {result} (expected: {expected})")
-        if not passed:
-            all_passed = False
+        assert result == expected, f"validate_user_level({repr(input_val)}): {result} != {expected}"
+        print(f"[PASS] validate_user_level({repr(input_val):15}) -> {result}")
     
     print()
-    return all_passed
 
 
 def test_intent_validation():
@@ -176,17 +173,12 @@ def test_intent_validation():
         (None, "diagnose_repo_health"),
     ]
     
-    all_passed = True
     for input_val, expected in test_cases:
         result = validate_intent(input_val)
-        passed = result == expected
-        status = "[PASS]" if passed else "[FAIL]"
-        print(f"{status} validate_intent({repr(input_val):30}) -> {result}")
-        if not passed:
-            all_passed = False
+        assert result == expected, f"validate_intent({repr(input_val)}): {result} != {expected}"
+        print(f"[PASS] validate_intent({repr(input_val):30}) -> {result}")
     
     print()
-    return all_passed
 
 
 def test_diagnosis_task_type_mapping():
@@ -198,18 +190,13 @@ def test_diagnosis_task_type_mapping():
     print("6. Diagnosis task_type 매핑 테스트")
     print("=" * 70)
     
-    all_passed = True
     for intent, config in INTENT_CONFIG.items():
         result = map_to_diagnosis_task_type(intent)
         expected = config["diagnosis_task_type"]
-        passed = result == expected
-        status = "[PASS]" if passed else "[FAIL]"
-        print(f"{status} {intent:30} -> {result}")
-        if not passed:
-            all_passed = False
+        assert result == expected, f"{intent}: {result} != {expected}"
+        print(f"[PASS] {intent:30} -> {result}")
     
     print()
-    return all_passed
 
 
 def test_compare_regex():
@@ -226,18 +213,13 @@ def test_compare_regex():
         ("microsoft/vscode, electron/electron 비교", ["vscode", "electron"]),
     ]
     
-    all_passed = True
     for query, expected_names in test_cases:
         repos = _extract_all_repos_from_query(query)
         actual_names = [r["name"] for r in repos]
-        passed = actual_names == expected_names
-        status = "[PASS]" if passed else "[FAIL]"
-        print(f"{status} '{query[:40]}...' -> {actual_names}")
-        if not passed:
-            all_passed = False
+        assert actual_names == expected_names, f"'{query}': {actual_names} != {expected_names}"
+        print(f"[PASS] '{query[:40]}...' -> {actual_names}")
     
     print()
-    return all_passed
 
 
 def test_compare_fallback():
@@ -260,7 +242,6 @@ def test_compare_fallback():
         ("angular/angular과 sveltejs/svelte를 비교해줘", "angular", "svelte"),
     ]
     
-    all_passed = True
     for query, expected_repo, expected_compare in test_cases:
         initial_state = {
             "user_query": query,
@@ -278,21 +259,73 @@ def test_compare_fallback():
         repo = result.get("repo")
         compare_repo = result.get("compare_repo")
         
-        passed = (
-            repo is not None and repo["name"] == expected_repo and
-            compare_repo is not None and compare_repo["name"] == expected_compare
-        )
-        
-        status = "[PASS]" if passed else "[FAIL]"
         repo_name = repo["name"] if repo else None
         compare_name = compare_repo["name"] if compare_repo else None
-        print(f"{status} '{query[:40]}...' -> repo={repo_name}, compare={compare_name}")
         
-        if not passed:
-            all_passed = False
+        assert repo is not None and repo["name"] == expected_repo, f"repo: {repo_name} != {expected_repo}"
+        assert compare_repo is not None and compare_repo["name"] == expected_compare, f"compare: {compare_name} != {expected_compare}"
+        print(f"[PASS] '{query[:40]}...' -> repo={repo_name}, compare={compare_name}")
     
     print()
-    return all_passed
+
+
+def test_multiturn_routing():
+    """멀티턴 라우팅 테스트 - refine 시 이전 컨텍스트 체크"""
+    from backend.agents.supervisor.graph import route_after_mapping
+    
+    print("=" * 70)
+    print("9. 멀티턴 라우팅 테스트")
+    print("=" * 70)
+    
+    # 케이스 1: refine_onboarding_tasks + 이전 컨텍스트 없음 → run_diagnosis
+    state_no_context = {
+        "task_type": "refine_onboarding_tasks",
+        "is_followup": True,
+        "followup_type": "refine_easier",
+    }
+    route = route_after_mapping(state_no_context)
+    assert route == "run_diagnosis", f"No context: {route} != run_diagnosis"
+    print(f"[PASS] refine + no context -> {route}")
+    
+    # 케이스 2: refine_onboarding_tasks + last_task_list 있음 → refine_tasks
+    state_with_tasks = {
+        "task_type": "refine_onboarding_tasks",
+        "is_followup": True,
+        "followup_type": "refine_easier",
+        "last_task_list": [{"title": "test", "difficulty": "beginner"}],
+    }
+    route = route_after_mapping(state_with_tasks)
+    assert route == "refine_tasks", f"With last_task_list: {route} != refine_tasks"
+    print(f"[PASS] refine + last_task_list -> {route}")
+    
+    # 케이스 3: refine_onboarding_tasks + diagnosis_result.onboarding_tasks 있음 → refine_tasks
+    state_with_diagnosis = {
+        "task_type": "refine_onboarding_tasks",
+        "is_followup": True,
+        "followup_type": "refine_harder",
+        "diagnosis_result": {
+            "onboarding_tasks": {
+                "beginner": [{"title": "task1"}],
+                "intermediate": [],
+                "advanced": [],
+            }
+        },
+    }
+    route = route_after_mapping(state_with_diagnosis)
+    assert route == "refine_tasks", f"With diagnosis_result: {route} != refine_tasks"
+    print(f"[PASS] refine + diagnosis_result -> {route}")
+    
+    # 케이스 4: follow-up이지만 이전 컨텍스트 필요 없는 경우 → run_diagnosis
+    state_followup_no_refine = {
+        "task_type": "diagnose_repo_health",
+        "is_followup": True,
+        "followup_type": "continue_same",
+    }
+    route = route_after_mapping(state_followup_no_refine)
+    assert route == "run_diagnosis", f"Follow-up health: {route} != run_diagnosis"
+    print(f"[PASS] follow-up health -> {route}")
+    
+    print()
 
 
 def run_unit_tests():
@@ -301,18 +334,17 @@ def run_unit_tests():
     print("유닛 테스트 시작 (Mock 사용)")
     print("=" * 70 + "\n")
     
-    results = {
-        "라우팅": test_routing(),
-        "프롬프트 매핑": test_prompt_mapping(),
-        "미지원 Intent 가드": test_not_ready_guard(),
-        "user_level 유효성": test_user_level_validation(),
-        "Intent 유효성": test_intent_validation(),
-        "Diagnosis task_type 매핑": test_diagnosis_task_type_mapping(),
-        "비교 정규식": test_compare_regex(),
-        "비교 fallback": test_compare_fallback(),
-    }
+    test_routing()
+    test_prompt_mapping()
+    test_not_ready_guard()
+    test_user_level_validation()
+    test_intent_validation()
+    test_diagnosis_task_type_mapping()
+    test_compare_regex()
+    test_compare_fallback()
+    test_multiturn_routing()
     
-    return results
+    print("모든 유닛 테스트 통과!")
 
 
 # ============================================================================

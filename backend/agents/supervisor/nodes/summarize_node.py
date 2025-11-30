@@ -404,6 +404,11 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
 
     # 결과 조합
     context_parts = []
+    
+    # Refine Tasks 결과 처리 (refine_onboarding_tasks intent)
+    refine_summary = state.get("refine_summary")
+    if refine_summary and intent == "refine_onboarding_tasks":
+        context_parts.append(f"## Task 재필터링 결과\n{_format_refine_summary(refine_summary)}")
 
     if diagnosis_result:
         # 비교 모드인 경우 저장소 이름 명시
@@ -457,6 +462,31 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     new_history.append({"role": "assistant", "content": summary})
     new_state["history"] = new_history
     new_state["llm_summary"] = summary
+    
+    # ========================================
+    # 멀티턴 상태 업데이트 (다음 턴을 위한 컨텍스트 저장)
+    # ========================================
+    
+    # last_repo: 현재 분석한 저장소 저장
+    if repo:
+        new_state["last_repo"] = repo
+    
+    # last_intent: 현재 intent 저장
+    new_state["last_intent"] = intent
+    
+    # last_task_list: 온보딩 Task 목록 저장 (다음 턴에서 refine할 때 사용)
+    if diagnosis_result:
+        onboarding_tasks = diagnosis_result.get("onboarding_tasks", {})
+        if onboarding_tasks:
+            # flat list로 변환하여 저장
+            task_list = []
+            for difficulty in ["beginner", "intermediate", "advanced"]:
+                for task in onboarding_tasks.get(difficulty, []):
+                    task_copy = dict(task)
+                    if "difficulty" not in task_copy:
+                        task_copy["difficulty"] = difficulty
+                    task_list.append(task_copy)
+            new_state["last_task_list"] = task_list
 
     return new_state
 
@@ -723,6 +753,65 @@ def _format_result(result: Any) -> str:
     if isinstance(result, dict):
         return json.dumps(result, ensure_ascii=False, indent=2)
     return str(result)
+
+
+def _format_refine_summary(refine_summary: dict) -> str:
+    """Refine Tasks 결과를 문자열로 포맷팅"""
+    parts = []
+    
+    followup_type = refine_summary.get("followup_type", "unknown")
+    original_count = refine_summary.get("original_count", 0)
+    filtered_count = refine_summary.get("filtered_count", 0)
+    
+    parts.append(f"### 필터링 정보")
+    parts.append(f"- 필터 유형: {_get_followup_type_kr(followup_type)}")
+    parts.append(f"- 원본 Task 수: {original_count}개")
+    parts.append(f"- 필터링 후 Task 수: {filtered_count}개")
+    
+    # 난이도 분포
+    dist = refine_summary.get("difficulty_distribution", {})
+    if dist:
+        parts.append(f"\n### 난이도 분포")
+        parts.append(f"- 초보자용: {dist.get('beginner', 0)}개")
+        parts.append(f"- 중급자용: {dist.get('intermediate', 0)}개")
+        parts.append(f"- 고급자용: {dist.get('advanced', 0)}개")
+    
+    # 필터링된 Task 목록
+    tasks = refine_summary.get("tasks", [])
+    if tasks:
+        parts.append(f"\n### 필터링된 Task 목록")
+        for i, task in enumerate(tasks[:5], 1):
+            title = task.get("title", "제목 없음")
+            difficulty = task.get("difficulty", "unknown")
+            level = task.get("level", "?")
+            url = task.get("url", "")
+            parts.append(f"\n**{i}. {title}**")
+            parts.append(f"- 난이도: {difficulty} (Lv.{level})")
+            if url:
+                parts.append(f"- 링크: {url}")
+    
+    # Task가 없는 경우
+    if not tasks:
+        message = refine_summary.get("message", "")
+        if message:
+            parts.append(f"\n{message}")
+        else:
+            parts.append("\n조건에 맞는 Task가 없습니다.")
+    
+    return "\n".join(parts)
+
+
+def _get_followup_type_kr(followup_type: str) -> str:
+    """followup_type을 한국어로 변환"""
+    mapping = {
+        "refine_easier": "더 쉬운 Task",
+        "refine_harder": "더 어려운 Task",
+        "refine_different": "다른 종류의 Task",
+        "ask_detail": "상세 설명",
+        "compare_similar": "비슷한 저장소 비교",
+        "continue_same": "추가 분석",
+    }
+    return mapping.get(followup_type, followup_type)
 
 
 def _generate_summary_with_llm(

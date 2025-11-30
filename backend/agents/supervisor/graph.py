@@ -26,25 +26,36 @@ def route_after_mapping(state: SupervisorState) -> str:
     미지원 Intent는 바로 summarize로 보내서 안내 메시지를 표시합니다.
     
     멀티턴 처리:
-    - refine_onboarding_tasks: refine_tasks 노드로 분기
+    - refine_onboarding_tasks: 이전 컨텍스트가 있으면 refine_tasks, 없으면 run_diagnosis
     - is_followup + 이전 컨텍스트 필요: refine_tasks 또는 summarize로 분기
     """
     task_type = state.get("task_type", "diagnose_repo_health")
     is_followup = state.get("is_followup", False)
     followup_type = state.get("followup_type")
+    
+    # 이전 컨텍스트 존재 여부 확인
+    has_previous_context = bool(
+        state.get("last_task_list") or 
+        state.get("diagnosis_result", {}).get("onboarding_tasks")
+    )
 
     # 미지원 Intent는 바로 summarize로 (안내 메시지 표시)
     if not is_intent_ready(task_type):
         return "summarize"
     
-    # refine_onboarding_tasks는 refine_tasks 노드로
+    # refine_onboarding_tasks 처리
     if is_refine_intent(task_type):
-        return "refine_tasks"
+        if has_previous_context:
+            # 이전 결과가 있으면 refine_tasks로
+            return "refine_tasks"
+        else:
+            # 이전 결과가 없으면 새로 diagnosis 실행 (온보딩 모드로)
+            # intent를 diagnose_repo_onboarding으로 변경하여 Task 목록 생성
+            return "run_diagnosis"
     
     # Follow-up이면서 이전 컨텍스트가 필요한 경우
     if is_followup and requires_previous_context(task_type, followup_type):
-        # 이전 Task 목록이 있으면 refine, 없으면 새로 diagnosis
-        if state.get("last_task_list") or state.get("diagnosis_result"):
+        if has_previous_context:
             return "refine_tasks"
         # 이전 결과가 없으면 새로 diagnosis 실행
     
