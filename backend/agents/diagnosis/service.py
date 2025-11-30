@@ -69,7 +69,10 @@ def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> st
 def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Diagnosis Agent 진입점.
-    payload: owner, repo, task_type, focus, user_context, advanced_analysis
+    payload: owner, repo, task_type, focus, user_context, needs, user_query, advanced_analysis
+    
+    needs가 제공되면 해당 플래그에 따라 Phase를 선택적으로 실행합니다.
+    needs가 없으면 task_type 기반으로 기존 로직을 따릅니다.
     """
 
     owner = (payload.get("owner") or "").strip()
@@ -81,6 +84,17 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     focus = payload.get("focus") or []
     user_context = payload.get("user_context") or {}
     user_level = user_context.get("level", "beginner")
+    
+    # needs 기반 Phase 실행 분기 (Supervisor에서 전달)
+    needs = payload.get("needs")
+    if needs is None:
+        # fallback: task_type 기반으로 needs 생성
+        needs = {
+            "need_health": True,
+            "need_readme": True,
+            "need_activity": task_type == DiagnosisTaskType.FULL or task_type == DiagnosisTaskType.ACTIVITY_ONLY,
+            "need_onboarding": USE_ONBOARDING_TASKS,
+        }
     
     # 고급 분석 모드: 카테고리별 상세 요약 포함 (LLM 5회, 기본 1회보다 느림)
     advanced_analysis = payload.get("advanced_analysis", False)
@@ -270,29 +284,33 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         activity_scores=activity_scores_dict,
     )
 
-    # 온보딩 계획 생성
-    docs_summary = details.get("docs", {}).get("readme_summary_for_user", "")
-    onboarding_plan = create_onboarding_plan(
-        scores=asdict(scores),
-        labels=labels.to_dict(),
-        docs_summary=docs_summary,
-        repo_info=details.get("repo_info"),
-        use_llm=USE_LLM_ONBOARDING,
-    )
+    # 온보딩 계획 생성 (needs["need_onboarding"]이 True일 때만)
+    onboarding_plan = None
+    if needs.get("need_onboarding", False):
+        docs_summary = details.get("docs", {}).get("readme_summary_for_user", "")
+        onboarding_plan = create_onboarding_plan(
+            scores=asdict(scores),
+            labels=labels.to_dict(),
+            docs_summary=docs_summary,
+            repo_info=details.get("repo_info"),
+            use_llm=USE_LLM_ONBOARDING,
+        )
 
-    # 온보딩 Task 목록 생성 (난이도/레벨별)
+    # 온보딩 Task 목록 생성 (needs["need_onboarding"]이 True일 때만)
     onboarding_tasks = None
-    if USE_ONBOARDING_TASKS:
+    if needs.get("need_onboarding", False):
         logger.info("Phase 4: Computing onboarding tasks...")
         t3 = time.time()
         onboarding_tasks = compute_onboarding_tasks(
             owner=owner,
             repo=repo,
             labels=labels.to_dict(),
-            onboarding_plan=onboarding_plan.to_dict(),
+            onboarding_plan=onboarding_plan.to_dict() if onboarding_plan else {},
         )
         phase_times["phase4_onboarding"] = time.time() - t3
         logger.info("Phase 4 완료: %.2fs", phase_times["phase4_onboarding"])
+    else:
+        logger.info("Phase 4: 온보딩 Task 생성 건너뜀 (need_onboarding=False)")
 
     # 최종 JSON 결과
     result_json: Dict[str, Any] = {
@@ -302,10 +320,11 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             "task_type": task_type.value if isinstance(task_type, DiagnosisTaskType) else str(task_type),
             "focus": focus,
             "user_context": user_context,
+            "needs": needs,  # 어떤 Phase가 실행되었는지 기록
         },
         "scores": asdict(scores),
         "labels": labels.to_dict(),
-        "onboarding_plan": onboarding_plan.to_dict(),
+        "onboarding_plan": onboarding_plan.to_dict() if onboarding_plan else None,
         "onboarding_tasks": onboarding_tasks.to_dict() if onboarding_tasks else None,
         "details": details,
     }
