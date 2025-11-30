@@ -37,47 +37,19 @@ def diagnosis_needs_from_task_type(task_type: str) -> DiagnosisNeeds:
     diagnosis_task_type에서 DiagnosisNeeds를 생성
     
     Supervisor가 결정한 task_type에 따라 Diagnosis가 어떤 Phase를 실행할지 결정합니다.
+    
+    NOTE: need_onboarding은 항상 True입니다.
+    - 온보딩 Task는 항상 계산하고, 요약 단계에서 표시 개수를 조절합니다.
+    - health 모드: Task 3개 간략히 표시
+    - onboarding 모드: Task 5개+ 상세 표시
     """
-    if task_type == "health_core":
-        # 건강 분석만: 온보딩 Task 생성 안 함
-        return {
-            "need_health": True,
-            "need_readme": True,
-            "need_activity": True,
-            "need_onboarding": False,
-        }
-    elif task_type == "health_plus_onboarding":
-        # 건강 분석 + 온보딩: 전체 실행
-        return {
-            "need_health": True,
-            "need_readme": True,
-            "need_activity": True,
-            "need_onboarding": True,
-        }
-    elif task_type == "onboarding_only":
-        # 온보딩만: 건강 점수는 계산하지만 강조 안 함
-        return {
-            "need_health": True,
-            "need_readme": True,
-            "need_activity": True,
-            "need_onboarding": True,
-        }
-    elif task_type == "explain_scores":
-        # 점수 설명: 전체 분석 필요
-        return {
-            "need_health": True,
-            "need_readme": True,
-            "need_activity": True,
-            "need_onboarding": False,
-        }
-    else:
-        # 기본값: 건강 분석 + README + 활동성
-        return {
-            "need_health": True,
-            "need_readme": True,
-            "need_activity": True,
-            "need_onboarding": False,
-        }
+    # 온보딩 Task는 항상 계산 (요약에서 표시 개수 조절)
+    return {
+        "need_health": True,
+        "need_readme": True,
+        "need_activity": True,
+        "need_onboarding": True,  # 항상 True
+    }
 
 
 class RepoInfo(TypedDict):
