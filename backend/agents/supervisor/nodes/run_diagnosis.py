@@ -35,8 +35,14 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
     repo = state["repo"]
     user_context = state.get("user_context", {})
     intent = state.get("intent", "")
+    
+    # 진행 상황 콜백
+    progress_cb = state.get("_progress_callback")
 
     # 첫 번째 저장소 진단
+    if progress_cb:
+        progress_cb("저장소 분석 중", f"{repo.get('owner')}/{repo.get('name')} 정보 수집...")
+    
     diagnosis_input = _build_diagnosis_input(repo, diagnosis_task_type, user_context)
 
     logger.info(
@@ -46,10 +52,17 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
         diagnosis_task_type,
     )
 
+    if progress_cb:
+        progress_cb("GitHub 데이터 수집 중", "커밋, 이슈, PR 활동 분석...")
+    
     diagnosis_result = run_diagnosis(diagnosis_input)
 
     # health_score는 scores 딕셔너리 안에 있음
     scores = diagnosis_result.get("scores", {}) if isinstance(diagnosis_result, dict) else {}
+    
+    if progress_cb:
+        progress_cb("점수 계산 완료", f"Health: {scores.get('health_score', 'N/A')}")
+    
     logger.info(
         "[run_diagnosis_node] diagnosis completed, health_score=%s, onboarding_score=%s",
         scores.get("health_score"),
@@ -62,6 +75,9 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
     # 비교 모드: 두 번째 저장소도 진단
     compare_repo = state.get("compare_repo")
     if intent == "compare_two_repos" and compare_repo:
+        if progress_cb:
+            progress_cb("비교 대상 분석 중", f"{compare_repo.get('owner')}/{compare_repo.get('name')}...")
+        
         logger.info(
             "[run_diagnosis_node] compare mode: diagnosing second repo=%s/%s",
             compare_repo.get("owner"),

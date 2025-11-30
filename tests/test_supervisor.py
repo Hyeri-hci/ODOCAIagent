@@ -84,6 +84,7 @@ def test_routing():
             print(f"[PASS] {intent:30} -> {route}{ready_note}")
     
     print()
+    return True
 
 
 def test_prompt_mapping():
@@ -104,6 +105,7 @@ def test_prompt_mapping():
         print(f"[PASS] {intent:30} -> prompt_kind={prompt_kind}, len={len(prompt) if prompt else 0}")
     
     print()
+    return True
 
 
 def test_not_ready_guard():
@@ -127,6 +129,7 @@ def test_not_ready_guard():
             print(f"[SKIP] {intent:30} -> is_ready=True (가드 불필요)")
     
     print()
+    return True
 
 
 def test_user_level_validation():
@@ -153,6 +156,7 @@ def test_user_level_validation():
         print(f"[PASS] validate_user_level({repr(input_val):15}) -> {result}")
     
     print()
+    return True
 
 
 def test_intent_validation():
@@ -179,6 +183,7 @@ def test_intent_validation():
         print(f"[PASS] validate_intent({repr(input_val):30}) -> {result}")
     
     print()
+    return True
 
 
 def test_diagnosis_task_type_mapping():
@@ -197,6 +202,7 @@ def test_diagnosis_task_type_mapping():
         print(f"[PASS] {intent:30} -> {result}")
     
     print()
+    return True
 
 
 def test_compare_regex():
@@ -220,6 +226,7 @@ def test_compare_regex():
         print(f"[PASS] '{query[:40]}...' -> {actual_names}")
     
     print()
+    return True
 
 
 def test_compare_fallback():
@@ -234,6 +241,8 @@ def test_compare_fallback():
       "task_type": "compare_two_repos",
       "repo_url": null,
       "compare_repo_url": null,
+      "is_followup": false,
+      "followup_type": null,
       "user_context": {}
     }"""
     
@@ -251,7 +260,7 @@ def test_compare_fallback():
         }
         
         with patch(
-            "backend.agents.supervisor.nodes.intent_classifier._call_intent_llm",
+            "backend.agents.supervisor.nodes.intent_classifier._call_intent_llm_with_context",
             return_value=mock_response
         ):
             result = classify_intent_node(initial_state)
@@ -267,6 +276,7 @@ def test_compare_fallback():
         print(f"[PASS] '{query[:40]}...' -> repo={repo_name}, compare={compare_name}")
     
     print()
+    return True
 
 
 def test_multiturn_routing():
@@ -326,6 +336,7 @@ def test_multiturn_routing():
     print(f"[PASS] follow-up health -> {route}")
     
     print()
+    return True
 
 
 def run_unit_tests():
@@ -334,17 +345,19 @@ def run_unit_tests():
     print("유닛 테스트 시작 (Mock 사용)")
     print("=" * 70 + "\n")
     
-    test_routing()
-    test_prompt_mapping()
-    test_not_ready_guard()
-    test_user_level_validation()
-    test_intent_validation()
-    test_diagnosis_task_type_mapping()
-    test_compare_regex()
-    test_compare_fallback()
-    test_multiturn_routing()
+    results = {}
+    results["routing"] = test_routing()
+    results["prompt_mapping"] = test_prompt_mapping()
+    results["not_ready_guard"] = test_not_ready_guard()
+    results["user_level_validation"] = test_user_level_validation()
+    results["intent_validation"] = test_intent_validation()
+    results["diagnosis_task_type_mapping"] = test_diagnosis_task_type_mapping()
+    results["compare_regex"] = test_compare_regex()
+    results["compare_fallback"] = test_compare_fallback()
+    results["multiturn_routing"] = test_multiturn_routing()
     
     print("모든 유닛 테스트 통과!")
+    return results
 
 
 # ============================================================================

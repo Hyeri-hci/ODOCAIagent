@@ -43,17 +43,29 @@ Supervisor task_type 후보:
 - 저장소 이름은 URL에 있는 그대로 정확히 추출하세요. 절대 축약하거나 변경하지 마세요.
 - owner/repo 형식(예: facebook/react)도 동일하게 처리합니다.
 
-## 멀티턴 대화 처리
-- "더 쉬운 거 없어?", "좀 더 어려운 Task는?" → refine_onboarding_tasks + is_followup=true
-- "이 repo 말고 비슷한 거 추천해줘" → compare_two_repos + is_followup=true
-- "이거 더 자세히 설명해줘" → explain_scores + is_followup=true
-- 새 저장소 URL이 명시되면 → is_followup=false (새로운 분석 시작)
+## 멀티턴 대화 처리 (중요!)
+
+### is_followup 판단 기준:
+1. **새로운 저장소 URL이 명시됨** → is_followup=false (새로운 분석 시작)
+2. **저장소 URL 없음 + 이전 대화 컨텍스트 있음** → is_followup=true (이전 결과 참조)
+3. **아래와 같은 표현이 있으면 거의 확실히 follow-up:**
+   - 지시대명사: "그거", "이거", "그 저장소", "아까 그", "위에서"
+   - 추가 요청: "더", "다른", "또", "그 외에", "나머지"
+   - 비교/변경: "대신", "말고", "바꿔서"
+   - 설명 요청: "왜", "어떻게", "무슨 뜻", "자세히"
+   - 후속 질문: "그러면", "그럼", "근데", "참고로"
+
+### is_followup=true일 때 task_type 분류:
+- "더 쉬운 거 없어?", "좀 더 어려운 Task는?" → refine_onboarding_tasks
+- "다른 점수도 설명해줘", "왜 이런 점수가?" → explain_scores
+- "이 repo 말고 비슷한 거 추천해줘" → compare_two_repos
+- "건강 상태는?", "전체적으로 어때?" → diagnose_repo_health
 
 followup_type 후보 (is_followup이 true일 때만):
 - "refine_easier": 더 쉬운 Task 요청
-- "refine_harder": 더 어려운 Task 요청
+- "refine_harder": 더 어려운 Task 요청  
 - "refine_different": 다른 종류의 Task 요청
-- "ask_detail": 상세 설명 요청
+- "ask_detail": 상세 설명 요청 (점수, 결과 등)
 - "compare_similar": 비슷한 저장소 비교 요청
 - "continue_same": 같은 저장소에 대한 추가 질문
 
@@ -100,7 +112,7 @@ def _extract_repo_from_query(query: str) -> RepoInfo | None:
         }
     
     # owner/repo 형식 (한글 등 유니코드 문자와 붙어 있어도 매칭)
-    short_pattern = r"([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)"
+    short_pattern = r"([a-zA-Z][a-zA-Z0-9_-]*)/([a-zA-Z0-9_.-]+)"
     match = re.search(short_pattern, query)
     if match:
         owner = match.group(1)
@@ -164,6 +176,11 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     if not user_query:
         raise ValueError("SupervisorState.user_query가 비어 있습니다.")
 
+    # 진행 상황 콜백
+    progress_cb = state.get("_progress_callback")
+    if progress_cb:
+        progress_cb("질문 분석 중", "의도와 저장소 정보 추출...")
+
     # 먼저 쿼리에서 직접 repo 추출 (LLM 파싱 오류 대비 fallback)
     fallback_repo = _extract_repo_from_query(user_query)
     
@@ -209,8 +226,24 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
         # LLM이 repo를 못 찾았으면 fallback 사용
         repo_info = fallback_repo
     
-    # Follow-up인데 repo가 없으면 last_repo 사용
-    if is_followup and not repo_info and last_repo:
+    # repo가 없고 이전 컨텍스트가 있으면 자동으로 follow-up 처리
+    if not repo_info and last_repo:
+        # LLM이 follow-up을 감지 못해도 강제로 follow-up 처리
+        if not is_followup:
+            logger.info(
+                "[classify_intent_node] repo 없음 + last_repo 있음 → follow-up으로 자동 처리"
+            )
+            is_followup = True
+            new_state["is_followup"] = True
+        
+        repo_info = last_repo
+        logger.info(
+            "[classify_intent_node] Follow-up: last_repo 사용 (%s/%s)",
+            last_repo.get("owner"),
+            last_repo.get("name"),
+        )
+    elif is_followup and not repo_info and last_repo:
+        # 기존 로직 유지
         repo_info = last_repo
         logger.info(
             "[classify_intent_node] Follow-up: last_repo 사용 (%s/%s)",

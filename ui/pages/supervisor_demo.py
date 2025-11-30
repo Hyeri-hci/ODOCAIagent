@@ -183,137 +183,160 @@ if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상�
     
     with chat_container:
         with st.chat_message("assistant"):
-            with st.spinner("분석 중..."):
-                start_time = time.time()
+            # 진행 상황 표시 영역 (한 줄만 유지, 덮어쓰기)
+            status_placeholder = st.empty()
+            start_time = time.time()
+            
+            def update_status(step: str, detail: str = ""):
+                """진행 상황 업데이트 (한 줄만 표시)"""
+                if detail:
+                    status_placeholder.caption(f":gray[{step}: {detail}]")
+                else:
+                    status_placeholder.caption(f":gray[{step}]")
+            
+            try:
+                graph = build_supervisor_graph()
+                update_status("사용자 의도 분석 중", "Intent 분류...")
                 
-                try:
-                    graph = build_supervisor_graph()
+                # 이전 결과에서 컨텍스트 가져오기 (멀티턴 지원)
+                initial_state = {
+                    "user_query": prompt.strip(),
+                    "history": [
+                        {"role": m["role"], "content": m["content"]} 
+                        for m in st.session_state.messages[:-1]
+                    ],
+                }
+                
+                # 이전 결과가 있으면 컨텍스트 전달
+                if st.session_state.last_result:
+                    prev = st.session_state.last_result
+                    if prev.get("repo"):
+                        initial_state["last_repo"] = prev.get("repo")
+                    if prev.get("diagnosis_result", {}).get("onboarding_tasks"):
+                        initial_state["last_task_list"] = prev.get("diagnosis_result", {}).get("onboarding_tasks")
+                    if prev.get("task_type"):
+                        initial_state["last_intent"] = prev.get("task_type")
+                
+                # 진행 상황 콜백 설정
+                def progress_callback(step: str, detail: str = ""):
+                    update_status(step, detail)
+                
+                initial_state["_progress_callback"] = progress_callback
+                
+                # 그래프 실행
+                result = graph.invoke(initial_state)
+                elapsed = time.time() - start_time
+                
+                update_status("응답 생성 완료", f"{elapsed:.1f}초")
+                status_placeholder.empty()  # 진행 상황 제거
+                
+                st.session_state.last_result = result
+                
+                # 응답 표시
+                llm_summary = result.get("llm_summary", "")
+                if llm_summary:
+                    st.markdown(llm_summary)
+                else:
+                    st.warning("응답이 생성되지 않았습니다.")
+                
+                # 로그 요약 생성
+                log_lines = []
+                log_lines.append(f"1. Intent 분류: `{result.get('task_type', 'N/A')}`")
+                
+                repo = result.get("repo")
+                if repo:
+                    log_lines.append(f"2. 저장소: `{repo.get('owner')}/{repo.get('name')}`")
+                
+                compare_repo = result.get("compare_repo")
+                if compare_repo:
+                    log_lines.append(f"   비교 대상: `{compare_repo.get('owner')}/{compare_repo.get('name')}`")
+                
+                if result.get("is_followup"):
+                    log_lines.append(f"3. Follow-up: `{result.get('followup_type', 'N/A')}`")
+                
+                diagnosis = result.get("diagnosis_result")
+                if diagnosis and isinstance(diagnosis, dict):
+                    scores = diagnosis.get("scores", {})
+                    log_lines.append(f"4. Diagnosis 완료")
+                    log_lines.append(f"   - Health: `{scores.get('health_score', 'N/A')}`")
+                
+                compare_diagnosis = result.get("compare_diagnosis_result")
+                if compare_diagnosis and isinstance(compare_diagnosis, dict):
+                    compare_scores = compare_diagnosis.get("scores", {})
+                    log_lines.append(f"5. 비교 대상 Health: `{compare_scores.get('health_score', 'N/A')}`")
+                
+                # 메타데이터 구성
+                metadata = {
+                    "elapsed": f"{elapsed:.1f}초",
+                    "intent": result.get("task_type", "N/A"),
+                    "level": result.get("user_context", {}).get("level", "N/A"),
+                    "is_followup": result.get("is_followup", False),
+                    "log_summary": "\n".join(log_lines),
+                    "scores": diagnosis.get("scores") if diagnosis and isinstance(diagnosis, dict) else None,
+                    "tasks": diagnosis.get("onboarding_tasks") if diagnosis and isinstance(diagnosis, dict) else None,
+                }
+                
+                # 메트릭 표시
+                cols = st.columns(4)
+                with cols[0]:
+                    st.caption(f"실행 시간: {metadata['elapsed']}")
+                with cols[1]:
+                    st.caption(f"Intent: {metadata['intent']}")
+                with cols[2]:
+                    st.caption(f"Level: {metadata['level']}")
+                with cols[3]:
+                    st.caption(f"Follow-up: {'예' if metadata['is_followup'] else '아니오'}")
+                
+                # 로그 표시
+                if show_log:
+                    with st.expander("실행 로그"):
+                        st.markdown(metadata["log_summary"])
+                
+                if show_scores and metadata.get("scores"):
+                    with st.expander("점수 상세"):
+                        st.json(metadata["scores"])
+                
+                if show_tasks and metadata.get("tasks"):
+                    with st.expander("온보딩 Task"):
+                        for level_name, level_tasks in metadata["tasks"].items():
+                            if level_tasks and isinstance(level_tasks, list):
+                                st.markdown(f"**{level_name.title()}** ({len(level_tasks)}개)")
+                                for task in level_tasks[:3]:
+                                    if isinstance(task, dict):
+                                        st.markdown(f"- {task.get('title', 'N/A')}")
+                
+                # 메시지 저장
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": llm_summary,
+                    "metadata": metadata
+                })
+                
+            except Exception as e:
+                status_placeholder.empty()
+                error_str = str(e)
+                
+                # GitHub NOT_FOUND 오류 처리
+                if "NOT_FOUND" in error_str or "Could not resolve" in error_str:
+                    # 저장소 이름 추출 시도
+                    import re
+                    repo_match = re.search(r"'([^']+/[^']+)'", error_str)
+                    repo_name = repo_match.group(1) if repo_match else "입력한 저장소"
                     
-                    # 이전 결과에서 컨텍스트 가져오기 (멀티턴 지원)
-                    initial_state = {
-                        "user_query": prompt.strip(),
-                        "history": [
-                            {"role": m["role"], "content": m["content"]} 
-                            for m in st.session_state.messages[:-1]  # 현재 메시지 제외
-                        ],
-                    }
-                    
-                    # 이전 결과가 있으면 컨텍스트 전달
-                    if st.session_state.last_result:
-                        prev = st.session_state.last_result
-                        if prev.get("repo"):
-                            initial_state["last_repo"] = prev.get("repo")
-                        if prev.get("diagnosis_result", {}).get("onboarding_tasks"):
-                            initial_state["last_task_list"] = prev.get("diagnosis_result", {}).get("onboarding_tasks")
-                        if prev.get("task_type"):
-                            initial_state["last_intent"] = prev.get("task_type")
-                    
-                    # 그래프 실행
-                    result = graph.invoke(initial_state)
-                    elapsed = time.time() - start_time
-                    
-                    st.session_state.last_result = result
-                    
-                    # 응답 표시
-                    llm_summary = result.get("llm_summary", "")
-                    if llm_summary:
-                        st.markdown(llm_summary)
-                    else:
-                        st.warning("응답이 생성되지 않았습니다.")
-                    
-                    # 로그 요약 생성
-                    log_summary_lines = []
-                    log_summary_lines.append(f"1. Intent 분류: `{result.get('task_type', 'N/A')}`")
-                    
-                    repo = result.get("repo")
-                    if repo:
-                        log_summary_lines.append(f"2. 저장소: `{repo.get('owner')}/{repo.get('name')}`")
-                    
-                    compare_repo = result.get("compare_repo")
-                    if compare_repo:
-                        log_summary_lines.append(f"   비교 대상: `{compare_repo.get('owner')}/{compare_repo.get('name')}`")
-                    
-                    if result.get("is_followup"):
-                        log_summary_lines.append(f"3. Follow-up: `{result.get('followup_type', 'N/A')}`")
-                    
-                    diagnosis = result.get("diagnosis_result")
-                    if diagnosis and isinstance(diagnosis, dict):
-                        scores = diagnosis.get("scores", {})
-                        log_summary_lines.append(f"4. Diagnosis 완료")
-                        log_summary_lines.append(f"   - Health: `{scores.get('health_score', 'N/A')}`")
-                        log_summary_lines.append(f"   - Docs: `{scores.get('documentation_score', 'N/A')}`")
-                        log_summary_lines.append(f"   - Activity: `{scores.get('activity_score', 'N/A')}`")
-                    
-                    # 비교 모드 처리
-                    compare_diagnosis = result.get("compare_diagnosis_result")
-                    if compare_diagnosis and isinstance(compare_diagnosis, dict):
-                        compare_scores = compare_diagnosis.get("scores", {})
-                        log_summary_lines.append(f"5. 비교 대상 Diagnosis 완료")
-                        log_summary_lines.append(f"   - Health: `{compare_scores.get('health_score', 'N/A')}`")
-                    
-                    refine_summary = result.get("refine_summary")
-                    if refine_summary:
-                        log_summary_lines.append(f"6. Task Refine: {refine_summary.get('original_count', 0)} -> {refine_summary.get('filtered_count', 0)}개")
-                    
-                    # 메타데이터 구성
-                    metadata = {
-                        "elapsed": f"{elapsed:.1f}초",
-                        "intent": result.get("task_type", "N/A"),
-                        "level": result.get("user_context", {}).get("level", "N/A"),
-                        "is_followup": result.get("is_followup", False),
-                        "log_summary": "\n".join(log_summary_lines),
-                        "scores": diagnosis.get("scores") if diagnosis and isinstance(diagnosis, dict) else None,
-                        "tasks": diagnosis.get("onboarding_tasks") if diagnosis and isinstance(diagnosis, dict) else None,
-                    }
-                    
-                    # 메트릭 표시
-                    cols = st.columns(4)
-                    with cols[0]:
-                        st.caption(f"실행 시간: {metadata['elapsed']}")
-                    with cols[1]:
-                        st.caption(f"Intent: {metadata['intent']}")
-                    with cols[2]:
-                        st.caption(f"Level: {metadata['level']}")
-                    with cols[3]:
-                        st.caption(f"Follow-up: {'예' if metadata['is_followup'] else '아니오'}")
-                    
-                    # 로그 표시
-                    if show_log:
-                        with st.expander("실행 로그"):
-                            st.markdown(metadata["log_summary"])
-                    
-                    if show_scores and metadata.get("scores") and isinstance(metadata.get("scores"), dict):
-                        with st.expander("점수 상세"):
-                            st.json(metadata["scores"])
-                    
-                    if show_tasks and metadata.get("tasks") and isinstance(metadata.get("tasks"), dict):
-                        with st.expander("온보딩 Task"):
-                            for level_name, level_tasks in metadata["tasks"].items():
-                                if level_tasks and isinstance(level_tasks, list):
-                                    st.markdown(f"**{level_name.title()}** ({len(level_tasks)}개)")
-                                    for task in level_tasks[:3]:
-                                        if isinstance(task, dict):
-                                            st.markdown(f"- {task.get('title', 'N/A')}")
-                    
-                    # 메시지 저장
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": llm_summary,
-                        "metadata": metadata
-                    })
-                    
-                except Exception as e:
+                    error_msg = f"저장소를 찾을 수 없습니다: `{repo_name}`\n\n정확한 저장소 이름을 확인해주세요. 예: `facebook/react`, `microsoft/vscode`"
+                    st.warning(error_msg)
+                else:
                     error_msg = f"오류 발생: {e}"
                     st.error(error_msg)
-                    
-                    if debug_mode:
-                        import traceback
-                        st.code(traceback.format_exc())
-                    
-                    st.session_state.messages.append({
-                        "role": "assistant",
-                        "content": error_msg,
-                        "metadata": {}
-                    })
+                
+                if debug_mode:
+                    import traceback
+                    st.code(traceback.format_exc())
+                
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": error_msg,
+                    "metadata": {}
+                })
     
     st.rerun()

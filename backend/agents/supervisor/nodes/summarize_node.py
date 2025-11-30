@@ -366,6 +366,11 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     recommend_result = state.get("recommend_result")
     history = state.get("history", [])
     
+    # 진행 상황 콜백
+    progress_cb = state.get("_progress_callback")
+    if progress_cb:
+        progress_cb("응답 생성 중", "분석 결과를 요약하고 있습니다...")
+    
     # Intent 추출 및 유효성 검사
     raw_intent = state.get("intent", "diagnose_repo_health")
     intent = validate_intent(raw_intent)

@@ -99,3 +99,8 @@ class SupervisorState(TypedDict, total=False):
         "continue_same",             # 같은 repo 계속 분석
         None
     ]
+    
+    # ========================================
+    # 진행 상황 콜백 (UI 표시용)
+    # ========================================
+    _progress_callback: Any  # Callable[[str, str], None] - 단계명, 상세 내용

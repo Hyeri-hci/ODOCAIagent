@@ -85,8 +85,12 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 고급 분석 모드: 카테고리별 상세 요약 포함 (LLM 5회, 기본 1회보다 느림)
     advanced_analysis = payload.get("advanced_analysis", False)
 
+    import time
+    phase_times = {}
+
     # Phase 1: GitHub API 병렬 호출
     logger.info("Phase 1: Fetching GitHub data...")
+    t0 = time.time()
     
     if task_type == DiagnosisTaskType.FULL:
         # FULL 모드: repo_info, readme, commits, issues, prs 병렬 호출
@@ -125,6 +129,9 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         commit_metrics = None
         issue_metrics = None
         pr_metrics = None
+    
+    phase_times["phase1_github"] = time.time() - t0
+    logger.info("Phase 1 완료: %.2fs", phase_times["phase1_github"])
 
     # README 메트릭 계산 (로컬, 빠름)
     readme_metrics = None
@@ -133,16 +140,22 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Phase 2: README 분류 + 요약
     logger.info("Phase 2: README classification...")
+    t1 = time.time()
     
     if readme_text:
+        # LLM 재분류로 정확도 향상
         readme_categories, readme_category_score, unified_summary = classify_readme_sections(
             readme_text,
+            use_llm_refine=True,  # LLM으로 애매한 섹션 재분류
             advanced_mode=advanced_analysis,
         )
     else:
         from backend.agents.diagnosis.tools.readme_summarizer import ReadmeUnifiedSummary
         readme_categories, readme_category_score = {}, 0
         unified_summary = ReadmeUnifiedSummary(summary_en="", summary_ko="")
+    
+    phase_times["phase2_readme"] = time.time() - t1
+    logger.info("Phase 2 완료: %.2fs", phase_times["phase2_readme"])
 
     # details 기본 구성
     details: Dict[str, Any] = {
@@ -163,6 +176,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # Phase 3: 점수 계산
     logger.info("Phase 3: Computing scores...")
+    t2 = time.time()
     scores: HealthScore
 
     if task_type == DiagnosisTaskType.FULL:
@@ -233,6 +247,9 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     else:
         scores = create_health_score(0, 0)
 
+    phase_times["phase3_scores"] = time.time() - t2
+    logger.info("Phase 3 완료: %.2fs", phase_times["phase3_scores"])
+
     # 규칙 기반 기본 요약
     natural_summary = _summarize_common(
         repo_info=repo_info,
@@ -267,12 +284,15 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     onboarding_tasks = None
     if USE_ONBOARDING_TASKS:
         logger.info("Phase 4: Computing onboarding tasks...")
+        t3 = time.time()
         onboarding_tasks = compute_onboarding_tasks(
             owner=owner,
             repo=repo,
             labels=labels.to_dict(),
             onboarding_plan=onboarding_plan.to_dict(),
         )
+        phase_times["phase4_onboarding"] = time.time() - t3
+        logger.info("Phase 4 완료: %.2fs", phase_times["phase4_onboarding"])
 
     # 최종 JSON 결과
     result_json: Dict[str, Any] = {
@@ -292,11 +312,21 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     # LLM 기반 요약
     if USE_LLM_SUMMARY:
+        t4 = time.time()
         natural_summary = summarize_diagnosis_repository(
             diagnosis_result=result_json,
             user_level=user_level,
             language="ko",
         )
+        phase_times["phase5_llm_summary"] = time.time() - t4
+        logger.info("Phase 5 (LLM 요약) 완료: %.2fs", phase_times["phase5_llm_summary"])
 
     result_json["natural_language_summary_for_user"] = natural_summary
+    
+    # 전체 시간 로깅
+    total_time = sum(phase_times.values())
+    logger.info("=== Diagnosis 완료: 총 %.2fs ===", total_time)
+    for phase, t in phase_times.items():
+        logger.info("  %s: %.2fs (%.1f%%)", phase, t, t/total_time*100 if total_time > 0 else 0)
+    
     return result_json
