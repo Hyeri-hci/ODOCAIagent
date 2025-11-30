@@ -104,7 +104,9 @@ with st.sidebar:
     st.markdown("**지원 질문 유형**")
     st.markdown("""
 - Health 분석: "facebook/react 상태 분석해줘"
+  - 점수 중심 + Task 3개 간략히
 - 온보딩 추천: "초보자인데 vue에 기여하고 싶어요"
+  - Task 5개+ 상세, 레벨별 설명
 - 점수 설명: "왜 이 점수가 나왔어?"
 - 비교 분석: "react와 vue를 비교해줘"
 - 후속 질문: "더 쉬운 거 없어?"
