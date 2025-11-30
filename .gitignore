@@ -66,3 +66,10 @@ test/benchmark_results/
 # 대용량 캐시/결과
 *.cache.json
 *_cache.json
+
+# ------------------------------------
+# Test results (테스트 결과 파일 제외)
+# ------------------------------------
+tests/test_graph_result.txt
+tests/*_result.txt
+tests/*_result.json
