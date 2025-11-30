@@ -20,7 +20,11 @@ from .service import (
     run_supervisor,
     build_initial_state,
 )
-from .nodes import classify_intent_node
+from .nodes import (
+    classify_intent_node,
+    map_task_types_node,
+    map_to_diagnosis_task_type,
+)
 
 __all__ = [
     "SupervisorState",
@@ -36,4 +40,6 @@ __all__ = [
     "run_supervisor",
     "build_initial_state",
     "classify_intent_node",
+    "map_task_types_node",
+    "map_to_diagnosis_task_type",
 ]
