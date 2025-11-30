@@ -10,6 +10,7 @@ from .task_mapping import (
     map_to_security_task_type,
     map_to_recommend_task_type,
 )
+from .run_diagnosis import run_diagnosis_node
 
 __all__ = [
     "classify_intent_node",
@@ -17,4 +18,5 @@ __all__ = [
     "map_to_diagnosis_task_type",
     "map_to_security_task_type",
     "map_to_recommend_task_type",
+    "run_diagnosis_node",
 ]

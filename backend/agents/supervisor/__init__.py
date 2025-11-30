@@ -24,6 +24,7 @@ from .nodes import (
     classify_intent_node,
     map_task_types_node,
     map_to_diagnosis_task_type,
+    run_diagnosis_node,
 )
 
 __all__ = [
@@ -42,4 +43,5 @@ __all__ = [
     "classify_intent_node",
     "map_task_types_node",
     "map_to_diagnosis_task_type",
+    "run_diagnosis_node",
 ]
