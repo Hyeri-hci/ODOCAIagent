@@ -43,7 +43,7 @@ logging.basicConfig(level=logging.WARNING, format="%(name)s - %(message)s")
 def test_routing():
     """라우팅 테스트 - INTENT_CONFIG 기반"""
     from backend.agents.supervisor.graph import route_after_mapping
-    from backend.agents.supervisor.intent_config import INTENT_CONFIG, is_intent_ready
+    from backend.agents.supervisor.intent_config import INTENT_CONFIG, is_intent_ready, is_refine_intent
     
     print("=" * 70)
     print("1. 라우팅 테스트")
@@ -56,6 +56,8 @@ def test_routing():
         
         if not is_intent_ready(intent):
             expected = "summarize"
+        elif is_refine_intent(intent):
+            expected = "refine_tasks"
         elif config["needs_diagnosis"]:
             expected = "run_diagnosis"
         else:
