@@ -45,9 +45,12 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
 
     diagnosis_result = run_diagnosis(diagnosis_input)
 
+    # health_score는 scores 딕셔너리 안에 있음
+    scores = diagnosis_result.get("scores", {}) if isinstance(diagnosis_result, dict) else {}
     logger.debug(
-        "[run_diagnosis_node] diagnosis completed, health_score=%s",
-        diagnosis_result.get("health_score") if isinstance(diagnosis_result, dict) else "N/A",
+        "[run_diagnosis_node] diagnosis completed, health_score=%s, onboarding_score=%s",
+        scores.get("health_score"),
+        scores.get("onboarding_score"),
     )
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]

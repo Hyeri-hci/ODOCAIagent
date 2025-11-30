@@ -34,6 +34,12 @@ Supervisor task_type 후보:
 - "refine_onboarding_tasks"
 - "explain_scores"
 
+## 중요: GitHub URL 파싱 규칙
+- URL 형식: https://github.com/{owner}/{repo}
+- 예시: https://github.com/facebook/react → owner="facebook", repo="react"
+- 저장소 이름은 URL에 있는 그대로 정확히 추출하세요. 절대 축약하거나 변경하지 마세요.
+- owner/repo 형식(예: facebook/react)도 동일하게 처리합니다.
+
 반드시 아래 JSON 형식만으로 답변하세요.
 
 {
@@ -54,6 +60,41 @@ Supervisor task_type 후보:
 DEFAULT_TASK_TYPE: SupervisorTaskType = "diagnose_repo_health"
 
 
+def _extract_repo_from_query(query: str) -> RepoInfo | None:
+    """
+    사용자 쿼리에서 GitHub URL을 직접 정규식으로 추출.
+    LLM 파싱 실패 시 fallback으로 사용.
+    """
+    # URL 형식: https://github.com/owner/repo
+    url_pattern = r"https?://github\.com/([^/\s]+)/([^/\s?#]+)"
+    match = re.search(url_pattern, query)
+    if match:
+        owner = match.group(1)
+        name = match.group(2)
+        # .git 접미사 제거 (rstrip 대신 endswith 사용)
+        if name.endswith(".git"):
+            name = name[:-4]
+        return {
+            "owner": owner,
+            "name": name,
+            "url": f"https://github.com/{owner}/{name}",
+        }
+    
+    # owner/repo 형식
+    short_pattern = r"(?:^|\s)([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)(?:\s|$)"
+    match = re.search(short_pattern, query)
+    if match:
+        owner = match.group(1)
+        name = match.group(2)
+        return {
+            "owner": owner,
+            "name": name,
+            "url": f"https://github.com/{owner}/{name}",
+        }
+    
+    return None
+
+
 def classify_intent_node(state: SupervisorState) -> SupervisorState:
     """
     사용자 쿼리에서 intent와 task_type을 추론하는 노드
@@ -64,6 +105,9 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     user_query = state.get("user_query", "")
     if not user_query:
         raise ValueError("SupervisorState.user_query가 비어 있습니다.")
+
+    # 먼저 쿼리에서 직접 repo 추출 (LLM 파싱 오류 대비 fallback)
+    fallback_repo = _extract_repo_from_query(user_query)
 
     llm_response = _call_intent_llm(user_query)
     parsed = _parse_llm_response(llm_response)
@@ -77,7 +121,23 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     new_state["task_type"] = task_type
     new_state["intent"] = task_type
 
+    # LLM이 파싱한 repo 정보
     repo_info = _parse_repo_url(parsed.get("repo_url"))
+    
+    # LLM 결과 vs 정규식 fallback 비교
+    if repo_info and fallback_repo:
+        # LLM이 repo 이름을 잘못 파싱했으면 fallback 사용
+        if repo_info["name"] != fallback_repo["name"]:
+            logger.warning(
+                "[classify_intent_node] LLM 파싱 오류 감지: %s -> %s (fallback 사용)",
+                repo_info["name"],
+                fallback_repo["name"],
+            )
+            repo_info = fallback_repo
+    elif not repo_info and fallback_repo:
+        # LLM이 repo를 못 찾았으면 fallback 사용
+        repo_info = fallback_repo
+
     if repo_info:
         new_state["repo"] = repo_info
 
@@ -161,7 +221,10 @@ def _parse_repo_url(url: str | None) -> RepoInfo | None:
         return None
 
     owner = match.group(1)
-    name = match.group(2).rstrip(".git")
+    name = match.group(2)
+    # .git 접미사 제거 (rstrip 대신 endswith 사용)
+    if name.endswith(".git"):
+        name = name[:-4]
 
     return {
         "owner": owner,
