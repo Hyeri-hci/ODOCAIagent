@@ -116,7 +116,7 @@ SUMMARIZE_ONBOARDING_PROMPT = """
 
 **1. [이슈 제목]**
 - 링크: (GitHub 이슈 URL)
-- 난이도: 쉼움/보통/어려움
+- 난이도: 쉬움/보통/어려움
 - 예상 시간: N시간
 - {level_kr}에게 좋은 이유: (간단한 설명)
 
@@ -131,6 +131,166 @@ SUMMARIZE_ONBOARDING_PROMPT = """
 - "온보딩 학습 계획을 세워줘"
 - "비슷한 다른 저장소도 추천해줘"
 """
+
+# ============================================================================
+# Intent별 프롬프트 정의
+# ============================================================================
+
+EXPLAIN_SCORES_PROMPT = """
+당신은 오픈소스 프로젝트 건강 지표를 설명하는 전문가입니다.
+사용자가 특정 점수에 대해 질문하면, 해당 점수가 어떻게 계산되었는지 상세히 설명해 주세요.
+
+## 핵심 원칙
+1. **점수 계산 방식을 명확히 설명** - 어떤 요소들이 점수에 영향을 미쳤는지
+2. 제공된 데이터의 숫자를 근거로 설명
+3. 마크다운 형식 사용
+4. **이모지/이모티콘 절대 사용 금지**
+
+## 점수별 설명 가이드
+
+### health_score (전체 건강 점수)
+- 다른 모든 점수의 가중 평균
+- 문서 품질, 활동성, 온보딩 용이성 등을 종합
+
+### documentation_quality (문서 품질)
+- README 존재 여부 및 완성도
+- CONTRIBUTING.md, CODE_OF_CONDUCT.md 등 기여 가이드 문서
+- 필수 섹션 포함 여부 (설치 방법, 사용 예시, 라이선스 등)
+
+### activity_maintainability (활동성/유지보수성)
+- 최근 90일간 커밋 수, 기여자 수
+- 이슈/PR 처리 속도 및 비율
+- 마지막 커밋 이후 경과 시간
+
+### onboarding_score (온보딩 용이성)
+- 초보자 친화적 이슈 라벨 (good first issue, help wanted 등)
+- 문서 품질과 기여 가이드 완성도
+- 예상 설정 시간
+
+## 출력 형식
+
+## {저장소명} 점수 상세 설명
+
+### 질문하신 점수: {점수명}
+- **현재 점수**: {N}점 ({해석: 매우 우수/우수/양호/보통/개선 필요})
+
+### 점수 산정 근거
+1. **{요소1}**: {상세 설명 + 실제 데이터}
+2. **{요소2}**: {상세 설명 + 실제 데이터}
+...
+
+### 점수 개선 방법
+- {구체적인 개선 제안}
+
+---
+**추가 질문:**
+- "다른 점수도 설명해줘"
+- "이 점수를 올리려면 어떻게 해야 해?"
+"""
+
+COMPARE_REPOS_PROMPT = """
+당신은 오픈소스 프로젝트를 비교 분석하는 전문가입니다.
+두 저장소의 건강 상태를 비교하여 각각의 장단점을 분석해 주세요.
+
+## 핵심 원칙
+1. **객관적 비교** - 두 저장소를 공정하게 비교
+2. 제공된 데이터의 숫자를 근거로 비교
+3. 마크다운 표 형식 활용
+4. **이모지/이모티콘 절대 사용 금지**
+
+## 출력 형식
+
+## 저장소 비교: {저장소A} vs {저장소B}
+
+### 점수 비교표
+| 지표 | {저장소A} | {저장소B} | 우위 |
+|------|----------|----------|------|
+| 전체 건강 점수 | N점 | M점 | {A/B} |
+| 문서 품질 | N점 | M점 | {A/B} |
+| 활동성 | N점 | M점 | {A/B} |
+| 온보딩 용이성 | N점 | M점 | {A/B} |
+
+### {저장소A}의 강점
+- ...
+
+### {저장소B}의 강점
+- ...
+
+### 기여자 관점 추천
+- 초보자에게 더 적합한 저장소: {추천 및 이유}
+- 활발한 커뮤니티를 원한다면: {추천 및 이유}
+
+---
+**추가 분석:**
+- "각 저장소의 온보딩 Task를 비교해줘"
+- "어떤 저장소가 더 활발해?"
+"""
+
+REFINE_TASKS_PROMPT = """
+당신은 오픈소스 기여 Task를 추천하는 전문가입니다.
+사용자의 추가 조건에 맞게 Task 목록을 필터링하고 재정렬해 주세요.
+
+## 핵심 원칙
+1. **사용자 조건 최우선** - 시간, 난이도, 유형 등 조건 반영
+2. 제공된 Task 목록에서만 선택
+3. 마크다운 형식 사용
+4. **이모지/이모티콘 절대 사용 금지**
+
+## 필터링 기준
+- **시간**: 사용자가 투자할 수 있는 시간
+- **난이도**: 쉬움/보통/어려움
+- **유형**: 문서, 테스트, 버그 수정, 기능 추가 등
+- **라벨**: good first issue, help wanted, hacktoberfest 등
+
+## 출력 형식
+
+## 맞춤 Task 추천
+
+### 적용된 필터
+- 시간: {N}시간 이내
+- 난이도: {조건}
+- 유형: {조건}
+
+### 추천 Task (필터 적용 후)
+
+**1. [Task 제목]**
+- 링크: (URL)
+- 난이도: {난이도}
+- 예상 시간: {N}시간
+- 선택 이유: {왜 이 조건에 맞는지}
+
+...
+
+### 필터에 맞는 Task가 부족한 경우
+- 조건을 완화하면 더 많은 Task를 찾을 수 있습니다
+- 예: "시간을 2시간 더 늘리면 N개의 Task 추가 가능"
+
+---
+**조건 변경:**
+- "시간을 더 늘려줘"
+- "더 쉬운 Task만 보여줘"
+"""
+
+# ============================================================================
+# 프롬프트 빌더 함수들
+# ============================================================================
+
+# INTENT_CONFIG 기반 프롬프트 매핑
+from ..intent_config import (
+    get_prompt_kind,
+    is_intent_ready,
+    validate_user_level,
+    validate_intent,
+)
+
+# 프롬프트 종류 -> 프롬프트 상수 매핑
+PROMPT_MAP = {
+    "health": SUMMARIZE_SYSTEM_PROMPT,
+    "explain_scores": EXPLAIN_SCORES_PROMPT,
+    "compare": COMPARE_REPOS_PROMPT,
+    "refine_tasks": REFINE_TASKS_PROMPT,
+    # onboarding은 user_level이 필요하므로 별도 처리
+}
 
 
 def _get_onboarding_prompt(user_level: str) -> str:
@@ -147,21 +307,88 @@ def _get_onboarding_prompt(user_level: str) -> str:
     )
 
 
+def _get_prompt_for_intent(intent: str, user_level: str = "beginner") -> str:
+    """
+    intent에 따라 적절한 시스템 프롬프트 반환
+    
+    INTENT_CONFIG의 prompt_kind를 기반으로 프롬프트를 선택합니다.
+    
+    Args:
+        intent: 사용자 의도 (diagnose_repo_health, diagnose_repo_onboarding, etc.)
+        user_level: 사용자 레벨 (beginner/intermediate/advanced)
+    
+    Returns:
+        해당 intent에 맞는 시스템 프롬프트
+    """
+    prompt_kind = get_prompt_kind(intent)
+    
+    # onboarding은 user_level이 필요하므로 별도 처리
+    if prompt_kind == "onboarding":
+        return _get_onboarding_prompt(user_level)
+    
+    # 나머지는 PROMPT_MAP에서 조회
+    return PROMPT_MAP.get(prompt_kind, SUMMARIZE_SYSTEM_PROMPT)
+
+
+def _get_not_ready_message(intent: str) -> str:
+    """미지원 Intent에 대한 안내 메시지 생성"""
+    intent_names = {
+        "compare_two_repos": "저장소 비교",
+        "refine_onboarding_tasks": "Task 재추천",
+    }
+    feature_name = intent_names.get(intent, intent)
+    return f"""## 기능 준비 중
+
+**{feature_name}** 기능은 현재 개발 중입니다.
+
+### 지금 사용 가능한 기능
+- **저장소 건강 상태 분석**: "facebook/react 건강 상태 분석해줘"
+- **온보딩 Task 추천**: "초보자인데 react에 기여하고 싶어요"
+- **점수 상세 설명**: "이 저장소 점수가 왜 이렇게 나왔어?"
+
+곧 더 많은 기능이 추가될 예정입니다.
+"""
+
+
 def summarize_node(state: SupervisorState) -> SupervisorState:
     """
     모든 Agent 결과를 종합하여 사용자에게 최종 응답을 생성합니다.
+    
+    Intent별 요약 모드:
+    - diagnose_repo_health: Health 리포트 모드
+    - diagnose_repo_onboarding: 온보딩 가이드 모드
+    - compare_two_repos: 비교 리포트 모드
+    - refine_onboarding_tasks: 리랭킹/필터링 모드
+    - explain_scores: 지표 설명 모드
     """
     diagnosis_result = state.get("diagnosis_result")
     security_result = state.get("security_result")
     recommend_result = state.get("recommend_result")
     history = state.get("history", [])
     
-    # 온보딩 모드 판단: intent가 onboarding이거나 user_context.level이 beginner
-    intent = state.get("intent", "")
+    # Intent 추출 및 유효성 검사
+    raw_intent = state.get("intent", "diagnose_repo_health")
+    intent = validate_intent(raw_intent)
     user_context = state.get("user_context", {})
+    
+    # 사용자 레벨 추출 및 유효성 검사
+    raw_level = user_context.get("level")
+    user_level = validate_user_level(raw_level)
+    
+    # 미지원 Intent 가드
+    if not is_intent_ready(intent):
+        summary = _get_not_ready_message(intent)
+        new_state: SupervisorState = dict(state)  # type: ignore[assignment]
+        new_history = list(history)
+        new_history.append({"role": "assistant", "content": summary})
+        new_state["history"] = new_history
+        new_state["llm_summary"] = summary
+        return new_state
+    
+    # 온보딩 모드 판단: intent가 onboarding이거나 user_level이 beginner
     is_onboarding_mode = (
         intent == "diagnose_repo_onboarding" or
-        user_context.get("level") == "beginner"
+        user_level == "beginner"
     )
 
     # 마지막 사용자 질문 추출 (history 우선, 없으면 state의 user_query fallback)
@@ -175,9 +402,6 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if not user_query:
         user_query = state.get("user_query", "")
 
-    # 사용자 레벨 추출 (beginner/intermediate/advanced)
-    user_level = user_context.get("level", "beginner")  # 기본값: beginner
-
     # 결과 조합
     context_parts = []
 
@@ -190,16 +414,26 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if recommend_result:
         context_parts.append(f"## 추천 정보\n{_format_result(recommend_result)}")
 
+    # 진단 결과 없음 가드 (explain_scores 등에서 필요)
     if not context_parts:
-        summary = "분석 결과가 없습니다. 다시 시도해 주세요."
+        if intent == "explain_scores":
+            summary = "점수를 설명하려면 먼저 저장소 분석이 필요합니다. 저장소 URL과 함께 다시 질문해 주세요."
+        else:
+            summary = "분석 결과가 없습니다. 다시 시도해 주세요."
     else:
         context = "\n\n".join(context_parts)
-        summary = _generate_summary_with_llm(user_query, context, is_onboarding_mode, user_level)
+        # intent 기반 프롬프트 선택
+        summary = _generate_summary_with_llm(
+            user_query=user_query,
+            context=context,
+            intent=intent,
+            user_level=user_level,
+        )
 
     # 벤치마크용 로깅: repo 정보와 함께 기록
     repo = state.get("repo", {})
     repo_id = f"{repo.get('owner', '')}/{repo.get('name', '')}" if repo else "unknown"
-    logger.info("[summarize_node] repo=%s, summary_length=%d", repo_id, len(summary))
+    logger.info("[summarize_node] repo=%s, intent=%s, user_level=%s, summary_length=%d", repo_id, intent, user_level, len(summary))
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]
 
@@ -479,7 +713,7 @@ def _format_result(result: Any) -> str:
 def _generate_summary_with_llm(
     user_query: str, 
     context: str, 
-    is_onboarding_mode: bool = False,
+    intent: str = "diagnose_repo_health",
     user_level: str = "beginner"
 ) -> str:
     """
@@ -488,7 +722,7 @@ def _generate_summary_with_llm(
     Args:
         user_query: 사용자 질문
         context: 진단 결과 컨텍스트
-        is_onboarding_mode: 온보딩 모드 여부 (True면 온보딩 프롬프트 사용)
+        intent: 사용자 의도 (diagnose_repo_health, diagnose_repo_onboarding, explain_scores, etc.)
         user_level: 사용자 레벨 (beginner/intermediate/advanced)
     """
     import os
@@ -496,11 +730,11 @@ def _generate_summary_with_llm(
     llm_client = fetch_llm_client()
     model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
     
-    # 온보딩 모드에 따라 프롬프트 선택 (레벨 반영)
-    if is_onboarding_mode:
-        system_prompt = _get_onboarding_prompt(user_level)
-    else:
-        system_prompt = SUMMARIZE_SYSTEM_PROMPT
+    # Intent 기반 프롬프트 선택
+    system_prompt = _get_prompt_for_intent(intent, user_level)
+    
+    # 로깅: 어떤 프롬프트 모드가 선택되었는지
+    logger.debug("[_generate_summary_with_llm] intent=%s, user_level=%s", intent, user_level)
 
     user_message = f"""
 사용자 질문: {user_query}

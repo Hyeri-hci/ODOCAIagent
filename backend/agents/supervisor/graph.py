@@ -9,22 +9,26 @@ from backend.agents.supervisor.nodes.intent_classifier import classify_intent_no
 from backend.agents.supervisor.nodes.task_mapping import map_task_types_node
 from backend.agents.supervisor.nodes.run_diagnosis import run_diagnosis_node
 from backend.agents.supervisor.nodes.summarize_node import summarize_node
+from backend.agents.supervisor.intent_config import needs_diagnosis, is_intent_ready
 
 
 def route_after_mapping(state: SupervisorState) -> str:
     """
     mapping 이후 어떤 Agent 노드로 갈지 결정.
-    - 전역 task_type + Agent별 task_type을 함께 보고 분기 가능.
+    
+    INTENT_CONFIG의 needs_diagnosis 값을 기반으로 분기합니다.
+    미지원 Intent는 바로 summarize로 보내서 안내 메시지를 표시합니다.
     """
     task_type = state.get("task_type", "diagnose_repo_health")
 
-    if task_type in ("diagnose_repo_health", "diagnose_repo_onboarding", "compare_two_repos"):
-        return "run_diagnosis"
-
-    if task_type in ("refine_onboarding_tasks", "explain_scores"):
-        # 추후: 별도 노드 추가 가능
+    # 미지원 Intent는 바로 summarize로 (안내 메시지 표시)
+    if not is_intent_ready(task_type):
         return "summarize"
-
+    
+    # INTENT_CONFIG 기반 라우팅
+    if needs_diagnosis(task_type):
+        return "run_diagnosis"
+    
     return "summarize"
 
 
