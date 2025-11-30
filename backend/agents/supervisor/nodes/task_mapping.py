@@ -21,6 +21,7 @@ from ..models import (
     DiagnosisTaskType,
     SecurityTaskType,
     RecommendTaskType,
+    diagnosis_needs_from_task_type,
 )
 from ..intent_config import get_diagnosis_task_type
 
@@ -57,7 +58,7 @@ def map_task_types_node(state: SupervisorState) -> SupervisorState:
     LangGraph 노드: Agent별 task_type 매핑
     
     state.task_type(Supervisor 전역)을 읽고
-    diagnosis_task_type / security_task_type / recommend_task_type을 설정한다.
+    diagnosis_task_type / diagnosis_needs / security_task_type / recommend_task_type을 설정한다.
     """
     if "task_type" not in state:
         raise ValueError("map_task_types_node: state['task_type']가 없습니다.")
@@ -65,16 +66,18 @@ def map_task_types_node(state: SupervisorState) -> SupervisorState:
     task_type = state["task_type"]
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]
-    new_state["diagnosis_task_type"] = map_to_diagnosis_task_type(task_type)
+    
+    diagnosis_task_type = map_to_diagnosis_task_type(task_type)
+    new_state["diagnosis_task_type"] = diagnosis_task_type
+    new_state["diagnosis_needs"] = diagnosis_needs_from_task_type(diagnosis_task_type)
     new_state["security_task_type"] = map_to_security_task_type(task_type)
     new_state["recommend_task_type"] = map_to_recommend_task_type(task_type)
 
     logger.info(
-        "[map_task_types_node] task_type=%s -> diagnosis=%s, security=%s, recommend=%s",
+        "[map_task_types_node] task_type=%s -> diagnosis=%s, needs=%s",
         task_type,
         new_state.get("diagnosis_task_type"),
-        new_state.get("security_task_type"),
-        new_state.get("recommend_task_type"),
+        new_state.get("diagnosis_needs"),
     )
 
     return new_state
