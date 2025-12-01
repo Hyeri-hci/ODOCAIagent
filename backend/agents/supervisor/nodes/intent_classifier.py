@@ -1,9 +1,11 @@
 """
 Intent 분류 노드
 
-사용자 자연어 쿼리를 분석하여 Supervisor task_type을 추론한다.
+사용자 자연어 쿼리를 분석하여 Intent와 SubIntent를 추론한다.
+- Intent: analyze | followup | general_qa
+- SubIntent: health | onboarding | compare | explain | refine | concept | chat
+
 멀티턴 대화에서 이전 컨텍스트를 참조하는 follow-up 질의도 처리한다.
-Agent별 task_type은 여기서 설정하지 않으며, 이후 매핑 노드에서 처리한다.
 """
 from __future__ import annotations
 
@@ -17,78 +19,184 @@ from backend.llm.factory import fetch_llm_client
 
 logger = logging.getLogger(__name__)
 
-from ..models import SupervisorState, SupervisorTaskType, RepoInfo, UserContext
-from ..intent_config import validate_followup_type
+from ..models import (
+    SupervisorState, 
+    SupervisorIntent,
+    SubIntent,
+    RepoInfo, 
+    UserContext,
+    DEFAULT_INTENT,
+    DEFAULT_SUB_INTENT,
+    VALID_INTENTS,
+    VALID_SUB_INTENTS,
+    convert_legacy_task_type,
+)
+from ..intent_config import validate_followup_type, validate_intent, validate_sub_intent
 
+
+def _normalize_history(history: Any) -> list[dict]:
+    """
+    history를 표준화된 list[dict] 형태로 변환.
+    
+    문자열이 들어오는 등 비정상 입력 에러 방지.
+    
+    Args:
+        history: 원본 history (다양한 타입 가능)
+    
+    Returns:
+        정규화된 list[dict] 형태의 history
+    
+    Examples:
+        >>> _normalize_history(None)
+        []
+        >>> _normalize_history("invalid")
+        []
+        >>> _normalize_history([{"role": "user", "content": "hi"}])
+        [{"role": "user", "content": "hi"}]
+    """
+    if history is None:
+        return []
+    
+    if isinstance(history, str):
+        # 문자열이 들어오면 무시
+        logger.warning("[_normalize_history] history가 문자열입니다: %s", history[:100])
+        return []
+    
+    if not isinstance(history, list):
+        logger.warning("[_normalize_history] history가 list가 아닙니다: %s", type(history))
+        return []
+    
+    # 각 요소가 dict인지 확인
+    normalized = []
+    for item in history:
+        if isinstance(item, dict) and "role" in item and "content" in item:
+            normalized.append(item)
+        else:
+            logger.warning("[_normalize_history] 잘못된 history 항목: %s", item)
+    
+    return normalized
+
+
+# =============================================================================
+# 새 Intent 분류 프롬프트 (v2: 3개 Intent + SubIntent)
+# =============================================================================
 
 INTENT_SYSTEM_PROMPT = """
 당신은 OSS 온보딩 플랫폼 ODOC의 Supervisor Agent입니다.
 
-역할:
-1) 사용자의 한국어/영어 질의를 읽고, 아래 Supervisor task_type 중 하나로 분류합니다.
+## 역할
+1) 사용자의 한국어/영어 질의를 읽고, Intent와 SubIntent를 분류합니다.
 2) 질의 안에 포함된 GitHub 저장소 URL이 있다면 추출합니다.
-3) 사용자의 수준(level), 목표(goal), 사용 가능 시간(time_budget_hours), 선호 언어(preferred_language)를 추론합니다.
-4) 이전 대화 컨텍스트가 있다면, 현재 질의가 이전 결과를 참조하는지 판단합니다.
+3) 사용자의 수준(level), 목표(goal) 등을 추론합니다.
 
-Supervisor task_type 후보:
-- "diagnose_repo_health": 저장소 건강 상태 분석
-- "diagnose_repo_onboarding": 온보딩 Task 추천
-- "compare_two_repos": 두 저장소 비교
-- "refine_onboarding_tasks": 기존 Task 목록 재필터링 (더 쉬운/어려운 Task 요청)
-- "explain_scores": 점수 계산 방식 설명
+## Intent 분류 (3가지)
 
-## 중요: GitHub URL 파싱 규칙
+### analyze
+- **정의**: 새로운 저장소 분석이 필요한 요청
+- **조건**: GitHub URL이 있거나, 새로운 저장소/비교를 요청할 때
+- **sub_intent**: health, onboarding, compare
+
+### followup
+- **정의**: 이전 분석 결과에 대한 후속 질문
+- **조건**: 이전 대화 컨텍스트를 참조하여 더 자세히 묻거나, 결과를 조정할 때
+- **sub_intent**: explain, refine
+
+### general_qa
+- **정의**: 특정 저장소 없이 개념, 프로세스, 일반 질문
+- **조건**: 저장소 분석 없이 답변 가능한 질문
+- **sub_intent**: concept, chat
+
+## SubIntent 분류 (7가지)
+
+| SubIntent | 설명 | 예시 |
+|-----------|------|------|
+| health | 저장소 건강 상태 분석 | "react 상태 분석해줘" |
+| onboarding | 온보딩 Task 추천 | "초보자인데 이 프로젝트에 기여하고 싶어" |
+| compare | 두 저장소 비교 | "react랑 vue 비교해줘" |
+| explain | 이전 결과 상세 설명 | "4단계 테스트를 더 자세히 설명해줘" |
+| refine | Task 재필터링 | "더 쉬운 이슈는 없을까?" |
+| concept | 지표/개념 설명 | "health_score가 정확히 뭐야?" |
+| chat | 일반 대화/인사 | "안녕? 뭐 하는 에이전트야?" |
+
+## 분류 규칙 (중요!)
+
+1. **새 repo/새 비교 요청 → analyze**
+   - 새로운 저장소 URL이 있으면 무조건 analyze
+   - "A랑 B 비교해줘" → analyze + compare
+
+2. **이전 결과 확대 설명/리랭킹 → followup**
+   - 저장소 URL 없음 + 이전 대화 컨텍스트 참조
+   - "더 쉬운 거", "왜 이런 점수가?", "자세히" → followup
+
+3. **지표 개념/진단 기준 → general_qa + concept**
+   - 저장소 없이 답변 가능한 개념 질문
+   - "온보딩 용이성이 뭐야?", "PR은 어떻게 보내?"
+
+4. **잡담/인사 → general_qa + chat**
+   - OSS와 직접 관련 없는 인사, 질문
+   - "안녕", "고마워", "뭐 하는 에이전트야?"
+
+## 분류 예시
+
+| 질의 | intent | sub_intent |
+|------|--------|------------|
+| "react 상태 분석해줘" | analyze | health |
+| "https://github.com/facebook/react 분석해줘" | analyze | health |
+| "초보자인데 이 프로젝트에 기여하고 싶어" | analyze | onboarding |
+| "그럼 vue랑 비교해줘" | analyze | compare |
+| "점수 설명해줘" | followup | explain |
+| "왜 이런 점수가 나왔어?" | followup | explain |
+| "4단계 테스트를 더 자세히 설명해줘" | followup | explain |
+| "더 쉬운 이슈는 없을까?" | followup | refine |
+| "더 쉬운 거 추천해줘" | followup | refine |
+| "다른 종류의 Task 보여줘" | followup | refine |
+| "health_score가 정확히 뭐야?" | general_qa | concept |
+| "온보딩 용이성이 무슨 뜻이야?" | general_qa | concept |
+| "안녕? 뭐 하는 에이전트야?" | general_qa | chat |
+| "고마워!" | general_qa | chat |
+
+## followup vs analyze 구분 핵심
+
+**followup (explain, refine):**
+- 이전 대화 컨텍스트를 참조하여 "설명", "재필터링"을 요청
+- 새로운 저장소 URL이 없음 (이전에 분석한 저장소를 기준으로)
+- 예: "점수 왜 이래?", "더 쉬운 거", "자세히 설명해줘"
+
+**analyze (health, onboarding, compare):**
+- 새로운 저장소 URL이 명시되거나 새 분석을 요청
+- 예: "react 분석해줘", "이 프로젝트 기여하고 싶어"
+
+## GitHub URL 파싱 규칙
 - URL 형식: https://github.com/{owner}/{repo}
 - 예시: https://github.com/facebook/react → owner="facebook", repo="react"
-- 저장소 이름은 URL에 있는 그대로 정확히 추출하세요. 절대 축약하거나 변경하지 마세요.
-- owner/repo 형식(예: facebook/react)도 동일하게 처리합니다.
+- 저장소 이름은 URL에 있는 그대로 정확히 추출하세요.
 
-## 멀티턴 대화 처리 (중요!)
+## 후속 질문 감지 (followup 판단용)
+아래와 같은 표현이 있으면 followup일 가능성 높음:
+- 지시대명사: "그거", "이거", "그 저장소", "아까 그"
+- 추가 요청: "더", "다른", "또", "그 외에"
+- 설명 요청: "왜", "어떻게", "무슨 뜻", "자세히"
+- 후속 질문: "그러면", "그럼", "근데"
 
-### is_followup 판단 기준:
-1. **새로운 저장소 URL이 명시됨** → is_followup=false (새로운 분석 시작)
-2. **저장소 URL 없음 + 이전 대화 컨텍스트 있음** → is_followup=true (이전 결과 참조)
-3. **아래와 같은 표현이 있으면 거의 확실히 follow-up:**
-   - 지시대명사: "그거", "이거", "그 저장소", "아까 그", "위에서"
-   - 추가 요청: "더", "다른", "또", "그 외에", "나머지"
-   - 비교/변경: "대신", "말고", "바꿔서"
-   - 설명 요청: "왜", "어떻게", "무슨 뜻", "자세히"
-   - 후속 질문: "그러면", "그럼", "근데", "참고로"
-
-### is_followup=true일 때 task_type 분류:
-- "더 쉬운 거 없어?", "좀 더 어려운 Task는?" → refine_onboarding_tasks
-- "다른 점수도 설명해줘", "왜 이런 점수가?" → explain_scores
-- "이 repo 말고 비슷한 거 추천해줘" → compare_two_repos
-- "건강 상태는?", "전체적으로 어때?" → diagnose_repo_health
-
-followup_type 후보 (is_followup이 true일 때만):
-- "refine_easier": 더 쉬운 Task 요청
-- "refine_harder": 더 어려운 Task 요청  
-- "refine_different": 다른 종류의 Task 요청
-- "ask_detail": 상세 설명 요청 (점수, 결과 등)
-- "compare_similar": 비슷한 저장소 비교 요청
-- "continue_same": 같은 저장소에 대한 추가 질문
+## 출력 형식
 
 반드시 아래 JSON 형식만으로 답변하세요.
 
 {
-  "task_type": "<위 task_type 중 하나>",
-  "repo_url": "<주 대상 repo URL 또는 null>",
+  "intent": "analyze|followup|general_qa",
+  "sub_intent": "health|onboarding|compare|explain|refine|concept|chat",
+  "repo_url": "<GitHub URL 또는 null>",
   "compare_repo_url": "<비교 대상 repo URL 또는 null>",
-  "is_followup": <true|false>,
-  "followup_type": "<위 followup_type 중 하나 또는 null>",
   "user_context": {
-    "level": "<beginner|intermediate|advanced 또는 null>",
+    "level": "beginner|intermediate|advanced 또는 null",
     "goal": "<사용자 목표 요약 또는 null>",
     "time_budget_hours": <숫자 또는 null>,
-    "preferred_language": "<ko|en 등 또는 null>"
+    "preferred_language": "ko|en 등 또는 null"
   }
 }
 
 추가 설명이나 자연어 문장은 절대 포함하지 마세요.
 """.strip()
-
-DEFAULT_TASK_TYPE: SupervisorTaskType = "diagnose_repo_health"
 
 
 def _extract_repo_from_query(query: str) -> RepoInfo | None:
@@ -163,14 +271,14 @@ def _extract_all_repos_from_query(query: str) -> list[RepoInfo]:
 
 def classify_intent_node(state: SupervisorState) -> SupervisorState:
     """
-    사용자 쿼리에서 intent와 task_type을 추론하는 노드
+    사용자 쿼리에서 intent와 sub_intent를 추론하는 노드
     
     LLM을 호출하여 자연어 쿼리를 분석하고,
-    전역 task_type만 설정한다. Agent별 task_type은 설정하지 않는다.
+    Intent(analyze/followup/general_qa)와 SubIntent를 설정한다.
     
     멀티턴 대화에서는:
     - 이전 컨텍스트(last_repo, last_task_list)를 참조하여 follow-up 질의 처리
-    - is_followup, followup_type 필드 설정
+    - is_followup 필드 설정
     """
     user_query = state.get("user_query", "")
     if not user_query:
@@ -187,7 +295,10 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     # 이전 컨텍스트 확인
     last_repo = state.get("last_repo")
     last_intent = state.get("last_intent")
-    history = state.get("history", [])
+    
+    # history 정규화 (str이 들어오는 등의 에러 방지)
+    raw_history = state.get("history", [])
+    history = _normalize_history(raw_history)
 
     # LLM 호출 (이전 컨텍스트 포함)
     llm_response = _call_intent_llm_with_context(user_query, history, last_repo)
@@ -195,18 +306,28 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]
 
-    task_type = parsed.get("task_type", DEFAULT_TASK_TYPE)
-    if not _is_valid_task_type(task_type):
-        task_type = DEFAULT_TASK_TYPE
-
-    new_state["task_type"] = task_type
-    new_state["intent"] = task_type
+    # ========================================
+    # 새 구조: intent + sub_intent 설정
+    # ========================================
+    intent = parsed.get("intent", DEFAULT_INTENT)
+    sub_intent = parsed.get("sub_intent", DEFAULT_SUB_INTENT)
     
-    # Follow-up 정보 설정
-    is_followup = parsed.get("is_followup", False)
-    followup_type = validate_followup_type(parsed.get("followup_type"))
+    # 유효성 검사
+    intent = validate_intent(intent)
+    sub_intent = validate_sub_intent(sub_intent)
     
+    new_state["intent"] = intent
+    new_state["sub_intent"] = sub_intent
+    
+    # 레거시 호환: task_type도 설정 (기존 코드 호환)
+    new_state["task_type"] = _convert_to_legacy_task_type(intent, sub_intent)
+    
+    # Follow-up 판단 (intent가 followup이면 True)
+    is_followup = (intent == "followup")
     new_state["is_followup"] = is_followup
+    
+    # followup_type 설정 (refine → refine_easier/harder 등으로 매핑)
+    followup_type = _infer_followup_type(sub_intent, user_query) if is_followup else None
     new_state["followup_type"] = followup_type
 
     # LLM이 파싱한 repo 정보
@@ -237,6 +358,14 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
             new_state["is_followup"] = True
         
         repo_info = last_repo
+    
+    # followup인데 repo_info도 없고 last_repo도 없는 경우 → 에러 메시지 설정
+    # (graph.py에서 처리하지만, 여기서 더 명확한 안내 가능)
+    if is_followup and not repo_info and not last_repo:
+        logger.warning(
+            "[classify_intent_node] followup 요청이지만 분석할 저장소가 없습니다"
+        )
+        # 에러 메시지는 graph.py의 route_after_mapping에서 설정되므로 여기선 로깅만
         logger.info(
             "[classify_intent_node] Follow-up: last_repo 사용 (%s/%s)",
             last_repo.get("owner"),
@@ -259,7 +388,7 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
         new_state["compare_repo"] = compare_repo_info
 
     # 비교 모드일 때 fallback: LLM이 두 저장소를 못 파싱했으면 정규식으로 추출
-    if task_type == "compare_two_repos":
+    if sub_intent == "compare":
         if not new_state.get("repo") or not new_state.get("compare_repo"):
             all_repos = _extract_all_repos_from_query(user_query)
             if len(all_repos) >= 2:
@@ -270,25 +399,26 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
                 )
                 new_state["repo"] = all_repos[0]
                 new_state["compare_repo"] = all_repos[1]
+                # repos 리스트도 설정 (나중 확장용)
+                new_state["repos"] = all_repos[:2]
             elif len(all_repos) == 1 and not new_state.get("repo"):
-                # 하나만 추출된 경우 repo에만 설정
                 new_state["repo"] = all_repos[0]
 
     user_context = _parse_user_context(parsed.get("user_context", {}))
     if user_context:
         new_state["user_context"] = user_context
 
+    # history에 현재 쿼리 추가 (dict 형태로 통일)
     history = list(state.get("history", []))
     history.append({"role": "user", "content": user_query})
     new_state["history"] = history
 
     logger.info(
-        "[classify_intent_node] task_type=%s, repo=%s, user_context=%s, is_followup=%s, followup_type=%s",
-        new_state.get("task_type"),
+        "[classify_intent_node] intent=%s, sub_intent=%s, repo=%s, is_followup=%s",
+        new_state.get("intent"),
+        new_state.get("sub_intent"),
         new_state.get("repo"),
-        new_state.get("user_context"),
         new_state.get("is_followup"),
-        new_state.get("followup_type"),
     )
 
     return new_state
@@ -354,16 +484,52 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
         return {}
 
 
-def _is_valid_task_type(value: str) -> bool:
-    """유효한 SupervisorTaskType인지 확인"""
-    valid_types = {
-        "diagnose_repo_health",
-        "diagnose_repo_onboarding",
-        "compare_two_repos",
-        "refine_onboarding_tasks",
-        "explain_scores",
+def _is_valid_intent(value: str) -> bool:
+    """유효한 SupervisorIntent인지 확인 (새 구조)"""
+    return value in VALID_INTENTS
+
+
+def _is_valid_sub_intent(value: str) -> bool:
+    """유효한 SubIntent인지 확인"""
+    return value in VALID_SUB_INTENTS
+
+
+def _convert_to_legacy_task_type(intent: str, sub_intent: str) -> str:
+    """
+    새 (intent, sub_intent) 구조를 레거시 task_type으로 변환.
+    기존 코드와의 호환성을 위해 사용.
+    """
+    mapping = {
+        ("analyze", "health"): "diagnose_repo_health",
+        ("analyze", "onboarding"): "diagnose_repo_onboarding",
+        ("analyze", "compare"): "compare_two_repos",
+        ("followup", "explain"): "explain_scores",
+        ("followup", "refine"): "refine_onboarding_tasks",
+        ("general_qa", "concept"): "concept_qa_metric",
+        ("general_qa", "chat"): "concept_qa_process",  # chat도 일반 응답으로 처리
     }
-    return value in valid_types
+    return mapping.get((intent, sub_intent), "diagnose_repo_health")
+
+
+def _infer_followup_type(sub_intent: str, user_query: str) -> str | None:
+    """
+    sub_intent와 쿼리 내용으로 followup_type 추론.
+    """
+    query_lower = user_query.lower()
+    
+    if sub_intent == "refine":
+        if any(kw in query_lower for kw in ["쉬운", "쉽", "easy", "easier", "simple"]):
+            return "refine_easier"
+        elif any(kw in query_lower for kw in ["어려운", "어렵", "hard", "harder", "difficult", "challenge"]):
+            return "refine_harder"
+        elif any(kw in query_lower for kw in ["다른", "다르", "different", "another", "other"]):
+            return "refine_different"
+        return "refine_easier"  # 기본값
+    
+    if sub_intent == "explain":
+        return "ask_detail"
+    
+    return None
 
 
 def _parse_repo_url(url: str | None) -> RepoInfo | None:

@@ -1,23 +1,50 @@
+"""Summarize Node - 분석 결과 요약 및 사용자 응답 생성."""
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Optional, Union
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
-from backend.agents.diagnosis.tools.onboarding_tasks import (
+from backend.agents.diagnosis.tools.onboarding.onboarding_tasks import (
     OnboardingTasks,
     TaskSuggestion,
     filter_tasks_for_user,
 )
+from backend.agents.diagnosis.tools.scoring.health_formulas import (
+    SCORE_FORMULA_DESC,
+)
+from backend.agents.diagnosis.tools.scoring.reasoning_builder import (
+    classify_explain_depth,
+    build_warning_text,
+)
+from backend.agents.diagnosis.tools.scoring.metric_definitions import (
+    get_metric_by_alias,
+    get_all_aliases,
+    format_metric_for_concept_qa,
+    METRIC_DEFINITIONS,
+)
 
-from ..models import SupervisorState
+from ..models import (
+    SupervisorState,
+    ExplainTarget,
+    DEFAULT_INTENT,
+    DEFAULT_SUB_INTENT,
+    decide_explain_target,
+)
+from ..intent_config import (
+    get_intent_meta,
+    get_answer_kind,
+    is_concept_qa,
+    is_chat,
+)
 
 logger = logging.getLogger(__name__)
 
 
 def _safe_round(value: Optional[Union[int, float]], digits: int = 1) -> str:
-    """None-safe round 함수. None이면 'N/A' 반환."""
+    """None-safe round 함수"""
     if value is None:
         return "N/A"
     try:
@@ -26,272 +53,644 @@ def _safe_round(value: Optional[Union[int, float]], digits: int = 1) -> str:
         return "N/A"
 
 
+# ============================================================================
+# Metric alias helpers (Single Source of Truth)
+# ============================================================================
+
+METRIC_ALIAS_MAP = get_all_aliases()
+SORTED_ALIASES = sorted(METRIC_ALIAS_MAP.keys(), key=len, reverse=True)
+METRIC_NAME_KR = {key: metric.name_ko for key, metric in METRIC_DEFINITIONS.items()}
+AVAILABLE_METRICS = set(METRIC_DEFINITIONS.keys())
+METRIC_LIST_TEXT = ", ".join(METRIC_NAME_KR.values())
+
+METRIC_NOT_FOUND_MESSAGE = (
+    "진단 결과에서 '{metrics}' 지표가 계산되지 않은 것으로 보입니다.\n"
+    f"현재는 {METRIC_LIST_TEXT} 지표만 제공하고 있습니다."
+)
+
+
+def _extract_target_metrics(user_query: str) -> list[str]:
+    """����� �������� ���� ��� metric ����."""
+    query_lower = user_query.lower()
+    found_metrics: list[str] = []
+    
+    for alias in SORTED_ALIASES:
+        if alias in query_lower:
+            metric_id = METRIC_ALIAS_MAP[alias]
+            if metric_id not in found_metrics:
+                found_metrics.append(metric_id)
+    
+    return found_metrics
+
+
+def _ensure_metrics_exist(
+    state: SupervisorState, 
+    requested_metrics: list[str]
+) -> tuple[list[str], str | None]:
+    """
+    요청된 metric이 실제로 존재하는지 검증.
+    
+    Returns:
+        (valid_metrics, error_message)
+        - valid_metrics: 존재하는 metric만 필터링된 리스트
+        - error_message: 모든 metric이 없으면 에러 메시지, 있으면 None
+    """
+    diagnosis_result = state.get("diagnosis_result")
+    if not diagnosis_result or not isinstance(diagnosis_result, dict):
+        return [], "진단 결과가 없어 점수를 설명할 수 없습니다."
+    
+    scores = diagnosis_result.get("scores", {})
+    available = set(scores.keys())
+    
+    valid = [m for m in requested_metrics if m in available]
+    missing = [m for m in requested_metrics if m not in available and m not in AVAILABLE_METRICS]
+    
+    if not valid and missing:
+        missing_names = ", ".join(missing)
+        return [], METRIC_NOT_FOUND_MESSAGE.format(metrics=missing_names)
+    
+    if not valid and requested_metrics:
+        unknown_names = ", ".join(requested_metrics)
+        return [], METRIC_NOT_FOUND_MESSAGE.format(metrics=unknown_names)
+    
+    return valid, None
+
+
 SUMMARIZE_SYSTEM_PROMPT = """
 당신은 오픈소스 프로젝트 분석 결과를 요약하는 전문가입니다.
-진단 결과 JSON 데이터를 사용자가 이해하기 쉽게 한국어로 요약해 주세요.
+진단 결과를 사용자가 이해하기 쉽게 한국어로 요약해 주세요.
 
 ## 핵심 원칙
 1. **제공된 데이터에 있는 숫자만 사용** - 데이터에 없는 숫자를 만들어 내지 마세요
 2. 핵심 정보를 간결하게 전달
-3. 마크다운 형식 사용 (##, ###, -, ** 등)
-4. **이모지/이모티콘 절대 사용 금지** - 별, 하트, 체크마크, 화살표, 불꽃, 로켓 등 모든 이모지 기호 사용 금지
+3. 마크다운 형식 사용
+4. **이모지 절대 사용 금지**
 
-## 숫자 사용 규칙 (매우 중요!)
-- "활동성 데이터" 섹션에 있는 숫자를 그대로 인용하세요
-- 예: "총 커밋 수: 100건" → "최근 90일간 100건의 커밋"
-- 예: "고유 기여자 수: 19명" → "19명의 기여자"
-- 예: "기간 내 생성된 이슈: 229건" → "229건의 이슈 생성"
-- 예: "기간 내 PR 수: 616건, 병합된 PR: 386건" → "616건의 PR 중 386건 병합"
-
-## 점수 해석 가이드 (100점 만점) - 반드시 이 표현만 사용!
+## 점수 해석 가이드 (100점 만점)
 - 90-100점: 매우 우수
 - 80-89점: 우수
 - 70-79점: 양호
 - 60-69점: 보통
 - 60점 미만: 개선 필요
 
-점수 설명에 사용할 표현은 위 구간 정의(매우 우수/우수/양호/보통/개선 필요) 중 하나로 제한하세요.
+## 출력 형식 (반드시 이 순서로)
 
-## 출력 형식
+### 한 줄 요약
+전체적으로 [상태]한 프로젝트입니다. [핵심 특징 한 문장]
 
-## {저장소명} 저장소 건강 상태 요약
+### 점수표
+| 지표 | 점수 | 상태 |
+|------|------|------|
+| 건강 점수 | {health_score} | {해석} |
+| 문서 품질 | {documentation_quality} | {해석} |
+| 활동성 | {activity_maintainability} | {해석} |
+| 온보딩 용이성 | {onboarding_score} | {해석} |
 
-### 점수 요약
-- **전체 건강 점수**: {health_score}점 ({해석})
-- **문서 품질**: {documentation_quality}점 ({이유})
-- **활동성**: {activity_maintainability}점 ({이유, 활동성 데이터의 숫자 활용})
-- **온보딩 용이성**: {onboarding_score}점 ({이유})
+### 강점
+- (데이터 기반 강점 2-3개)
 
-### 주요 특징
-- 저장소 설명과 기술적 특징
-- 활동성 요약 (제공된 숫자 사용: 커밋 수, 기여자 수, 이슈/PR 현황)
+### 개선 필요
+- (데이터 기반 개선점 2-3개)
 
-### 추천 시작 Task (초보자용)
-- **3개만 간략히 추천** - 제목, 난이도, 링크만 표시
-- 상세 설명은 생략하고 "참고용"으로 간단히 안내
-- 더 많은 Task가 필요하면 "기여하고 싶어요"라고 요청하도록 안내
+### 다음 행동 권장
+- "기여하고 싶어요" - 초보자용 Task 5개 추천
+- "온보딩 점수 설명해줘" - 점수 상세 해석
+- "비슷한 저장소와 비교해줘" - 다른 프로젝트와 비교
 
-### 개선이 필요한 부분
-- 문서에서 누락된 섹션 기반 개선점
-- 이슈/PR 처리 속도 관련 개선점
-
----
-**다음으로 이런 것도 해드릴 수 있어요:**
-- "이 저장소에서 초보자가 시작하기 좋은 이슈를 찾아줘"
-- "비슷한 다른 저장소와 비교해줘"  
-- "온보딩 학습 계획을 세워줘"
+### 참고: 시작 Task (3개)
+{formatted_tasks}
+(각 Task에 왜 초보자에게 적합한지 한 줄씩 추가)
 """
 
 SUMMARIZE_ONBOARDING_PROMPT = """
-당신은 오픈소스 프로젝트에 기여할 수 있도록 도와주는 온보딩 전문가입니다.
-진단 결과와 온보딩 Task 데이터를 바탕으로, 사용자 레벨에 맞는 기여 방법을 추천해 주세요.
+당신은 오픈소스 프로젝트 온보딩 전문가입니다.
+아래에 Python이 미리 선정하고 포맷팅한 Task 리스트가 제공됩니다.
+당신의 역할은 각 Task에 "왜 {user_level}에게 적합한지" 한 줄 이유만 덧붙이는 것입니다.
 
 ## 핵심 원칙
-1. **온보딩 Task 추천이 주요 목적** - 점수 설명은 간략히
-2. 제공된 데이터에 있는 숫자만 사용
-3. 마크다운 형식 사용
-4. **이모지/이모티콘 절대 사용 금지** - 별, 하트, 체크마크, 화살표, 불꽃, 로켓 등 모든 이모지 기호 사용 금지
-5. **사용자 레벨({user_level})에 맞는 Task를 추천** - "추천 Task" 섹션에 있는 Task 사용
-
-## 사용자 레벨별 추천 방향
-- **초보자(beginner)**: 문서, 테스트, 간단한 버그 수정 위주
-- **중급자(intermediate)**: 버그 수정, 기능 개선, 코드 리팩토링
-- **고급자(advanced)**: 코어 아키텍처, 성능 최적화, 복잡한 문제 해결
-
-## 난이도 안내 (중요!)
-- 사용자 레벨에 맞는 Task가 부족할 경우, 다른 레벨의 Task가 포함될 수 있습니다.
-- Task에 "(난이도 주의)" 표시가 있으면, 해당 Task가 사용자 레벨보다 어렵다는 것을 알려주세요.
-- 예: 초보자에게 중급/고급 Task를 추천할 때 → "이 Task는 난이도가 조금 있지만, 도전해볼 만합니다" 등의 안내 추가
+1. **Task 리스트는 그대로 유지** - 순서, 형식, 링크를 변경하지 마세요
+2. 각 Task 아래에 "추천 이유: ..." 한 줄만 추가
+3. 이모지 사용 금지
+4. (난이도 주의) 태그가 있는 Task는 "도전적이지만 학습에 좋습니다" 등의 안내 포함
 
 ## 출력 형식
 
-## {{저장소명}} {level_kr} 기여 가이드
+## {{저장소명}} {level_kr} 온보딩 가이드
 
 ### 저장소 개요
-- 프로젝트 설명 (1-2문장)
-- **온보딩 용이성**: {{onboarding_score}}점
-- **예상 설정 시간**: {{estimated_setup_time}}
+- 프로젝트 한 줄 설명
+- 온보딩 용이성: {{onboarding_score}}점
 
-### 추천 시작 Task ({level_kr}용)
-각 Task를 다음 형식으로 작성:
+### 추천 시작 Task
+{{formatted_tasks}}
 
-**1. [이슈 제목]**
-- 링크: (GitHub 이슈 URL)
-- 난이도: 쉬움/보통/어려움
-- 예상 시간: N시간
-- {level_kr}에게 좋은 이유: (간단한 설명)
+각 Task 아래에 다음 형식으로 한 줄 추가:
+   - **{level_kr}에게 좋은 이유**: (간단한 설명)
 
-### 시작하기 전 체크리스트
+### 시작 전 체크리스트
 - CONTRIBUTING.md 읽기
 - 개발 환경 설정
-- 기존 코드 구조 파악
 
 ---
-**더 도움이 필요하시면:**
-- "이 Task에 대해 더 자세히 설명해줘"
-- "온보딩 학습 계획을 세워줘"
-- "비슷한 다른 저장소도 추천해줘"
+**더 도움이 필요하시면**: "이 Task에 대해 더 자세히 설명해줘", "다른 난이도 Task도 보여줘"
 """
 
 # ============================================================================
 # Intent별 프롬프트 정의
 # ============================================================================
 
-EXPLAIN_SCORES_PROMPT = """
-당신은 오픈소스 프로젝트 건강 지표를 설명하는 전문가입니다.
-사용자가 특정 점수에 대해 질문하면, 해당 점수가 어떻게 계산되었는지 상세히 설명해 주세요.
+# 단일 metric explain 프롬프트
+EXPLAIN_SINGLE_PROMPT = """오픈소스 프로젝트 건강 지표를 해설합니다.
 
-## 핵심 원칙
-1. **점수 계산 방식을 명확히 설명** - 어떤 요소들이 점수에 영향을 미쳤는지
-2. 제공된 데이터의 숫자를 근거로 설명
-3. 마크다운 형식 사용
-4. **이모지/이모티콘 절대 사용 금지**
-
-## 점수별 설명 가이드
-
-### health_score (전체 건강 점수)
-- 다른 모든 점수의 가중 평균
-- 문서 품질, 활동성, 온보딩 용이성 등을 종합
-
-### documentation_quality (문서 품질)
-- README 존재 여부 및 완성도
-- CONTRIBUTING.md, CODE_OF_CONDUCT.md 등 기여 가이드 문서
-- 필수 섹션 포함 여부 (설치 방법, 사용 예시, 라이선스 등)
-
-### activity_maintainability (활동성/유지보수성)
-- 최근 90일간 커밋 수, 기여자 수
-- 이슈/PR 처리 속도 및 비율
-- 마지막 커밋 이후 경과 시간
-
-### onboarding_score (온보딩 용이성)
-- 초보자 친화적 이슈 라벨 (good first issue, help wanted 등)
-- 문서 품질과 기여 가이드 완성도
-- 예상 설정 시간
-
-## 출력 형식
-
-## {저장소명} 점수 상세 설명
-
-### 질문하신 점수: {점수명}
-- **현재 점수**: {N}점 ({해석: 매우 우수/우수/양호/보통/개선 필요})
-
-### 점수 산정 근거
-1. **{요소1}**: {상세 설명 + 실제 데이터}
-2. **{요소2}**: {상세 설명 + 실제 데이터}
-...
-
-### 점수 개선 방법
-- {구체적인 개선 제안}
-
----
-**추가 질문:**
-- "다른 점수도 설명해줘"
-- "이 점수를 올리려면 어떻게 해야 해?"
+## 규칙
+- 결론부터 말하고 근거는 bullet 3-4개로 정리
+- 제공된 데이터만 사용
+- 이모지 금지
+- 리포트 헤더("## 저장소 건강 상태" 등) 금지
 """
 
-COMPARE_REPOS_PROMPT = """
-당신은 오픈소스 프로젝트를 비교 분석하는 전문가입니다.
-두 저장소의 건강 상태를 비교하여 각각의 장단점을 분석해 주세요.
+# 복수 metric explain 프롬프트
+EXPLAIN_MULTI_PROMPT = """오픈소스 프로젝트 건강 지표를 비교 해설합니다.
 
-## 핵심 원칙
-1. **객관적 비교** - 두 저장소를 공정하게 비교
-2. 제공된 데이터의 숫자를 근거로 비교
-3. 마크다운 표 형식 활용
-4. **이모지/이모티콘 절대 사용 금지**
-
-## 출력 형식
-
-## 저장소 비교: {저장소A} vs {저장소B}
-
-### 점수 비교표
-| 지표 | {저장소A} | {저장소B} | 우위 |
-|------|----------|----------|------|
-| 전체 건강 점수 | N점 | M점 | {A/B} |
-| 문서 품질 | N점 | M점 | {A/B} |
-| 활동성 | N점 | M점 | {A/B} |
-| 온보딩 용이성 | N점 | M점 | {A/B} |
-
-### {저장소A}의 강점
-- ...
-
-### {저장소B}의 강점
-- ...
-
-### 기여자 관점 추천
-- 초보자에게 더 적합한 저장소: {추천 및 이유}
-- 활발한 커뮤니티를 원한다면: {추천 및 이유}
-
----
-**추가 분석:**
-- "각 저장소의 온보딩 Task를 비교해줘"
-- "어떤 저장소가 더 활발해?"
+## 규칙
+- 핵심 2-3문장으로 요약 후, metric별 bullet 2-3개씩
+- 전체 bullet 10개 이하
+- 이모지 금지
 """
 
-REFINE_TASKS_PROMPT = """
-당신은 오픈소스 기여 Task를 추천하는 전문가입니다.
-사용자의 추가 조건에 맞게 Task 목록을 필터링하고 재정렬해 주세요.
+EXPLAIN_SCORES_PROMPT = EXPLAIN_SINGLE_PROMPT
 
-## 핵심 원칙
-1. **사용자 조건 최우선** - 시간, 난이도, 유형 등 조건 반영
-2. 제공된 Task 목록에서만 선택
-3. 마크다운 형식 사용
-4. **이모지/이모티콘 절대 사용 금지**
+COMPARE_REPOS_PROMPT = """[Compare 모드] 두 저장소의 건강 상태를 비교 분석합니다.
 
-## 필터링 기준
-- **시간**: 사용자가 투자할 수 있는 시간
-- **난이도**: 쉬움/보통/어려움
-- **유형**: 문서, 테스트, 버그 수정, 기능 추가 등
-- **라벨**: good first issue, help wanted, hacktoberfest 등
+## 결론 (Python이 계산한 승자 정보 기반)
+{winner_summary}
+
+## 비교표
+{comparison_table}
+
+## 항목별 비교
+{item_comparison}
+
+## 상황별 추천
+- 완전 초보자라면: {beginner_recommendation}
+- 기여 경험이 있다면: {experienced_recommendation}
+
+## 규칙
+- Python이 제공한 승자 판정을 따르세요
+- 점수 차이가 5점 미만이면 "비슷함"으로 표현
+- 이모지 금지
+"""
+
+REFINE_TASKS_PROMPT = """사용자가 제시한 조건에 맞게 Task 목록을 필터링/정제합니다.
+
+### 출력 형식
+1. **[Task 이름]** - 선택 사유 한 문장
+2. ...
+
+## 규칙
+- 제공된 Task 목록에서만 선택
+- bullet 5개 이하
+- 이모지 금지
+"""
+
+# ============================================================================
+# Concept QA 프롬프트 (지식베이스 기반, Diagnosis 불필요)
+# ============================================================================
+
+CONCEPT_QA_METRIC_PROMPT = """당신은 오픈소스 프로젝트 건강 지표를 설명하는 전문가입니다.
+
+## 중요 규칙
+1. **아래 제공된 지표 정의만 사용하세요** - 새로운 정의를 만들지 마세요
+2. 제공된 수식, 해석, 예시를 그대로 활용하세요
+3. 이모지 사용 금지
+
+{metric_definition}
 
 ## 출력 형식
+위 지표 정의를 바탕으로:
+1. 한글/영문 이름 소개
+2. 수식 설명
+3. 점수 구간별 해석
+4. 예시로 마무리
 
-## 맞춤 Task 추천
+정의가 제공되지 않은 지표를 물어보면:
+"현재 시스템에서 정의된 지표는 건강 점수(health_score), 온보딩 용이성(onboarding_score), 활동성(activity_maintainability), 문서 품질(documentation_quality)입니다. 질문하신 '{metric_name}'은(는) 아직 정의되지 않았습니다."
+"""
 
-### 적용된 필터
-- 시간: {N}시간 이내
-- 난이도: {조건}
-- 유형: {조건}
+CONCEPT_QA_UNKNOWN_METRIC_MSG = """현재 시스템에서 정의된 지표는 다음과 같습니다:
+- 건강 점수 (health_score)
+- 온보딩 용이성 (onboarding_score)
+- 활동성 (activity_maintainability)
+- 문서 품질 (documentation_quality)
 
-### 추천 Task (필터 적용 후)
+질문하신 내용은 위 지표에 해당하지 않습니다. 위 지표 중 하나를 선택해 질문해 주세요."""
 
-**1. [Task 제목]**
-- 링크: (URL)
-- 난이도: {난이도}
-- 예상 시간: {N}시간
-- 선택 이유: {왜 이 조건에 맞는지}
+CONCEPT_QA_PROCESS_PROMPT = """당신은 오픈소스 기여 프로세스를 안내하는 멘토입니다.
 
-...
+## 주요 주제
+- Fork/Clone/Branch 생성
+- PR 작성 및 리뷰 대응
+- 이슈 작성법
+- 커밋 메시지 작성법
 
-### 필터에 맞는 Task가 부족한 경우
-- 조건을 완화하면 더 많은 Task를 찾을 수 있습니다
-- 예: "시간을 2시간 더 늘리면 N개의 Task 추가 가능"
+## 형식
+### {주제} 안내
+**개요**: 한 줄 설명
+**단계**:
+1. {단계명} - 설명
+2. {단계명} - 설명
+**흔한 실수**: 주의사항
 
----
-**조건 변경:**
-- "시간을 더 늘려줘"
-- "더 쉬운 Task만 보여줘"
+## 규칙
+- 초보자 눈높이
+- 이모지 금지
+- 구체적 예시 포함
 """
 
 # ============================================================================
 # 프롬프트 빌더 함수들
 # ============================================================================
 
-# INTENT_CONFIG 기반 프롬프트 매핑
-from ..intent_config import (
-    get_prompt_kind,
-    is_intent_ready,
-    validate_user_level,
-    validate_intent,
-)
+def _validate_user_level(level: Optional[str]) -> str:
+    """사용자 레벨 유효성 검사"""
+    valid_levels = {"beginner", "intermediate", "advanced"}
+    return level if level in valid_levels else "beginner"
 
-# 프롬프트 종류 -> 프롬프트 상수 매핑
+
+# sub_intent -> 프롬프트 종류 매핑
+SUB_INTENT_PROMPT_MAP = {
+    "health": SUMMARIZE_SYSTEM_PROMPT,
+    "onboarding": None,
+    "compare": COMPARE_REPOS_PROMPT,
+    "explain": EXPLAIN_SCORES_PROMPT,
+    "refine": REFINE_TASKS_PROMPT,
+    "concept": CONCEPT_QA_METRIC_PROMPT,
+    "chat": CONCEPT_QA_PROCESS_PROMPT,
+}
+
 PROMPT_MAP = {
     "health": SUMMARIZE_SYSTEM_PROMPT,
     "explain_scores": EXPLAIN_SCORES_PROMPT,
     "compare": COMPARE_REPOS_PROMPT,
     "refine_tasks": REFINE_TASKS_PROMPT,
-    # onboarding은 user_level이 필요하므로 별도 처리
+    "concept_qa_metric": CONCEPT_QA_METRIC_PROMPT,
+    "concept_qa_process": CONCEPT_QA_PROCESS_PROMPT,
 }
+
+
+# ============================================================================
+# Explain v3 핵심 함수들
+# ============================================================================
+
+
+def _format_diagnosis_for_explain(metric: str, explain_context: dict) -> str:
+    """단일 metric explain용 컨텍스트 생성"""
+    reasoning = explain_context.get(metric, {})
+    if not reasoning:
+        return f"{metric}에 대한 상세 데이터가 없습니다."
+    
+    parts = [f"## {METRIC_NAME_KR.get(metric, metric)} 분석 데이터"]
+    
+    # 공식 정보
+    formula_desc = SCORE_FORMULA_DESC.get(metric, {})
+    if formula_desc:
+        parts.append(f"\n**공식**: {formula_desc.get('formula', 'N/A')}")
+    
+    # 점수
+    parts.append(f"**점수**: {reasoning.get('score', 'N/A')}점")
+    
+    # metric별 상세 데이터
+    if metric == "health_score":
+        components = reasoning.get("components", {})
+        for comp_name, comp_data in components.items():
+            if isinstance(comp_data, dict):
+                parts.append(f"- {comp_name}: {comp_data.get('score')}점 (가중치 {comp_data.get('weight')}, 기여도 {comp_data.get('contribution')})")
+        parts.append(f"- is_healthy: {reasoning.get('is_healthy')}")
+    
+    elif metric == "documentation_quality":
+        parts.append(f"- 포함 섹션 ({reasoning.get('section_count', 0)}/{reasoning.get('total_sections', 8)}): {', '.join(reasoning.get('present_sections', []))}")
+        missing = reasoning.get("missing_sections", [])
+        if missing:
+            parts.append(f"- 누락 섹션: {', '.join(missing)}")
+        parts.append(f"- README 길이: {reasoning.get('readme_length_bucket', 'N/A')} ({reasoning.get('word_count', 0)} 단어)")
+    
+    elif metric == "activity_maintainability":
+        for sub_metric in ["commit", "issue", "pr"]:
+            sub_data = reasoning.get(sub_metric, {})
+            if sub_data:
+                parts.append(f"\n**{sub_metric.upper()}** (가중치 {sub_data.get('weight')})")
+                if sub_metric == "commit":
+                    parts.append(f"  - 총 커밋: {sub_data.get('total_commits', 0)}건, 기여자: {sub_data.get('unique_authors', 0)}명")
+                    parts.append(f"  - 마지막 커밋: {sub_data.get('days_since_last', 'N/A')}일 전")
+                elif sub_metric == "issue":
+                    parts.append(f"  - 오픈: {sub_data.get('open_issues', 0)}건, 생성: {sub_data.get('opened_in_window', 0)}건, 해결: {sub_data.get('closed_in_window', 0)}건")
+                    closure = sub_data.get("closure_ratio")
+                    if closure is not None:
+                        parts.append(f"  - 해결률: {_safe_round(closure * 100)}%")
+                elif sub_metric == "pr":
+                    parts.append(f"  - 생성: {sub_data.get('prs_in_window', 0)}건, 병합: {sub_data.get('merged_in_window', 0)}건")
+                    merge = sub_data.get("merge_ratio")
+                    if merge is not None:
+                        parts.append(f"  - 병합률: {_safe_round(merge * 100)}%")
+    
+    elif metric == "onboarding_score":
+        components = reasoning.get("components", {})
+        for comp_name, comp_data in components.items():
+            if isinstance(comp_data, dict):
+                parts.append(f"- {comp_name}: {comp_data.get('score')}점 (가중치 {comp_data.get('weight')})")
+        parts.append(f"- good first issue: {reasoning.get('good_first_issue_count', 0)}개")
+        parts.append(f"- 초보자용 Task: {reasoning.get('beginner_task_count', 0)}개")
+        parts.append(f"- CONTRIBUTING 가이드: {'있음' if reasoning.get('has_contributing_guide') else '없음'}")
+    
+    return "\n".join(parts)
+
+
+def _format_diagnosis_for_explain_multi(metrics: list[str], explain_context: dict) -> str:
+    """복수 metric explain용 컨텍스트 생성"""
+    parts = ["## 복수 점수 분석 데이터"]
+    
+    for metric in metrics:
+        parts.append(f"\n---\n{_format_diagnosis_for_explain(metric, explain_context)}")
+    
+    return "\n".join(parts)
+
+
+def _postprocess_explain_response(text: str) -> str:
+    """explain 응답 후처리: 리포트 헤더 감지 시 로그만"""
+    report_headers = ["## 저장소 건강 상태", "### 점수 요약", "### 주요 특징"]
+    for header in report_headers:
+        if header in text:
+            logger.warning("[explain] 리포트 템플릿 헤더 감지: %s", header)
+    return text
+
+
+def _run_metric_explain(
+    user_query: str,
+    metrics: list[str],
+    explain_context: dict,
+    repo_id: str,
+    last_brief: str = "",
+) -> str:
+    """metric 모드: 점수/지표 설명 (diagnosis_result 기반)"""
+    import os
+    
+    if len(metrics) == 0:
+        return "어떤 점수를 설명해 드릴까요? 예: '활동성 점수 설명해 줘', '문서 점수랑 온보딩 점수 비교해 줘'"
+    
+    if len(metrics) >= 4:
+        metric_names = ", ".join(METRIC_NAME_KR.get(m, m) for m in metrics[:4])
+        return f"최대 3개까지 설명 가능합니다. ({metric_names}... 중 3개를 선택해 주세요)"
+    
+    depth = classify_explain_depth(user_query)
+    is_single = len(metrics) == 1
+    prompt = EXPLAIN_SINGLE_PROMPT if is_single else EXPLAIN_MULTI_PROMPT
+    
+    if is_single:
+        context = _format_diagnosis_for_explain(metrics[0], explain_context)
+    else:
+        context = _format_diagnosis_for_explain_multi(metrics, explain_context)
+    
+    scores = explain_context.get("scores", {})
+    warning = build_warning_text(scores)
+    
+    depth_hint = "간단히 한두 문장으로" if depth == "simple" else "구체적인 근거와 함께"
+    warning_line = f"\n\n주의: {warning}" if warning else ""
+
+    user_message = f"""저장소: {repo_id}
+질문: {user_query}
+설명 깊이: {depth_hint}
+
+{context}{warning_line}"""
+
+    llm_client = fetch_llm_client()
+    model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    
+    max_tokens = 400 if depth == "simple" else (800 if is_single else 1200)
+    
+    request = ChatRequest(
+        model=model_name,
+        messages=[
+            ChatMessage(role="system", content=prompt),
+            ChatMessage(role="user", content=user_message),
+        ],
+        temperature=0.3,
+        max_tokens=max_tokens,
+    )
+    
+    try:
+        response = llm_client.chat(request, timeout=90)
+        return _postprocess_explain_response(response.content)
+    except Exception as e:
+        logger.error("[explain] LLM 호출 실패: %s", e)
+        return f"설명 생성 중 오류가 발생했습니다: {e}"
+
+
+TASK_EXPLAIN_PROMPT = """온보딩 Task 추천 이유를 설명합니다.
+
+## 규칙
+- 결론부터 bullet 2-4개로 설명
+- Task 속성(시간, 스킬, 난이도) 기반
+- 이모지 금지
+"""
+
+
+def _run_task_explain(
+    user_query: str,
+    state: SupervisorState,
+    repo_id: str,
+) -> str:
+    """task_recommendation 모드: 온보딩 Task 추천 근거 설명"""
+    import os
+    
+    task_list = state.get("last_task_list", [])
+    if not task_list:
+        return "추천된 Task 목록이 없어서 설명할 수 없습니다. 먼저 저장소 분석을 요청해 주세요."
+    
+    # Task 정보 요약
+    task_summary_lines = []
+    for i, task in enumerate(task_list[:5], 1):
+        if isinstance(task, dict):
+            title = task.get("title", "N/A")
+            hours = task.get("estimated_hours", "N/A")
+            skills = task.get("required_skills", [])
+            level = task.get("level", "N/A")
+            skills_str = ", ".join(skills[:3]) if skills else "N/A"
+            task_summary_lines.append(
+                f"{i}. {title} (레벨 {level}, 예상 {hours}시간, 스킬: {skills_str})"
+            )
+    
+    task_context = "\n".join(task_summary_lines) if task_summary_lines else "Task 정보 없음"
+    
+    user_context = state.get("user_context", {})
+    user_level = user_context.get("level", "beginner") if isinstance(user_context, dict) else "beginner"
+    
+    user_message = f"""저장소: {repo_id}
+사용자 레벨: {user_level}
+사용자 질문: {user_query}
+
+## 추천된 Task 목록
+{task_context}
+
+위 Task들을 추천한 이유를 설명해 주세요."""
+
+    llm_client = fetch_llm_client()
+    model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    
+    request = ChatRequest(
+        model=model_name,
+        messages=[
+            ChatMessage(role="system", content=TASK_EXPLAIN_PROMPT),
+            ChatMessage(role="user", content=user_message),
+        ],
+        temperature=0.3,
+        max_tokens=600,
+    )
+    
+    try:
+        response = llm_client.chat(request, timeout=60)
+        return response.content
+    except Exception as e:
+        logger.error("[task_explain] LLM 호출 실패: %s", e)
+        return f"Task 추천 이유 설명 중 오류가 발생했습니다: {e}"
+
+
+GENERAL_EXPLAIN_MESSAGE = """이 추천은 정량적인 점수 분석을 기반으로 한 것이 아니라, 일반적인 오픈소스 기여 베스트 프랙티스를 바탕으로 생성된 예시입니다.
+
+초보자가 오픈소스에 기여를 시작하기 좋은 일반적인 패턴:
+- 문서 개선 (오타 수정, 번역)
+- good-first-issue 라벨이 붙은 이슈
+- 테스트 코드 추가
+- 작은 버그 수정
+
+특정 저장소에 대한 구체적인 기여 추천을 원하시면, 저장소 URL과 함께 다시 질문해 주세요.
+예: "facebook/react 저장소에서 초보자가 시작하기 좋은 이슈를 찾아줘"
+"""
+
+
+def infer_explain_target(state: dict) -> str:
+    """
+    Explain 모드에서 설명 대상을 추론. Python에서 완전히 제어.
+    
+    3분기 라우팅:
+    - "metric": 특정 지표(health_score 등) 설명
+    - "task_recommendation": Task 추천 근거 설명
+    - "general": 일반적인 설명/맥락 없는 질문
+    """
+    user_query = state.get("user_query", "").lower()
+    last_answer_kind = state.get("last_answer_kind")
+    last_explain_target = state.get("last_explain_target")
+    explain_metrics = state.get("explain_metrics", [])
+    
+    # 1. 현재 질문에서 metric 키워드 추출
+    current_metrics = _extract_target_metrics(user_query)
+    if current_metrics:
+        state["explain_metrics"] = current_metrics
+        return "metric"
+    
+    # 2. 점수/지표 관련 키워드 체크
+    score_keywords = ["점수", "score", "왜", "낮", "높", "이유", "근거"]
+    has_score_keyword = any(kw in user_query for kw in score_keywords)
+    
+    # 3. 후속 질문 판단 (무대명사 사용)
+    followup_keywords = ["그게", "이게", "저게", "그건", "이건", "무슨", "뭐야", "뭔데", "어떻게"]
+    is_followup = any(kw in user_query for kw in followup_keywords)
+    
+    # 4. Report 직후 점수 관련 질문 → metric
+    if last_answer_kind == "report" and has_score_keyword:
+        return "metric"
+    
+    # 5. 후속 질문: 이전 타겟 유지
+    if is_followup and last_explain_target:
+        if last_explain_target == "metric" and explain_metrics:
+            state["explain_metrics"] = explain_metrics
+        return last_explain_target
+    
+    # 6. Task 추천 관련 키워드
+    task_keywords = ["task", "태스크", "이슈", "추천", "기여"]
+    if any(kw in user_query for kw in task_keywords):
+        return "task_recommendation"
+    
+    # 7. 맥락이 있으면 metric, 없으면 general
+    if last_answer_kind in ("report", "explain") and explain_metrics:
+        return "metric"
+    
+    return "general"
+
+
+def _run_general_explain(user_query: str) -> str:
+    """general 모드: 정량 점수 없는 일반 대화 기반 설명"""
+    return GENERAL_EXPLAIN_MESSAGE
+
+
+def _run_concept_qa_with_kb(user_query: str, user_level: str = "beginner") -> str:
+    """
+    지식베이스 기반 Concept QA.
+    질문에서 지표 키워드를 추출하고, metric_definitions에서 정의를 조회하여 답변.
+    """
+    import os
+    
+    # 질문에서 지표 추출 (alias 포함)
+    metrics = _extract_target_metrics(user_query)
+    
+    if metrics:
+        # 첫 번째 매칭된 지표에 대해 지식베이스 조회
+        metric_key = metrics[0]
+        metric_def = METRIC_DEFINITIONS.get(metric_key)
+        
+        if metric_def:
+            # 지식베이스에서 정의 포맷팅
+            metric_definition = format_metric_for_concept_qa(metric_def)
+            prompt = CONCEPT_QA_METRIC_PROMPT.format(
+                metric_definition=metric_definition,
+                metric_name=user_query,
+            )
+        else:
+            # 키는 있지만 정의가 없는 경우 (이론상 발생하지 않음)
+            return CONCEPT_QA_UNKNOWN_METRIC_MSG
+    else:
+        # 지표 키워드가 없는 경우 - alias로 다시 시도
+        metric_def = get_metric_by_alias(user_query)
+        if metric_def:
+            metric_definition = format_metric_for_concept_qa(metric_def)
+            prompt = CONCEPT_QA_METRIC_PROMPT.format(
+                metric_definition=metric_definition,
+                metric_name=user_query,
+            )
+        else:
+            # 지표를 찾을 수 없음
+            return CONCEPT_QA_UNKNOWN_METRIC_MSG
+    
+    # LLM 호출
+    llm_client = fetch_llm_client()
+    model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    
+    request = ChatRequest(
+        model=model_name,
+        messages=[
+            ChatMessage(role="system", content=prompt),
+            ChatMessage(role="user", content=user_query),
+        ],
+        temperature=0.3,
+        max_tokens=500,
+    )
+    
+    try:
+        response = llm_client.chat(request, timeout=60)
+        return response.content
+    except Exception as e:
+        logger.error("[concept_qa] LLM 호출 실패: %s", e)
+        return f"지표 설명 중 오류가 발생했습니다: {e}"
+
+
+def _generate_explain_response(
+    user_query: str,
+    metrics: list[str],
+    explain_context: dict,
+    repo_id: str,
+    last_brief: str = "",
+) -> str:
+    """explain 모드 전용 응답 생성 (레거시 호환)"""
+    return _run_metric_explain(user_query, metrics, explain_context, repo_id, last_brief)
 
 
 def _get_onboarding_prompt(user_level: str) -> str:
@@ -308,27 +707,47 @@ def _get_onboarding_prompt(user_level: str) -> str:
     )
 
 
-def _get_prompt_for_intent(intent: str, user_level: str = "beginner") -> str:
+def _get_prompt_for_sub_intent(sub_intent: str, user_level: str = "beginner") -> str:
     """
-    intent에 따라 적절한 시스템 프롬프트 반환
-    
-    INTENT_CONFIG의 prompt_kind를 기반으로 프롬프트를 선택합니다.
+    sub_intent에 따라 적절한 시스템 프롬프트 반환.
     
     Args:
-        intent: 사용자 의도 (diagnose_repo_health, diagnose_repo_onboarding, etc.)
+        sub_intent: 세부 의도 (health | onboarding | compare | explain | refine | concept | chat)
         user_level: 사용자 레벨 (beginner/intermediate/advanced)
     
     Returns:
-        해당 intent에 맞는 시스템 프롬프트
+        해당 sub_intent에 맞는 시스템 프롬프트
     """
-    prompt_kind = get_prompt_kind(intent)
-    
     # onboarding은 user_level이 필요하므로 별도 처리
-    if prompt_kind == "onboarding":
+    if sub_intent == "onboarding":
         return _get_onboarding_prompt(user_level)
     
-    # 나머지는 PROMPT_MAP에서 조회
-    return PROMPT_MAP.get(prompt_kind, SUMMARIZE_SYSTEM_PROMPT)
+    # 나머지는 SUB_INTENT_PROMPT_MAP에서 조회
+    prompt = SUB_INTENT_PROMPT_MAP.get(sub_intent)
+    if prompt:
+        return prompt
+    
+    # fallback: health 프롬프트
+    return SUMMARIZE_SYSTEM_PROMPT
+
+
+def _get_prompt_for_intent(intent: str, user_level: str = "beginner") -> str:
+    """
+    [레거시 호환] intent에 따라 적절한 시스템 프롬프트 반환.
+    
+    새로운 코드에서는 _get_prompt_for_sub_intent()를 사용하세요.
+    """
+    # 레거시 intent → sub_intent 변환
+    legacy_to_sub_intent = {
+        "diagnose_repo_health": "health",
+        "diagnose_repo_onboarding": "onboarding",
+        "compare_two_repos": "compare",
+        "explain_scores": "explain",
+        "refine_onboarding_tasks": "refine",
+        "concept_qa": "concept",
+    }
+    sub_intent = legacy_to_sub_intent.get(intent, "health")
+    return _get_prompt_for_sub_intent(sub_intent, user_level)
 
 
 def _get_not_ready_message(intent: str) -> str:
@@ -351,17 +770,99 @@ def _get_not_ready_message(intent: str) -> str:
 """
 
 
+def _generate_last_brief(summary: str, repo_id: str = "") -> str:
+    """
+    응답 요약(last_brief) 생성 - 다음 followup 턴에서 맥락 참조용.
+    
+    200자 이내로 응답의 핵심 내용을 추출합니다.
+    - 마크다운 헤더 제거
+    - 첫 번째 의미 있는 문장들 추출
+    - 저장소 이름 포함
+    
+    Args:
+        summary: LLM이 생성한 전체 응답
+        repo_id: 저장소 식별자 (예: "facebook/react")
+    
+    Returns:
+        200자 이내의 요약 문자열
+    """
+    import re
+    
+    if not summary or not summary.strip():
+        return f"{repo_id} 분석 완료" if repo_id else ""
+    
+    # 마크다운 헤더(##, ###) 제거
+    lines = summary.split("\n")
+    content_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # 빈 줄, 헤더, 구분선 제외
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        if stripped.startswith("---"):
+            continue
+        if stripped.startswith("**다음으로"):
+            continue
+        if stripped.startswith("**더 도움이"):
+            continue
+        if stripped.startswith("**추가 질문"):
+            continue
+        content_lines.append(stripped)
+    
+    if not content_lines:
+        return f"{repo_id} 분석 완료" if repo_id else "분석 완료"
+    
+    # 첫 번째 의미 있는 내용들 연결 (200자 제한)
+    result = " ".join(content_lines)
+    
+    # 마크다운 볼드(**) 제거
+    result = re.sub(r'\*\*([^*]+)\*\*', r'\1', result)
+    
+    # 리스트 마커(-, *) 정리
+    result = re.sub(r'^[-*]\s*', '', result)
+    result = re.sub(r'\s[-*]\s', ' ', result)
+    
+    # 200자 제한 (마지막 완성된 문장에서 자르기)
+    if len(result) > 200:
+        result = result[:197]
+        # 마지막 완성된 문장 찾기
+        last_period = max(result.rfind("."), result.rfind("요"), result.rfind("다"))
+        if last_period > 100:
+            result = result[:last_period + 1]
+        else:
+            result = result[:197] + "..."
+    
+    return result
+
+
 def summarize_node(state: SupervisorState) -> SupervisorState:
     """
     모든 Agent 결과를 종합하여 사용자에게 최종 응답을 생성합니다.
     
-    Intent별 요약 모드:
-    - diagnose_repo_health: Health 리포트 모드
-    - diagnose_repo_onboarding: 온보딩 가이드 모드
-    - compare_two_repos: 비교 리포트 모드
-    - refine_onboarding_tasks: 리랭킹/필터링 모드
-    - explain_scores: 지표 설명 모드
+    새로운 3 Intent + SubIntent 구조:
+    - intent: analyze | followup | general_qa
+    - sub_intent: health | onboarding | compare | explain | refine | concept | chat
+    
+    error_message가 있으면 LLM 호출 없이 바로 반환합니다.
     """
+    # ========================================
+    # 0. error_message 체크 - LLM 호출 없이 바로 반환
+    # ========================================
+    error_message = state.get("error_message")
+    if error_message:
+        history = state.get("history", [])
+        new_state: SupervisorState = dict(state)  # type: ignore[assignment]
+        new_history = list(history)
+        new_history.append({"role": "assistant", "content": error_message})
+        new_state["history"] = new_history
+        new_state["llm_summary"] = error_message
+        return new_state
+    
+    # ========================================
+    # 1. 상태 추출
+    # ========================================
     diagnosis_result = state.get("diagnosis_result")
     security_result = state.get("security_result")
     recommend_result = state.get("recommend_result")
@@ -372,28 +873,25 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if progress_cb:
         progress_cb("응답 생성 중", "분석 결과를 요약하고 있습니다...")
     
-    # Intent 추출 및 유효성 검사
-    raw_intent = state.get("intent", "diagnose_repo_health")
-    intent = validate_intent(raw_intent)
+    # Intent/SubIntent 추출 (새로운 구조)
+    intent = state.get("intent", DEFAULT_INTENT)
+    sub_intent = state.get("sub_intent") or DEFAULT_SUB_INTENT
+    
+    # 레거시 task_type (호환용)
+    task_type = state.get("task_type", "diagnose_repo_health")
+    
     user_context = state.get("user_context", {})
     
     # 사용자 레벨 추출 및 유효성 검사
     raw_level = user_context.get("level")
-    user_level = validate_user_level(raw_level)
+    user_level = _validate_user_level(raw_level)
     
-    # 미지원 Intent 가드
-    if not is_intent_ready(intent):
-        summary = _get_not_ready_message(intent)
-        new_state: SupervisorState = dict(state)  # type: ignore[assignment]
-        new_history = list(history)
-        new_history.append({"role": "assistant", "content": summary})
-        new_state["history"] = new_history
-        new_state["llm_summary"] = summary
-        return new_state
+    # 이전 응답 요약 (followup 맥락용)
+    last_brief = state.get("last_brief", "")
     
-    # 온보딩 모드 판단: intent가 onboarding이거나 user_level이 beginner
+    # 온보딩 모드 판단: sub_intent가 onboarding이거나 user_level이 beginner
     is_onboarding_mode = (
-        intent == "diagnose_repo_onboarding" or
+        sub_intent == "onboarding" or
         user_level == "beginner"
     )
 
@@ -408,26 +906,28 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if not user_query:
         user_query = state.get("user_query", "")
 
-    # 결과 조합
+    # ========================================
+    # 2. 결과 조합
+    # ========================================
     context_parts = []
     
-    # Refine Tasks 결과 처리 (refine_onboarding_tasks intent)
+    # Refine Tasks 결과 처리 (sub_intent == "refine")
     refine_summary = state.get("refine_summary")
-    if refine_summary and intent == "refine_onboarding_tasks":
+    if refine_summary and sub_intent == "refine":
         context_parts.append(f"## Task 재필터링 결과\n{_format_refine_summary(refine_summary)}")
 
     if diagnosis_result:
         # 비교 모드인 경우 저장소 이름 명시
-        if intent == "compare_two_repos":
+        if sub_intent == "compare":
             repo = state.get("repo", {})
             repo_name = f"{repo.get('owner', '')}/{repo.get('name', '')}"
             context_parts.append(f"## 저장소 A: {repo_name}\n{_format_diagnosis(diagnosis_result, is_onboarding_mode, user_level)}")
         else:
             context_parts.append(f"## 진단 결과\n{_format_diagnosis(diagnosis_result, is_onboarding_mode, user_level)}")
 
-    # 비교 대상 저장소 결과 (compare_two_repos 모드)
+    # 비교 대상 저장소 결과 (compare 모드)
     compare_result = state.get("compare_diagnosis_result")
-    if compare_result and intent == "compare_two_repos":
+    if compare_result and sub_intent == "compare":
         compare_repo = state.get("compare_repo", {})
         compare_repo_name = f"{compare_repo.get('owner', '')}/{compare_repo.get('name', '')}"
         context_parts.append(f"## 저장소 B: {compare_repo_name}\n{_format_diagnosis(compare_result, is_onboarding_mode, user_level)}")
@@ -438,28 +938,81 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if recommend_result:
         context_parts.append(f"## 추천 정보\n{_format_result(recommend_result)}")
 
-    # 진단 결과 없음 가드 (explain_scores 등에서 필요)
-    if not context_parts:
-        if intent == "explain_scores":
-            summary = "점수를 설명하려면 먼저 저장소 분석이 필요합니다. 저장소 URL과 함께 다시 질문해 주세요."
-        elif intent == "compare_two_repos":
-            summary = "두 저장소를 비교하려면 두 개의 저장소 URL이 필요합니다. 예: 'facebook/react와 vuejs/vue를 비교해줘'"
-        else:
-            summary = "분석 결과가 없습니다. 다시 시도해 주세요."
-    else:
-        context = "\n\n".join(context_parts)
-        # intent 기반 프롬프트 선택
-        summary = _generate_summary_with_llm(
-            user_query=user_query,
-            context=context,
-            intent=intent,
-            user_level=user_level,
-        )
-
-    # 벤치마크용 로깅: repo 정보와 함께 기록
+    # ========================================
+    # 3. LLM 응답 생성
+    # ========================================
+    
     repo = state.get("repo", {})
     repo_id = f"{repo.get('owner', '')}/{repo.get('name', '')}" if repo else "unknown"
-    logger.info("[summarize_node] repo=%s, intent=%s, user_level=%s, summary_length=%d", repo_id, intent, user_level, len(summary))
+    
+    # explain 모드: 3분기 파이프라인
+    if sub_intent == "explain":
+        explain_target = infer_explain_target(state)
+        target_metrics = state.get("explain_metrics", [])
+        
+        logger.info("[explain] target=%s, metrics=%s", explain_target, target_metrics)
+        
+        if explain_target == "metric":
+            if not target_metrics:
+                target_metrics = _extract_target_metrics(user_query)
+            valid_metrics, error_msg = _ensure_metrics_exist(state, target_metrics)
+            
+            if error_msg:
+                summary = error_msg
+            else:
+                explain_context = diagnosis_result.get("explain_context", {}) if diagnosis_result else {}
+                summary = _run_metric_explain(
+                    user_query=user_query,
+                    metrics=valid_metrics,
+                    explain_context=explain_context,
+                    repo_id=repo_id,
+                    last_brief=last_brief,
+                )
+                state["last_explain_target"] = "metric"
+        elif explain_target == "task_recommendation":
+            summary = _run_task_explain(user_query, state, repo_id)
+            state["last_explain_target"] = "task_recommendation"
+        else:
+            summary = _run_general_explain(user_query)
+            state["last_explain_target"] = "general"
+    elif not context_parts:
+        # Concept QA / Chat은 diagnosis 없이 바로 LLM 응답
+        if is_concept_qa(intent, sub_intent):
+            # 지식베이스 기반 Concept QA
+            summary = _run_concept_qa_with_kb(user_query, user_level)
+        elif is_chat(intent, sub_intent):
+            summary = _generate_summary_with_llm_v2(
+                user_query=user_query,
+                context="",
+                sub_intent=sub_intent,
+                user_level=user_level,
+                intent=intent,
+                last_brief=last_brief,
+            )
+        elif sub_intent == "compare":
+            summary = "두 저장소를 비교하려면 두 개의 저장소 URL이 필요합니다. 예: 'facebook/react와 vuejs/vue를 비교해줘'"
+        else:
+            summary = _generate_summary_with_llm_v2(
+                user_query=user_query,
+                context="",
+                sub_intent=sub_intent,
+                user_level=user_level,
+                intent=intent,
+                last_brief=last_brief,
+            )
+    else:
+        context = "\n\n".join(context_parts)
+        summary = _generate_summary_with_llm_v2(
+            user_query=user_query,
+            context=context,
+            sub_intent=sub_intent,
+            user_level=user_level,
+            intent=intent,
+            last_brief=last_brief,
+        )
+
+    logger.info("[summarize_node] repo=%s, intent=%s, sub_intent=%s, user_level=%s, summary_length=%d", 
+                repo_id, intent, sub_intent, user_level, len(summary))
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]
 
@@ -470,15 +1023,28 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     new_state["llm_summary"] = summary
     
     # ========================================
-    # 멀티턴 상태 업데이트 (다음 턴을 위한 컨텍스트 저장)
+    # 4. 응답 메타데이터 설정 (UI 표시용)
+    # ========================================
+    
+    # answer_kind: UI 배지 표시용 (report/explain/refine/concept/chat)
+    new_state["answer_kind"] = get_answer_kind(intent, sub_intent)
+    
+    # last_brief: 다음 followup에서 참조할 이전 응답 요약 (200자 이내)
+    # - 응답의 첫 번째 의미 있는 문장들을 추출
+    new_state["last_brief"] = _generate_last_brief(summary, repo_id)
+    
+    # ========================================
+    # 5. 멀티턴 상태 업데이트 (다음 턴을 위한 컨텍스트 저장)
     # ========================================
     
     # last_repo: 현재 분석한 저장소 저장
     if repo:
         new_state["last_repo"] = repo
     
-    # last_intent: 현재 intent 저장
+    # last_intent, last_sub_intent, last_answer_kind: 현재 컨텍스트 저장
     new_state["last_intent"] = intent
+    new_state["last_sub_intent"] = sub_intent
+    new_state["last_answer_kind"] = new_state["answer_kind"]
     
     # last_task_list: 온보딩 Task 목록 저장 (다음 턴에서 refine할 때 사용)
     if diagnosis_result:
@@ -495,6 +1061,130 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
             new_state["last_task_list"] = task_list
 
     return new_state
+
+
+def _format_onboarding_tasks(
+    tasks: list[TaskSuggestion],
+    user_level: str,
+    max_tasks: int = 5,
+) -> tuple[str, bool]:
+    """
+    온보딩 Task를 테이블 형식으로 포맷팅. Python에서 완전히 제어.
+    
+    Returns:
+        (formatted_table, has_mismatch): 포맷팅된 테이블, 난이도 불일치 여부
+    """
+    if not tasks:
+        return "(추천 Task 없음)", False
+    
+    difficulty_order = {"beginner": 0, "intermediate": 1, "advanced": 2}
+    difficulty_kr = {"beginner": "쉬움", "intermediate": "보통", "advanced": "어려움"}
+    user_order = difficulty_order.get(user_level, 0)
+    
+    has_mismatch = False
+    lines = []
+    lines.append("| 번호 | 제목 | 난이도 | 예상시간 | 링크 |")
+    lines.append("|------|------|--------|----------|------|")
+    
+    for i, task in enumerate(tasks[:max_tasks], 1):
+        title = task.title[:40] + "..." if len(task.title) > 40 else task.title
+        difficulty = getattr(task, "difficulty", "beginner")
+        diff_kr = difficulty_kr.get(difficulty, difficulty)
+        task_order = difficulty_order.get(difficulty, 0)
+        
+        if task_order > user_order:
+            diff_kr += " ⚠️"
+            has_mismatch = True
+        
+        est_time = getattr(task, "estimated_time", "1-2시간")
+        url = getattr(task, "url", "#")
+        issue_num = url.split("/")[-1] if url and "/" in url else str(i)
+        
+        lines.append(f"| {i} | {title} | {diff_kr} | {est_time} | [#{issue_num}]({url}) |")
+    
+    return "\n".join(lines), has_mismatch
+
+
+def _format_health_top_tasks(tasks: list[TaskSuggestion], max_tasks: int = 3) -> str:
+    """
+    Health 모드 부록용 Task 3개를 간단한 리스트로 포맷팅.
+    """
+    if not tasks:
+        return "(추천 Task 없음)"
+    
+    difficulty_kr = {"beginner": "쉬움", "intermediate": "보통", "advanced": "어려움"}
+    lines = []
+    
+    for task in tasks[:max_tasks]:
+        title = task.title[:50] + "..." if len(task.title) > 50 else task.title
+        difficulty = getattr(task, "difficulty", "beginner")
+        diff_kr = difficulty_kr.get(difficulty, difficulty)
+        url = getattr(task, "url", "#")
+        
+        lines.append(f"- [{title}]({url}) | {diff_kr}")
+    
+    return "\n".join(lines)
+
+
+def _compute_comparison_winners(
+    scores_a: dict,
+    scores_b: dict,
+    repo_a: str,
+    repo_b: str,
+) -> dict:
+    """
+    Compare 모드에서 각 지표별 승자 계산. 점수 차이 기반.
+    
+    Returns:
+        {
+            "metrics": {metric: {"winner": repo, "diff": diff, "note": str}},
+            "overall_winner": repo or "무승부",
+            "table_md": 마크다운 테이블
+        }
+    """
+    metric_names = {
+        "health_score": "건강도",
+        "onboarding_score": "온보딩",
+        "activity": "활동성",
+        "documentation": "문서화",
+    }
+    
+    results = {"metrics": {}, "wins": {repo_a: 0, repo_b: 0}}
+    table_lines = ["| 지표 | " + repo_a + " | " + repo_b + " | 승자 |"]
+    table_lines.append("|------|------|------|------|")
+    
+    for metric, name_kr in metric_names.items():
+        score_a = scores_a.get(metric, 0) or 0
+        score_b = scores_b.get(metric, 0) or 0
+        diff = abs(score_a - score_b)
+        
+        if diff < 5:
+            winner = "무승부"
+            note = "비슷함"
+        elif score_a > score_b:
+            winner = repo_a
+            note = f"+{diff:.0f}점"
+            results["wins"][repo_a] += 1
+        else:
+            winner = repo_b
+            note = f"+{diff:.0f}점"
+            results["wins"][repo_b] += 1
+        
+        results["metrics"][metric] = {"winner": winner, "diff": diff, "note": note}
+        table_lines.append(f"| {name_kr} | {score_a:.0f} | {score_b:.0f} | {winner} ({note}) |")
+    
+    wins_a = results["wins"][repo_a]
+    wins_b = results["wins"][repo_b]
+    
+    if wins_a > wins_b:
+        results["overall_winner"] = repo_a
+    elif wins_b > wins_a:
+        results["overall_winner"] = repo_b
+    else:
+        results["overall_winner"] = "무승부"
+    
+    results["table_md"] = "\n".join(table_lines)
+    return results
 
 
 def _format_diagnosis(result: Any, is_onboarding_mode: bool = False, user_level: str = "beginner") -> str:
@@ -654,32 +1344,17 @@ def _format_diagnosis(result: Any, is_onboarding_mode: bool = False, user_level:
             return ""
         
         if is_onboarding_mode:
-            # 온보딩 모드: 상위 5개 Task 상세 정보
-            parts.append(f"\n### 추천 온보딩 Task ({level_kr}용) - 아래 정보를 답변에 활용하세요")
-            
-            # 다른 레벨 Task가 포함되어 있는지 체크
-            has_higher_difficulty = any(
-                task.difficulty != user_level and 
-                {"beginner": 0, "intermediate": 1, "advanced": 2}.get(task.difficulty, 0) > 
-                {"beginner": 0, "intermediate": 1, "advanced": 2}.get(user_level, 0)
-                for task in filtered_tasks[:5]
+            # 온보딩 모드: Python에서 완전히 포맷팅된 Task 리스트 생성
+            formatted_tasks, has_mismatch = _format_onboarding_tasks(
+                tasks=filtered_tasks,
+                user_level=user_level,
+                max_tasks=5,
             )
-            if has_higher_difficulty:
-                parts.append(f"\n**참고**: {level_kr}용 Task가 부족하여 일부 난이도가 높은 Task도 포함되어 있습니다.")
             
-            selected_tasks = filtered_tasks[:5]
-            for i, task in enumerate(selected_tasks, 1):
-                mismatch_note = get_difficulty_mismatch_note(task.difficulty)
-                parts.append(f"\n**{i}. {task.title}**")
-                if task.url:
-                    parts.append(f"- 링크: {task.url}")
-                parts.append(f"- 난이도: {get_difficulty_kr(task.difficulty)}{mismatch_note}")
-                if task.labels:
-                    parts.append(f"- 라벨: {', '.join(task.labels[:3])}")
-                if task.reason_tags:
-                    reasons = [reason_map.get(tag, tag) for tag in task.reason_tags[:2]]
-                    parts.append(f"- 추천 이유: {', '.join(reasons)}")
-                parts.append(f"- Task 점수: {_safe_round(task.task_score, 0)}점")
+            parts.append(f"\n### 추천 온보딩 Task ({level_kr}용)")
+            if has_mismatch:
+                parts.append(f"\n**참고**: {level_kr}용 Task가 부족하여 일부 난이도가 높은 Task도 포함되어 있습니다.")
+            parts.append(f"\n{formatted_tasks}")
         else:
             # 일반 모드: 요약 + 레벨별 Task 3개 추천
             total = meta.get("total_count", 0)
@@ -690,27 +1365,12 @@ def _format_diagnosis(result: Any, is_onboarding_mode: bool = False, user_level:
             parts.append(f"- 중급자용: {len(intermediate_tasks)}개")
             parts.append(f"- 고급자용: {len(advanced_tasks)}개")
             
-            # 사용자 레벨에 따라 Task 3개 추천
+            # 사용자 레벨에 따라 Task 3개 추천 (Health 모드 부록용)
             selected_tasks = filtered_tasks[:3]
             if selected_tasks:
-                parts.append(f"\n### {level_kr} 추천 Task (3개)")
-                
-                # 다른 레벨 Task가 포함되어 있는지 체크
-                has_higher_difficulty = any(
-                    task.difficulty != user_level and 
-                    {"beginner": 0, "intermediate": 1, "advanced": 2}.get(task.difficulty, 0) > 
-                    {"beginner": 0, "intermediate": 1, "advanced": 2}.get(user_level, 0)
-                    for task in selected_tasks
-                )
-                if has_higher_difficulty:
-                    parts.append(f"\n**참고**: {level_kr}용 Task가 부족하여 일부 난이도가 높은 Task도 포함되어 있습니다.")
-                
-                for i, task in enumerate(selected_tasks, 1):
-                    mismatch_note = get_difficulty_mismatch_note(task.difficulty)
-                    parts.append(f"\n**{i}. {task.title}**")
-                    if task.url:
-                        parts.append(f"- 링크: {task.url}")
-                    parts.append(f"- 난이도: {get_difficulty_kr(task.difficulty)}{mismatch_note}")
+                parts.append(f"\n### {level_kr} 추천 Task (참고용)")
+                formatted_top3 = _format_health_top_tasks(selected_tasks, max_tasks=3)
+                parts.append(formatted_top3)
     
     return "\n".join(parts) if parts else str(result)
 
@@ -820,6 +1480,74 @@ def _get_followup_type_kr(followup_type: str) -> str:
     return mapping.get(followup_type, followup_type)
 
 
+def _generate_summary_with_llm_v2(
+    user_query: str, 
+    context: str, 
+    sub_intent: str = "health",
+    user_level: str = "beginner",
+    intent: str = "analyze",
+    last_brief: str = "",
+) -> str:
+    """
+    LLM을 사용하여 최종 요약 생성 (v2 - sub_intent 기반).
+    
+    Args:
+        user_query: 사용자 질문
+        context: 진단 결과 컨텍스트
+        sub_intent: 세부 의도 (health | onboarding | compare | explain | refine | concept | chat)
+        user_level: 사용자 레벨 (beginner/intermediate/advanced)
+        intent: 상위 의도 (analyze | followup | general_qa)
+        last_brief: 이전 응답 요약 (followup 맥락용, 200자 이내)
+    """
+    import os
+    
+    llm_client = fetch_llm_client()
+    model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
+    
+    # sub_intent 기반 프롬프트 선택
+    system_prompt = _get_prompt_for_sub_intent(sub_intent, user_level)
+    
+    # 로깅: 어떤 프롬프트 모드가 선택되었는지
+    logger.debug("[_generate_summary_with_llm_v2] intent=%s, sub_intent=%s, user_level=%s, has_last_brief=%s", 
+                 intent, sub_intent, user_level, bool(last_brief))
+
+    # followup intent이고 last_brief가 있으면 맥락 정보 추가
+    context_prefix = ""
+    if intent == "followup" and last_brief:
+        context_prefix = f"""## 이전 대화 맥락
+{last_brief}
+
+---
+
+"""
+    
+    user_message = f"""
+사용자 질문: {user_query}
+
+{context_prefix}분석 결과:
+{context}
+
+위 결과를 바탕으로 사용자 질문에 답변해 주세요.
+"""
+
+    request = ChatRequest(
+        model=model_name,
+        messages=[
+            ChatMessage(role="system", content=system_prompt),
+            ChatMessage(role="user", content=user_message),
+        ],
+        temperature=0.3,
+    )
+
+    try:
+        response = llm_client.chat(request, timeout=90)
+        return response.content
+
+    except Exception as e:
+        logger.error("[summarize_node] LLM 호출 실패: %s", e)
+        return f"요약 생성 중 오류가 발생했습니다: {e}"
+
+
 def _generate_summary_with_llm(
     user_query: str, 
     context: str, 
@@ -827,23 +1555,18 @@ def _generate_summary_with_llm(
     user_level: str = "beginner"
 ) -> str:
     """
-    LLM을 사용하여 최종 요약 생성
+    [레거시 호환] LLM을 사용하여 최종 요약 생성.
     
-    Args:
-        user_query: 사용자 질문
-        context: 진단 결과 컨텍스트
-        intent: 사용자 의도 (diagnose_repo_health, diagnose_repo_onboarding, explain_scores, etc.)
-        user_level: 사용자 레벨 (beginner/intermediate/advanced)
+    새로운 코드에서는 _generate_summary_with_llm_v2()를 사용하세요.
     """
     import os
     
     llm_client = fetch_llm_client()
     model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
     
-    # Intent 기반 프롬프트 선택
+    # Intent 기반 프롬프트 선택 (레거시)
     system_prompt = _get_prompt_for_intent(intent, user_level)
     
-    # 로깅: 어떤 프롬프트 모드가 선택되었는지
     logger.debug("[_generate_summary_with_llm] intent=%s, user_level=%s", intent, user_level)
 
     user_message = f"""
