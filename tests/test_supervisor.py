@@ -314,5 +314,80 @@ class TestDegradeResponse:
         assert contract.get("sources") != []
 
 
+class TestIdempotency:
+    """Idempotency 테스트."""
+    
+    def test_idempotency_store_basic(self):
+        """IdempotencyStore 기본 동작."""
+        from backend.common.cache import IdempotencyStore
+        
+        store = IdempotencyStore(ttl=10)
+        
+        # 저장
+        entry = store.store_result("sess1", "turn1", "step1", {"data": 1})
+        assert entry.answer_id.startswith("ans_")
+        assert entry.result == {"data": 1}
+        
+        # 조회
+        cached = store.get_cached("sess1", "turn1", "step1")
+        assert cached is not None
+        assert cached.answer_id == entry.answer_id
+    
+    def test_idempotency_store_different_keys(self):
+        """다른 키는 다른 결과."""
+        from backend.common.cache import IdempotencyStore
+        
+        store = IdempotencyStore(ttl=10)
+        
+        store.store_result("sess1", "turn1", "step1", {"a": 1})
+        store.store_result("sess1", "turn2", "step1", {"b": 2})
+        
+        cached1 = store.get_cached("sess1", "turn1", "step1")
+        cached2 = store.get_cached("sess1", "turn2", "step1")
+        
+        assert cached1.result == {"a": 1}
+        assert cached2.result == {"b": 2}
+        assert cached1.answer_id != cached2.answer_id
+    
+    def test_idempotency_store_disable(self):
+        """비활성화 시 캐시 안함."""
+        from backend.common.cache import IdempotencyStore
+        
+        store = IdempotencyStore(ttl=10)
+        store.disable()
+        
+        store.store_result("sess1", "turn1", "step1", {"data": 1})
+        cached = store.get_cached("sess1", "turn1", "step1")
+        
+        assert cached is None  # 비활성화 시 None 반환
+    
+    def test_answer_id_in_graph_result(self):
+        """Graph 결과에 answer_id 포함."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("안녕!")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        assert "answer_id" in result
+        assert result["answer_id"].startswith("ans_")
+    
+    def test_duplicate_execution_same_answer_id(self):
+        """동일 실행은 같은 answer_id 반환."""
+        from backend.common.cache import idempotency_store
+        
+        # 캐시 초기화
+        idempotency_store.clear()
+        
+        # 첫 번째 저장
+        entry1 = idempotency_store.store_result("sess_test", "turn_test", "summarize", {"x": 1})
+        
+        # 동일 키로 조회
+        cached = idempotency_store.get_cached("sess_test", "turn_test", "summarize")
+        
+        assert cached is not None
+        assert cached.answer_id == entry1.answer_id
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

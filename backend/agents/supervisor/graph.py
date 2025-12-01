@@ -1,8 +1,8 @@
-"""Supervisor Graph V1: Simple 4-node workflow."""
+"""Supervisor Graph V1: Simple 4-node workflow with idempotency."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from langgraph.graph import StateGraph, END
 
@@ -31,13 +31,12 @@ from backend.agents.shared.contracts import (
     safe_get_nested,
     RunnerStatus,
 )
+from backend.common.cache import idempotency_store
 
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
 # Node 1: init_node
-# =============================================================================
 def init_node(state: SupervisorState) -> Dict[str, Any]:
     """Initializes session context and validates input."""
     existing_session_id = state.get("_session_id")
@@ -66,9 +65,7 @@ def init_node(state: SupervisorState) -> Dict[str, Any]:
     }
 
 
-# =============================================================================
 # Node 2: classify_node
-# =============================================================================
 def classify_node(state: SupervisorState) -> Dict[str, Any]:
     """Classifies user intent using simple rules or LLM."""
     from backend.agents.supervisor.nodes.intent_classifier import classify_intent_node
@@ -124,9 +121,7 @@ def _get_default_answer_kind(intent: str, sub_intent: str) -> str:
         return "chat"
 
 
-# =============================================================================
 # Node 3: diagnosis_node (conditional) with Normalization
-# =============================================================================
 def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     """Runs diagnosis agent if needed. Applies output normalization."""
     from backend.agents.supervisor.service import call_diagnosis_agent
@@ -199,12 +194,20 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
         return {"error_message": f"진단 중 오류가 발생했습니다: {str(e)}"}
 
 
-# =============================================================================
-# Node 4: summarize_node
-# =============================================================================
+# Node 4: summarize_node (with idempotency)
 def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
-    """Generates final response using V1 summarize logic."""
+    """Generates final response using V1 summarize logic with idempotency."""
     from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+    
+    session_id = safe_get(state, "_session_id", "")
+    turn_id = safe_get(state, "_turn_id", "")
+    step_id = "summarize"
+    
+    # Check for cached result (idempotency)
+    cached = idempotency_store.get_cached(session_id, turn_id, step_id)
+    if cached:
+        logger.info(f"Idempotency HIT: returning cached answer_id={cached.answer_id}")
+        return cached.result
     
     emit_event(
         EventType.NODE_STARTED,
@@ -215,7 +218,23 @@ def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
         },
     )
     
-    result = summarize_node_v1(state)
+    # Acquire lock to prevent duplicate execution
+    with idempotency_store.acquire_lock(session_id, turn_id, step_id):
+        # Double-check cache after acquiring lock
+        cached = idempotency_store.get_cached(session_id, turn_id, step_id)
+        if cached:
+            return cached.result
+        
+        result = summarize_node_v1(state)
+        
+        # Generate and attach answer_id
+        execution = idempotency_store.store_result(
+            session_id=session_id,
+            turn_id=turn_id,
+            step_id=step_id,
+            result=result,
+        )
+        result["answer_id"] = execution.answer_id
     
     emit_event(
         EventType.NODE_FINISHED,
@@ -223,15 +242,14 @@ def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
         outputs={
             "answer_kind": result.get("answer_kind"),
             "text_length": len(result.get("llm_summary", "")),
+            "answer_id": result.get("answer_id"),
         },
     )
     
     return result
 
 
-# =============================================================================
 # Routing: should_run_diagnosis
-# =============================================================================
 def should_run_diagnosis(state: SupervisorState) -> str:
     """Determines whether to run diagnosis or skip to summarize."""
     intent = state.get("intent", DEFAULT_INTENT)
@@ -264,9 +282,7 @@ def should_run_diagnosis(state: SupervisorState) -> str:
     return "summarize"
 
 
-# =============================================================================
 # Graph Builder
-# =============================================================================
 def build_supervisor_graph():
     """Builds V1 Supervisor Graph: init → classify → diagnosis(conditional) → summarize."""
     graph = StateGraph(SupervisorState)

@@ -75,6 +75,10 @@ class SupervisorState(TypedDict, total=False):
     # === Error Handling ===
     error_message: str
     
+    # === Idempotency ===
+    answer_id: str  # Unique ID for deduplication (frontend key)
+    answer_contract: Dict[str, Any]  # AnswerContract serialized
+    
     # === Internal (not exposed to user) ===
     _session_id: str
     _turn_id: str
