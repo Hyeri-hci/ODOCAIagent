@@ -32,6 +32,7 @@ from ..models import (
     DEFAULT_INTENT,
     DEFAULT_SUB_INTENT,
     decide_explain_target,
+    UserProfile,
 )
 from ..intent_config import (
     get_intent_meta,
@@ -41,6 +42,41 @@ from ..intent_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _build_persona_instruction(profile: Optional[Dict[str, Any]]) -> str:
+    """user_profile 기반 페르소나 주입 프롬프트 생성."""
+    if not profile:
+        return ""
+    
+    instructions = []
+    
+    # 1. 기술 수준 기반 지시
+    level = profile.get("level")
+    if level == "beginner":
+        instructions.append("- 사용자는 '초보자'입니다. 전문 용어를 피하고 쉽게 설명하세요.")
+    elif level == "advanced":
+        instructions.append("- 사용자는 '전문가'입니다. 핵심 위주로 기술적인 깊이를 더하세요.")
+    elif level == "intermediate":
+        instructions.append("- 사용자는 '중급자'입니다. 적절한 기술 용어와 함께 설명하세요.")
+    
+    # 2. 관심사 기반 지시
+    interests = profile.get("interests", [])
+    if interests:
+        interests_str = ", ".join(interests[:5])  # 최대 5개
+        instructions.append(f"- 사용자의 관심사({interests_str})와 연관 지어 설명하면 좋습니다.")
+    
+    # 3. 답변 스타일 기반 지시
+    persona = profile.get("persona")
+    if persona == "simple":
+        instructions.append("- 사용자는 간결한 답변을 선호합니다. 핵심만 요약해서 전달하세요.")
+    elif persona == "detailed":
+        instructions.append("- 사용자는 상세한 설명을 원합니다. 예시와 함께 구체적으로 설명하세요.")
+    
+    if not instructions:
+        return ""
+    
+    return "\n[사용자 프로필]\n" + "\n".join(instructions) + "\n"
 
 
 def _handle_fast_chat_direct(intent: str, sub_intent: str, state: Dict[str, Any]) -> str:
@@ -1678,6 +1714,14 @@ def _generate_summary_with_llm_v2(
     
     # sub_intent 기반 프롬프트 선택
     system_prompt = _get_prompt_for_sub_intent(sub_intent, user_level)
+    
+    # user_profile 기반 페르소나 주입
+    if state:
+        user_profile = state.get("user_profile")
+        persona_instruction = _build_persona_instruction(user_profile)
+        if persona_instruction:
+            system_prompt = system_prompt + "\n" + persona_instruction
+            logger.debug("[_generate_summary_with_llm_v2] Persona injected: %s", persona_instruction[:100])
     
     # 로깅: 어떤 프롬프트 모드가 선택되었는지
     logger.debug("[_generate_summary_with_llm_v2] intent=%s, sub_intent=%s, user_level=%s, has_last_brief=%s", 
