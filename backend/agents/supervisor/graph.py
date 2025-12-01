@@ -36,8 +36,8 @@ from backend.common.events import (
 
 logger = logging.getLogger(__name__)
 
-# Agentic 모드 활성화 여부 (점진적 마이그레이션용)
-AGENTIC_MODE = os.getenv("ODOC_AGENTIC_MODE", "false").lower() in ("1", "true")
+# Agentic 모드 활성화 여부 (기본값: true)
+AGENTIC_MODE = os.getenv("ODOC_AGENTIC_MODE", "true").lower() in ("1", "true")
 
 
 # Agentic 노드들 (AGENTIC_MODE=true일 때 사용)

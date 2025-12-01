@@ -159,6 +159,32 @@ def _build_refine_plan(state: SupervisorState) -> List[PlanStep]:
     ]
 
 
+def _build_smalltalk_plan(state: SupervisorState, style: str = "greeting") -> List[PlanStep]:
+    """Smalltalk Plan 생성 (경량, 진단 절대 금지)."""
+    return [
+        PlanStep(
+            id="reply_smalltalk",
+            agent=AgentType.SMALLTALK,
+            params={"style": style},
+            needs=[],
+            on_error=ErrorAction.FALLBACK,
+        ),
+    ]
+
+
+def _build_help_plan(state: SupervisorState) -> List[PlanStep]:
+    """Help Plan 생성 (경량, 진단 절대 금지)."""
+    return [
+        PlanStep(
+            id="show_capabilities",
+            agent=AgentType.HELP,
+            params={},
+            needs=[],
+            on_error=ErrorAction.FALLBACK,
+        ),
+    ]
+
+
 def build_plan(state: SupervisorState) -> SupervisorPlanOutput:
     """
     Intent와 SubIntent를 기반으로 실행 계획 수립.
@@ -235,6 +261,21 @@ def build_plan(state: SupervisorState) -> SupervisorPlanOutput:
             reasoning_parts.append("일반 QA 요청 → 진단 없이 LLM 응답")
             plan = []
             mapped_intent = "explain"
+        
+        elif intent == "smalltalk":
+            # 경량 경로: 인사/잡담 (진단 절대 금지)
+            style = "greeting" if sub_intent == "greeting" else "chitchat"
+            reasoning_parts.append(f"인사/잡담 요청 → 경량 응답 (style={style})")
+            plan = _build_smalltalk_plan(state, style=style)
+            mapped_intent = "explain"
+            artifacts_required = []  # 외부 데이터 불필요
+        
+        elif intent == "help":
+            # 경량 경로: 도움말 (진단 절대 금지)
+            reasoning_parts.append("도움말 요청 → 기능 안내")
+            plan = _build_help_plan(state)
+            mapped_intent = "explain"
+            artifacts_required = []  # 외부 데이터 불필요
         
         # 사용자 컨텍스트 반영
         user_context = state.get("user_context") or {}
