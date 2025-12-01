@@ -166,5 +166,100 @@ class TestSummarizeNode:
         assert "저장소" in brief or "건강" in brief
 
 
+class TestRunnerOutputNormalization:
+    """러너 출력 정규화 테스트."""
+    
+    def test_safe_get_none(self):
+        """safe_get: None 처리."""
+        from backend.agents.shared.contracts import safe_get
+        
+        assert safe_get(None, "key") is None
+        assert safe_get(None, "key", "default") == "default"
+    
+    def test_safe_get_non_dict(self):
+        """safe_get: dict가 아닌 값 처리."""
+        from backend.agents.shared.contracts import safe_get
+        
+        assert safe_get("string", "key") is None
+        assert safe_get(123, "key", "default") == "default"
+        assert safe_get([], "key", "default") == "default"
+    
+    def test_safe_get_dict(self):
+        """safe_get: 정상 dict 처리."""
+        from backend.agents.shared.contracts import safe_get
+        
+        d = {"a": 1, "b": {"c": 2}}
+        assert safe_get(d, "a") == 1
+        assert safe_get(d, "b") == {"c": 2}
+        assert safe_get(d, "missing") is None
+        assert safe_get(d, "missing", "default") == "default"
+    
+    def test_safe_get_nested(self):
+        """safe_get_nested: 중첩 접근."""
+        from backend.agents.shared.contracts import safe_get_nested
+        
+        d = {"a": {"b": {"c": 3}}}
+        assert safe_get_nested(d, "a", "b", "c") == 3
+        assert safe_get_nested(d, "a", "b", "missing") is None
+        assert safe_get_nested(d, "a", "b", "missing", default=0) == 0
+        assert safe_get_nested(None, "a", "b") is None
+    
+    def test_normalize_none(self):
+        """normalize_runner_output: None → 빈 성공."""
+        from backend.agents.shared.contracts import normalize_runner_output, RunnerStatus
+        
+        output = normalize_runner_output(None)
+        assert output.status == RunnerStatus.SUCCESS
+        assert output.result == {}
+    
+    def test_normalize_dict(self):
+        """normalize_runner_output: dict → RunnerOutput."""
+        from backend.agents.shared.contracts import normalize_runner_output, RunnerStatus
+        
+        # 일반 dict
+        output = normalize_runner_output({"scores": {"health": 80}})
+        assert output.status == RunnerStatus.SUCCESS
+        assert output.result == {"scores": {"health": 80}}
+        
+        # 에러 표시 dict
+        output = normalize_runner_output({"error_message": "실패"})
+        assert output.status == RunnerStatus.ERROR
+        assert output.error_message == "실패"
+    
+    def test_normalize_runner_output_passthrough(self):
+        """normalize_runner_output: RunnerOutput은 그대로 반환."""
+        from backend.agents.shared.contracts import normalize_runner_output, RunnerOutput, RunnerStatus
+        
+        original = RunnerOutput.success(result={"test": 1})
+        output = normalize_runner_output(original)
+        assert output is original
+    
+    def test_normalize_exception(self):
+        """normalize_runner_output: Exception → 에러."""
+        from backend.agents.shared.contracts import normalize_runner_output, RunnerStatus
+        
+        output = normalize_runner_output(ValueError("테스트 에러"))
+        assert output.status == RunnerStatus.ERROR
+        assert "테스트 에러" in output.error_message
+    
+    def test_validate_runner_output(self):
+        """validate_runner_output: 계약 검증."""
+        from backend.agents.shared.contracts import (
+            validate_runner_output, RunnerOutput, RunnerStatus, ContractViolation
+        )
+        
+        # 유효한 출력
+        valid = RunnerOutput.success(result={"data": 1})
+        assert validate_runner_output(valid) is True
+        
+        # ERROR 상태인데 error_message 없음 (strict=False)
+        invalid = RunnerOutput(status=RunnerStatus.ERROR, result={})
+        assert validate_runner_output(invalid, strict=False) is False
+        
+        # ERROR 상태인데 error_message 없음 (strict=True)
+        with pytest.raises(ContractViolation):
+            validate_runner_output(invalid, strict=True)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -25,6 +25,12 @@ from backend.common.events import (
     get_session_id,
     get_turn_id,
 )
+from backend.agents.shared.contracts import (
+    normalize_runner_output,
+    safe_get,
+    safe_get_nested,
+    RunnerStatus,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -119,10 +125,10 @@ def _get_default_answer_kind(intent: str, sub_intent: str) -> str:
 
 
 # =============================================================================
-# Node 3: diagnosis_node (conditional)
+# Node 3: diagnosis_node (conditional) with Normalization
 # =============================================================================
 def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
-    """Runs diagnosis agent if needed."""
+    """Runs diagnosis agent if needed. Applies output normalization."""
     from backend.agents.supervisor.service import call_diagnosis_agent
     
     repo = state.get("repo")
@@ -133,9 +139,10 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     if state.get("diagnosis_result"):
         return {}
     
-    user_context = state.get("user_context", {})
-    user_level = user_context.get("level", "beginner")
-    repo_id = f"{repo['owner']}/{repo['name']}"
+    # Null-safe access to user_context
+    user_context = safe_get(state, "user_context", {})
+    user_level = safe_get(user_context, "level", "beginner")
+    repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
     
     emit_event(
         EventType.NODE_STARTED,
@@ -144,23 +151,41 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     )
     
     try:
-        diagnosis_result = call_diagnosis_agent(
+        raw_result = call_diagnosis_agent(
             owner=repo["owner"],
             repo=repo["name"],
             user_level=user_level,
         )
+        
+        # Normalize runner output (single normalization point)
+        normalized = normalize_runner_output(raw_result)
+        
+        if normalized.status == RunnerStatus.ERROR:
+            logger.error(f"Diagnosis returned error: {normalized.error_message}")
+            emit_event(
+                EventType.NODE_FINISHED,
+                actor="diagnosis_node",
+                inputs={"repo": repo_id},
+                outputs={"status": "error", "error": normalized.error_message},
+            )
+            return {"error_message": normalized.error_message or "진단 중 오류가 발생했습니다."}
+        
+        # Extract diagnosis result (Null-safe)
+        diagnosis_result = normalized.result
+        health_score = safe_get_nested(diagnosis_result, "scores", "health_score")
         
         emit_event(
             EventType.NODE_FINISHED,
             actor="diagnosis_node",
             inputs={"repo": repo_id},
             outputs={
-                "health_score": diagnosis_result.get("scores", {}).get("health_score"),
-                "status": "success",
+                "health_score": health_score,
+                "status": normalized.status.value,
             },
         )
         
         return {"diagnosis_result": diagnosis_result}
+        
     except Exception as e:
         logger.error(f"Diagnosis failed: {e}")
         

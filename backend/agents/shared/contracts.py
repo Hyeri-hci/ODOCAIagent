@@ -337,3 +337,136 @@ def create_answer_with_sources(
         source_kinds=source_kinds
     )
 
+
+# =============================================================================
+# Runner Output Normalization (Null-safe)
+# =============================================================================
+
+def normalize_runner_output(raw: Any) -> RunnerOutput:
+    """
+    Normalizes any runner output to RunnerOutput contract.
+    
+    Handles:
+    - None -> empty success
+    - dict -> RunnerOutput
+    - RunnerOutput -> pass-through
+    - Exception -> error output
+    
+    This is the SINGLE normalization point for all runners.
+    """
+    # None -> empty success
+    if raw is None:
+        return RunnerOutput.success(result={})
+    
+    # Already RunnerOutput
+    if isinstance(raw, RunnerOutput):
+        return raw
+    
+    # Exception -> error
+    if isinstance(raw, Exception):
+        return RunnerOutput.error(str(raw))
+    
+    # Dict -> convert to RunnerOutput
+    if isinstance(raw, dict):
+        return _normalize_dict_output(raw)
+    
+    # Unknown type -> wrap in result
+    return RunnerOutput.success(result={"value": raw})
+
+
+def _normalize_dict_output(raw: Dict[str, Any]) -> RunnerOutput:
+    """Normalizes a dictionary to RunnerOutput."""
+    # Check if already RunnerOutput-like
+    if "status" in raw and raw.get("status") in [s.value for s in RunnerStatus]:
+        return RunnerOutput(
+            status=RunnerStatus(raw.get("status", "success")),
+            result=safe_get(raw, "result", {}),
+            artifacts_out=safe_get(raw, "artifacts_out", []),
+            meta=safe_get(raw, "meta", {}),
+            error_message=raw.get("error_message"),
+        )
+    
+    # Check for error indicators
+    if raw.get("error") or raw.get("error_message"):
+        return RunnerOutput.error(
+            message=raw.get("error_message") or raw.get("error") or "Unknown error",
+            meta={"original_keys": list(raw.keys())},
+        )
+    
+    # Treat as successful result payload
+    return RunnerOutput.success(result=raw)
+
+
+def safe_get(d: Any, key: str, default: Any = None) -> Any:
+    """Null-safe dictionary get. Works with None, non-dict, and missing keys."""
+    if d is None:
+        return default
+    if not isinstance(d, dict):
+        return default
+    return d.get(key, default)
+
+
+def safe_get_nested(d: Any, *keys: str, default: Any = None) -> Any:
+    """Null-safe nested dictionary access."""
+    current = d
+    for key in keys:
+        current = safe_get(current, key)
+        if current is None:
+            return default
+    return current if current is not None else default
+
+
+# =============================================================================
+# Contract Validation Helpers
+# =============================================================================
+
+class ContractViolation(Exception):
+    """Raised when a contract is violated."""
+    def __init__(self, message: str, contract_name: str, field: str = ""):
+        super().__init__(message)
+        self.contract_name = contract_name
+        self.field = field
+
+
+def validate_runner_output(output: RunnerOutput, strict: bool = False) -> bool:
+    """
+    Validates a RunnerOutput.
+    
+    Args:
+        output: The output to validate
+        strict: If True, raises ContractViolation on issues
+        
+    Returns:
+        True if valid
+    """
+    # Status must be valid
+    if output.status not in RunnerStatus:
+        if strict:
+            raise ContractViolation(
+                f"Invalid status: {output.status}",
+                "RunnerOutput",
+                "status"
+            )
+        return False
+    
+    # Error status must have error_message
+    if output.status == RunnerStatus.ERROR and not output.error_message:
+        if strict:
+            raise ContractViolation(
+                "ERROR status requires error_message",
+                "RunnerOutput",
+                "error_message"
+            )
+        return False
+    
+    # result must be dict
+    if not isinstance(output.result, dict):
+        if strict:
+            raise ContractViolation(
+                f"result must be dict, got {type(output.result)}",
+                "RunnerOutput",
+                "result"
+            )
+        return False
+    
+    return True

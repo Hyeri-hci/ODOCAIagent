@@ -11,7 +11,11 @@ from backend.agents.diagnosis.tools.scoring.metric_definitions import (
     get_all_aliases,
     METRIC_DEFINITIONS,
 )
-from backend.agents.shared.contracts import AnswerContract
+from backend.agents.shared.contracts import (
+    AnswerContract,
+    safe_get,
+    safe_get_nested,
+)
 from backend.common.events import EventType, emit_event
 
 from ..models import (
@@ -61,13 +65,13 @@ def _ensure_metrics_exist(
     state: SupervisorState, 
     requested_metrics: List[str]
 ) -> tuple[List[str], Optional[str]]:
-    """Validates that requested metrics exist in diagnosis result."""
-    diagnosis_result = state.get("diagnosis_result")
+    """Validates that requested metrics exist in diagnosis result. Null-safe."""
+    diagnosis_result = safe_get(state, "diagnosis_result")
     if not diagnosis_result or not isinstance(diagnosis_result, dict):
         return [], "진단 결과가 없어 점수를 설명할 수 없습니다."
     
-    scores = diagnosis_result.get("scores", {})
-    available = set(scores.keys())
+    scores = safe_get(diagnosis_result, "scores", {})
+    available = set(scores.keys()) if isinstance(scores, dict) else set()
     
     valid = [m for m in requested_metrics if m in available]
     missing = [m for m in requested_metrics if m not in available and m not in AVAILABLE_METRICS]
@@ -164,9 +168,11 @@ def _build_response(
     answer_kind: str,
     diagnosis_result: Optional[Dict] = None,
 ) -> Dict[str, Any]:
-    """Builds the response state update with AnswerContract enforcement."""
-    repo = state.get("repo")
-    repo_id = f"{repo.get('owner', '')}/{repo.get('name', '')}" if repo else ""
+    """Builds the response state update with AnswerContract enforcement. Null-safe."""
+    repo = safe_get(state, "repo")
+    owner = safe_get(repo, "owner", "") if repo else ""
+    name = safe_get(repo, "name", "") if repo else ""
+    repo_id = f"{owner}/{name}" if owner or name else ""
     
     # AnswerContract enforcement
     source_kinds = SOURCE_KIND_MAP.get(answer_kind, [])
@@ -175,7 +181,7 @@ def _build_response(
         sources.append(f"diagnosis_{repo_id.replace('/', '_')}")
     
     answer_contract = AnswerContract(
-        text=summary,
+        text=summary or "",
         sources=sources,
         source_kinds=source_kinds[:len(sources)] if sources else [],
     )
@@ -186,7 +192,7 @@ def _build_response(
         actor="summarize_node",
         inputs={"answer_kind": answer_kind, "repo": repo_id},
         outputs={
-            "text_length": len(summary),
+            "text_length": len(summary or ""),
             "source_count": len(sources),
             "source_kinds": source_kinds,
         },
@@ -232,11 +238,12 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     )
     from ..intent_config import is_v1_supported
     
-    intent = state.get("intent", DEFAULT_INTENT)
-    sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
-    user_query = state.get("user_query", "")
-    diagnosis_result = state.get("diagnosis_result")
-    error_message = state.get("error_message")
+    # Null-safe state access
+    intent = safe_get(state, "intent", DEFAULT_INTENT)
+    sub_intent = safe_get(state, "sub_intent", DEFAULT_SUB_INTENT)
+    user_query = safe_get(state, "user_query", "")
+    diagnosis_result = safe_get(state, "diagnosis_result")
+    error_message = safe_get(state, "error_message")
     
     # 0. Error message takes priority
     if error_message:
@@ -277,11 +284,12 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         if not target_metrics:
             target_metrics = ["health_score"]
         
-        scores = diagnosis_result.get("scores", {})
-        explain_context = diagnosis_result.get("explain_context", {})
+        # Null-safe nested access
+        scores = safe_get(diagnosis_result, "scores", {})
+        explain_context = safe_get(diagnosis_result, "explain_context", {})
         
         metric_name = target_metrics[0]
-        metric_score = scores.get(metric_name, "N/A")
+        metric_score = safe_get(scores, metric_name, "N/A")
         
         system_prompt, user_prompt = build_score_explain_prompt(
             metric_name=metric_name,
@@ -299,11 +307,14 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     
     # --- Chat Mode ---
     elif intent == "general_qa":
-        repo = state.get("repo")
+        repo = safe_get(state, "repo")
         repo_summary = ""
         if repo and diagnosis_result:
-            scores = diagnosis_result.get("scores", {})
-            repo_summary = f"이전 분석: {repo.get('owner')}/{repo.get('name')} (건강 점수: {scores.get('health_score', 'N/A')})"
+            scores = safe_get(diagnosis_result, "scores", {})
+            owner = safe_get(repo, "owner", "")
+            name = safe_get(repo, "name", "")
+            health_score = safe_get(scores, "health_score", "N/A")
+            repo_summary = f"이전 분석: {owner}/{name} (건강 점수: {health_score})"
         
         system_prompt, user_prompt = build_chat_prompt(user_query, repo_summary)
         llm_params = get_llm_params("chat")
