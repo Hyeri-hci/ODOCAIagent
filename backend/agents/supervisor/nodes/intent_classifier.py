@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+from typing import Any, Optional, Tuple
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
@@ -24,6 +24,78 @@ from ..models import (
     convert_legacy_task_type,
 )
 from ..intent_config import validate_followup_type, validate_intent, validate_sub_intent
+
+
+# 경량 분류용 키워드 (LLM 호출 전 빠른 경로)
+GREETING_KEYWORDS = {
+    "안녕", "하이", "hi", "hello", "hey", "안뇽", "헬로", "반가워", "반갑",
+}
+CHITCHAT_KEYWORDS = {
+    "고마워", "감사", "thanks", "thank you", "ㅋㅋ", "ㅎㅎ", "좋아", "굿", "good",
+    "오케이", "okay", "ok", "알겠어", "네", "응", "ㅇㅇ",
+}
+HELP_PATTERNS = [
+    r"뭘?\s*할\s*수\s*있",
+    r"도와",
+    r"help",
+    r"무엇을?\s*(할|도와)",
+    r"뭐\s*해",
+    r"어떻게\s*써",
+    r"사용법",
+    r"기능",
+]
+# 분석/진단 관련 키워드 (있으면 경량 분류 스킵)
+ANALYSIS_KEYWORDS = {
+    "분석", "진단", "비교", "알려", "설명", "추천", "건강", "온보딩",
+    "analyze", "diagnose", "compare", "health", "onboarding",
+    "/",  # owner/repo 형식 감지
+}
+
+
+def _fast_classify_smalltalk(query: str) -> Optional[Tuple[SupervisorIntent, SubIntent]]:
+    """
+    경량 분류: 인사/잡담/도움말 빠른 판별 (LLM 호출 없이).
+    
+    규칙:
+    - 도움 요청 패턴 포함 → help.getting_started (우선)
+    - 분석/진단 키워드 포함 → None (일반 분류 필요)
+    - 토큰 수 ≤ 8, 인사 키워드 포함 → smalltalk.greeting
+    - 토큰 수 ≤ 8, 잡담 키워드 포함 → smalltalk.chitchat  
+    
+    Returns:
+        (intent, sub_intent) 튜플 또는 None (일반 분류 필요)
+    """
+    query_lower = query.lower().strip()
+    tokens = query_lower.split()
+    token_count = len(tokens)
+    
+    # 1) 도움말 패턴 먼저 체크 (최우선, 분석 키워드보다 먼저)
+    for pattern in HELP_PATTERNS:
+        if re.search(pattern, query_lower):
+            logger.info("[fast_classify] help.getting_started: %s", query[:50])
+            return ("help", "getting_started")
+    
+    # 2) 분석/진단 관련 키워드가 있으면 경량 분류 스킵
+    for kw in ANALYSIS_KEYWORDS:
+        if kw in query_lower:
+            return None
+    
+    # 3) 짧은 쿼리 (≤ 8 토큰)에서만 인사/잡담 체크
+    if token_count <= 8:
+        # 인사 키워드 체크
+        for kw in GREETING_KEYWORDS:
+            if kw in query_lower:
+                logger.info("[fast_classify] smalltalk.greeting: %s", query[:50])
+                return ("smalltalk", "greeting")
+        
+        # 잡담 키워드 체크
+        for kw in CHITCHAT_KEYWORDS:
+            if kw in query_lower:
+                logger.info("[fast_classify] smalltalk.chitchat: %s", query[:50])
+                return ("smalltalk", "chitchat")
+    
+    # 4) 경량 분류 불가 → LLM 분류 필요
+    return None
 
 
 def _normalize_history(history: Any) -> list[dict]:
@@ -241,8 +313,9 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     """
     사용자 쿼리에서 intent와 sub_intent를 추론하는 노드
     
-    LLM을 호출하여 자연어 쿼리를 분석하고,
-    Intent(analyze/followup/general_qa)와 SubIntent를 설정한다.
+    1) 경량 분류 시도 (인사/잡담/도움말 → LLM 호출 없이 즉시 응답)
+    2) LLM 호출하여 자연어 쿼리 분석
+    3) Intent(analyze/followup/general_qa/smalltalk/help)와 SubIntent 설정
     
     멀티턴 대화에서는:
     - 이전 컨텍스트(last_repo, last_task_list)를 참조하여 follow-up 질의 처리
@@ -257,6 +330,23 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     if progress_cb:
         progress_cb("질문 분석 중", "의도와 저장소 정보 추출...")
 
+    new_state: SupervisorState = dict(state)  # type: ignore[assignment]
+    
+    # 1) 경량 분류 먼저 시도 (LLM 호출 없이 빠른 경로)
+    fast_result = _fast_classify_smalltalk(user_query)
+    if fast_result:
+        intent, sub_intent = fast_result
+        new_state["intent"] = intent
+        new_state["sub_intent"] = sub_intent
+        new_state["task_type"] = f"{intent}_{sub_intent}"
+        new_state["is_followup"] = False
+        new_state["followup_type"] = None
+        new_state["repo"] = None
+        new_state["_fast_classified"] = True  # 경량 분류 플래그
+        logger.info("[classify_intent_node] Fast classified: %s.%s", intent, sub_intent)
+        return new_state
+
+    # 2) 일반 분류 (LLM 호출)
     # 먼저 쿼리에서 직접 repo 추출 (LLM 파싱 오류 대비 fallback)
     fallback_repo = _extract_repo_from_query(user_query)
     
