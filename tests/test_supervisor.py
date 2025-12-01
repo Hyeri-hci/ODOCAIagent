@@ -261,5 +261,58 @@ class TestRunnerOutputNormalization:
             validate_runner_output(invalid, strict=True)
 
 
+class TestDegradeResponse:
+    """디그레이드 응답 테스트."""
+    
+    def test_build_response_no_artifact_has_source(self):
+        """아티팩트 없을 때도 sources != []."""
+        from backend.agents.supervisor.nodes.summarize_node import (
+            _build_response, DEGRADE_SOURCE_ID
+        )
+        
+        state = {"intent": "analyze", "sub_intent": "health"}
+        result = _build_response(state, "테스트 응답", "report", degraded=True)
+        
+        contract = result.get("answer_contract", {})
+        assert contract.get("sources") != [], "sources는 빈 리스트가 아니어야 함"
+        assert DEGRADE_SOURCE_ID in contract.get("sources", [])
+    
+    def test_build_response_normal_path_has_diagnosis_source(self):
+        """정상 경로에서는 diagnosis source 포함."""
+        from backend.agents.supervisor.nodes.summarize_node import _build_response
+        
+        state = {"repo": {"owner": "test", "name": "repo"}}
+        diagnosis_result = {"scores": {"health_score": 80}}
+        
+        result = _build_response(state, "테스트 응답", "report", diagnosis_result)
+        
+        contract = result.get("answer_contract", {})
+        assert contract.get("sources") != []
+        assert "diagnosis_test_repo" in contract.get("sources", [])
+    
+    def test_llm_call_result_degraded_flag(self):
+        """LLMCallResult의 degraded 플래그."""
+        from backend.agents.supervisor.nodes.summarize_node import LLMCallResult
+        
+        # 정상
+        normal = LLMCallResult("content", success=True)
+        assert normal.degraded is False
+        
+        # 디그레이드
+        degraded = LLMCallResult("fallback", success=False, degraded=True)
+        assert degraded.degraded is True
+    
+    def test_greeting_response_has_source(self):
+        """인사 응답도 source 포함."""
+        from backend.agents.supervisor.nodes.summarize_node import _build_response
+        
+        state = {"intent": "smalltalk", "sub_intent": "greeting"}
+        result = _build_response(state, "안녕하세요!", "greeting")
+        
+        contract = result.get("answer_contract", {})
+        # 인사는 system_template source
+        assert contract.get("sources") != []
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
