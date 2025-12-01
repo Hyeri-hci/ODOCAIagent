@@ -47,6 +47,7 @@ class AgentType(str, Enum):
     ONEPAGER = "onepager"
     SMALLTALK = "smalltalk"  # 인사/잡담 (경량)
     HELP = "help"            # 도움말 (경량)
+    OVERVIEW = "overview"    # 레포 개요 (경량)
 
 
 class ErrorAction(str, Enum):

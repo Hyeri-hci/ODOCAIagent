@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict, List, Optional, Dict
 
 
-SupervisorIntent = Literal["analyze", "followup", "general_qa", "smalltalk", "help"]
+SupervisorIntent = Literal["analyze", "followup", "general_qa", "smalltalk", "help", "overview"]
 
 SubIntent = Literal[
     "health",
@@ -24,7 +24,11 @@ SubIntent = Literal[
     "greeting",         # 인사 (smalltalk)
     "chitchat",         # 잡담 (smalltalk)
     "getting_started",  # 도움말 (help)
+    "repo",             # 레포 개요 (overview)
 ]
+
+# 라우팅 모드: Fast Chat vs Expert Tool
+RoutingMode = Literal["fast_chat", "expert_tool"]
 
 # 응답 종류 (UI 배지 표시용)
 AnswerKind = Literal[
@@ -35,6 +39,7 @@ AnswerKind = Literal[
     "chat",      # 일반 대화 (general_qa → chat)
     "greeting",  # 인사 응답 (smalltalk)
     "help",      # 도움말 (help)
+    "overview",  # 레포 개요 (overview)
 ]
 
 # Explain 모드에서 설명 타깃 구분
@@ -45,11 +50,11 @@ ExplainTarget = Literal[
 ]
 
 VALID_INTENTS: List[SupervisorIntent] = [
-    "analyze", "followup", "general_qa", "smalltalk", "help"
+    "analyze", "followup", "general_qa", "smalltalk", "help", "overview"
 ]
 VALID_SUB_INTENTS: List[SubIntent] = [
     "health", "onboarding", "compare", "explain", "refine", 
-    "concept", "chat", "greeting", "chitchat", "getting_started"
+    "concept", "chat", "greeting", "chitchat", "getting_started", "repo"
 ]
 
 # 기본값

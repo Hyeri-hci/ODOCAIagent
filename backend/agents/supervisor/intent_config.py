@@ -147,6 +147,13 @@ INTENT_META: dict[Tuple[str, str], IntentMeta] = {
         "runs_diagnosis": False,
         "requires_previous_result": False,
     },
+    
+    # overview: 레포 개요 (경량 경로, 진단 없이 메타+README만)
+    ("overview", "repo"): {
+        "requires_repo": True,
+        "runs_diagnosis": False,  # 진단 없이 facts+readme만 수집
+        "requires_previous_result": False,
+    },
 }
 
 # Fallback 메타데이터 (새 조합이 튀어나왔을 때 사용)
@@ -169,6 +176,7 @@ DEFAULT_INTENT_META: IntentMeta = {
 # - chat: 일반 대화 (인사, 잡담)
 # - greeting: 인사 응답 (smalltalk)
 # - help: 도움말 (help)
+# - overview: 레포 개요 (overview)
 ANSWER_KIND_MAP: dict[tuple[str, str], AnswerKind] = {
     # analyze: 진단 리포트
     ("analyze", "health"): "report",
@@ -189,6 +197,9 @@ ANSWER_KIND_MAP: dict[tuple[str, str], AnswerKind] = {
     
     # help: 도움말
     ("help", "getting_started"): "help",
+    
+    # overview: 레포 개요
+    ("overview", "repo"): "overview",
 }
 
 # 기본 AnswerKind (매핑되지 않는 조합)
