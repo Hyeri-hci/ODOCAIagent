@@ -67,6 +67,12 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
     """Classifies user intent using simple rules or LLM."""
     from backend.agents.supervisor.nodes.intent_classifier import classify_intent_node
     
+    emit_event(
+        EventType.NODE_STARTED,
+        actor="classify_node",
+        inputs={"query_length": len(state.get("user_query", ""))},
+    )
+    
     result = classify_intent_node(state)
     
     intent = result.get("intent", DEFAULT_INTENT)
@@ -77,12 +83,24 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
     result["answer_kind"] = answer_kind
     
     emit_event(
-        EventType.SUPERVISOR_INTENT_DETECTED,
+        EventType.NODE_FINISHED,
+        actor="classify_node",
         outputs={
             "intent": intent,
             "sub_intent": sub_intent,
             "answer_kind": answer_kind,
-        }
+        },
+    )
+    
+    # Emit route selection event
+    emit_event(
+        EventType.SUPERVISOR_ROUTE_SELECTED,
+        actor="supervisor",
+        outputs={
+            "selected_route": "diagnosis" if intent == "analyze" else "summarize",
+            "intent": intent,
+            "sub_intent": sub_intent,
+        },
     )
     
     return result
@@ -117,11 +135,12 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     
     user_context = state.get("user_context", {})
     user_level = user_context.get("level", "beginner")
+    repo_id = f"{repo['owner']}/{repo['name']}"
     
     emit_event(
         EventType.NODE_STARTED,
-        actor="supervisor",
-        inputs={"node_name": "diagnosis_node", "repo": f"{repo['owner']}/{repo['name']}"}
+        actor="diagnosis_node",
+        inputs={"repo": repo_id, "user_level": user_level},
     )
     
     try:
@@ -130,9 +149,28 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
             repo=repo["name"],
             user_level=user_level,
         )
+        
+        emit_event(
+            EventType.NODE_FINISHED,
+            actor="diagnosis_node",
+            inputs={"repo": repo_id},
+            outputs={
+                "health_score": diagnosis_result.get("scores", {}).get("health_score"),
+                "status": "success",
+            },
+        )
+        
         return {"diagnosis_result": diagnosis_result}
     except Exception as e:
         logger.error(f"Diagnosis failed: {e}")
+        
+        emit_event(
+            EventType.NODE_FINISHED,
+            actor="diagnosis_node",
+            inputs={"repo": repo_id},
+            outputs={"status": "error", "error": str(e)},
+        )
+        
         return {"error_message": f"진단 중 오류가 발생했습니다: {str(e)}"}
 
 
@@ -142,7 +180,28 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
 def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
     """Generates final response using V1 summarize logic."""
     from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
-    return summarize_node_v1(state)
+    
+    emit_event(
+        EventType.NODE_STARTED,
+        actor="summarize_node",
+        inputs={
+            "intent": state.get("intent", DEFAULT_INTENT),
+            "sub_intent": state.get("sub_intent", DEFAULT_SUB_INTENT),
+        },
+    )
+    
+    result = summarize_node_v1(state)
+    
+    emit_event(
+        EventType.NODE_FINISHED,
+        actor="summarize_node",
+        outputs={
+            "answer_kind": result.get("answer_kind"),
+            "text_length": len(result.get("llm_summary", "")),
+        },
+    )
+    
+    return result
 
 
 # =============================================================================

@@ -11,6 +11,8 @@ from backend.agents.diagnosis.tools.scoring.metric_definitions import (
     get_all_aliases,
     METRIC_DEFINITIONS,
 )
+from backend.agents.shared.contracts import AnswerContract
+from backend.common.events import EventType, emit_event
 
 from ..models import (
     SupervisorState,
@@ -144,8 +146,17 @@ def _call_llm(system_prompt: str, user_prompt: str, params: dict) -> str:
 
 
 # =============================================================================
-# Response Builder
+# Response Builder (with AnswerContract enforcement)
 # =============================================================================
+
+# Source kinds by answer_kind
+SOURCE_KIND_MAP = {
+    "report": ["diagnosis_result"],
+    "explain": ["diagnosis_result", "explain_context"],
+    "greeting": [],
+    "chat": [],
+}
+
 
 def _build_response(
     state: SupervisorState,
@@ -153,13 +164,38 @@ def _build_response(
     answer_kind: str,
     diagnosis_result: Optional[Dict] = None,
 ) -> Dict[str, Any]:
-    """Builds the response state update."""
+    """Builds the response state update with AnswerContract enforcement."""
     repo = state.get("repo")
     repo_id = f"{repo.get('owner', '')}/{repo.get('name', '')}" if repo else ""
     
+    # AnswerContract enforcement
+    source_kinds = SOURCE_KIND_MAP.get(answer_kind, [])
+    sources: List[str] = []
+    if diagnosis_result and source_kinds:
+        sources.append(f"diagnosis_{repo_id.replace('/', '_')}")
+    
+    answer_contract = AnswerContract(
+        text=summary,
+        sources=sources,
+        source_kinds=source_kinds[:len(sources)] if sources else [],
+    )
+    
+    # Emit ANSWER_GENERATED event
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": answer_kind, "repo": repo_id},
+        outputs={
+            "text_length": len(summary),
+            "source_count": len(sources),
+            "source_kinds": source_kinds,
+        },
+    )
+    
     result: Dict[str, Any] = {
-        "llm_summary": summary,
+        "llm_summary": answer_contract.text,
         "answer_kind": answer_kind,
+        "answer_contract": answer_contract.model_dump(),
         "last_brief": _generate_last_brief(summary, repo_id),
         "last_answer_kind": answer_kind,
     }

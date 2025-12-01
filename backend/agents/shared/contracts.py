@@ -213,3 +213,127 @@ class AgentError(Exception):
     def suggested_fallback(self) -> Dict[str, Any]:
         """Provides suggested fallback parameters."""
         return self._suggested_fallback
+
+
+# =============================================================================
+# Runner Output Contract (Unified output for all runners/agents)
+# =============================================================================
+
+class RunnerStatus(str, Enum):
+    """Execution status for runners."""
+    SUCCESS = "success"
+    PARTIAL = "partial"
+    ERROR = "error"
+    SKIPPED = "skipped"
+
+
+class RunnerOutput(BaseModel):
+    """Unified output contract for all agent runners."""
+    status: RunnerStatus = Field(
+        default=RunnerStatus.SUCCESS,
+        description="Execution status."
+    )
+    result: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="The main result payload."
+    )
+    artifacts_out: List[str] = Field(
+        default_factory=list,
+        description="List of artifact IDs created during execution."
+    )
+    meta: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata (timing, token count, etc.)."
+    )
+    error_message: Optional[str] = Field(
+        default=None,
+        description="Error message if status is ERROR."
+    )
+    
+    @classmethod
+    def success(
+        cls, 
+        result: Dict[str, Any], 
+        artifacts_out: Optional[List[str]] = None,
+        meta: Optional[Dict[str, Any]] = None
+    ) -> "RunnerOutput":
+        """Factory for successful output."""
+        return cls(
+            status=RunnerStatus.SUCCESS,
+            result=result,
+            artifacts_out=artifacts_out or [],
+            meta=meta or {}
+        )
+    
+    @classmethod
+    def error(cls, message: str, meta: Optional[Dict[str, Any]] = None) -> "RunnerOutput":
+        """Factory for error output."""
+        return cls(
+            status=RunnerStatus.ERROR,
+            result={},
+            error_message=message,
+            meta=meta or {}
+        )
+
+
+# =============================================================================
+# Answer Contract Validator
+# =============================================================================
+
+def validate_answer_contract(answer: AnswerContract, enforce: bool = True) -> bool:
+    """
+    Validates the AnswerContract.
+    
+    Args:
+        answer: The answer to validate
+        enforce: If True, raises ValueError on empty sources
+        
+    Returns:
+        True if valid
+        
+    Raises:
+        ValueError: If enforce=True and sources are empty
+    """
+    if not answer.text or not answer.text.strip():
+        if enforce:
+            raise ValueError("AnswerContract.text cannot be empty")
+        return False
+    
+    if not answer.validate_sources_match():
+        if enforce:
+            raise ValueError("AnswerContract.sources and source_kinds length mismatch")
+        return False
+    
+    # Note: Empty sources are allowed for greeting/chat modes
+    # The caller should decide whether to enforce non-empty sources
+    
+    return True
+
+
+def create_answer_with_sources(
+    text: str,
+    source_artifacts: List[str],
+    source_kinds: Optional[List[str]] = None
+) -> AnswerContract:
+    """
+    Creates an AnswerContract with proper source tracking.
+    
+    Args:
+        text: Response text
+        source_artifacts: List of artifact IDs used
+        source_kinds: List of artifact kinds (auto-inferred if None)
+    """
+    if source_kinds is None:
+        # Infer kinds from artifact IDs (format: {kind}_{hash})
+        source_kinds = []
+        for aid in source_artifacts:
+            parts = aid.split("_")
+            kind = parts[0] if parts else "unknown"
+            source_kinds.append(kind)
+    
+    return AnswerContract(
+        text=text,
+        sources=source_artifacts,
+        source_kinds=source_kinds
+    )
+

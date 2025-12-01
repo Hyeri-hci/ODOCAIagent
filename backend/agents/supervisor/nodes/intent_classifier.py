@@ -8,6 +8,7 @@ from typing import Any, Optional, Tuple
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
+from backend.common.events import EventType, emit_event
 
 from ..models import (
     SupervisorState, 
@@ -179,15 +180,32 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
         raise ValueError("user_query is empty")
     
     new_state: SupervisorState = dict(state)  # type: ignore
+    classification_method = "unknown"
     
     # 1) Heuristic classification
     fast = _fast_classify(query)
     if fast and fast[3] >= 0.9:
-        intent, sub_intent, repo, _ = fast
+        intent, sub_intent, repo, conf = fast
         new_state["intent"] = intent
         new_state["sub_intent"] = sub_intent
         if repo:
             new_state["repo"] = repo
+        classification_method = "heuristic"
+        
+        # Emit INTENT_DETECTED event
+        emit_event(
+            event_type=EventType.SUPERVISOR_INTENT_DETECTED,
+            actor="intent_classifier",
+            inputs={"query": query[:200]},
+            outputs={
+                "intent": intent,
+                "sub_intent": sub_intent,
+                "method": classification_method,
+                "confidence": conf,
+                "repo": f"{repo['owner']}/{repo['name']}" if repo else None,
+            },
+        )
+        
         logger.info("[classify] Heuristic: %s.%s", intent, sub_intent)
         return new_state
     
@@ -207,6 +225,7 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     
     new_state["intent"] = intent
     new_state["sub_intent"] = sub_intent
+    classification_method = "llm"
     
     # Repo info (LLM result or fallback)
     repo = _parse_repo_url(parsed.get("repo_url")) or fallback_repo
@@ -222,6 +241,20 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     hist = list(state.get("history", []))
     hist.append({"role": "user", "content": query})
     new_state["history"] = hist
+    
+    # Emit INTENT_DETECTED event
+    emit_event(
+        event_type=EventType.SUPERVISOR_INTENT_DETECTED,
+        actor="intent_classifier",
+        inputs={"query": query[:200]},
+        outputs={
+            "intent": intent,
+            "sub_intent": sub_intent,
+            "method": classification_method,
+            "confidence": 0.8,  # LLM default confidence
+            "repo": f"{repo['owner']}/{repo['name']}" if repo else None,
+        },
+    )
     
     logger.info("[classify] LLM: %s.%s, repo=%s", intent, sub_intent, repo)
     return new_state
