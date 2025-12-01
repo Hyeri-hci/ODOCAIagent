@@ -1,155 +1,287 @@
-"""Dual-mode prompt templates: Fast Chat / Expert Tool."""
+"""V1 Prompt Templates: 3 prompt groups + common rules."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Dict, Any
 
-# Routing mode
-RoutingMode = Literal["fast_chat", "expert_tool"]
 
-# Confidence threshold for Fast Chat (if lower, use Fast Chat)
-FAST_CHAT_THRESHOLD = 0.5
+# =============================================================================
+# 3-1. COMMON_RULES: Always prepended to system prompts
+# =============================================================================
 
-# LLM parameters
+COMMON_RULES = """## Core Rules (MUST FOLLOW)
+
+### Data Rules
+- Use ONLY numbers/facts from provided data
+- NEVER make up statistics or scores
+- If data is missing, say "I don't have that information"
+
+### Format Rules
+- Use Markdown formatting
+- NO emoji allowed
+- Use polite Korean (존댓말: ~입니다, ~합니다)
+
+### Coherence Rules (Anti-Parrot)
+- Answer the user's ACTUAL question
+- If asked for "recommendation", DO NOT explain metric definitions
+- If asked "why this score", explain the specific score with reasons
+- If no analysis data exists, ask user for more information
+- NEVER repeat template answers regardless of question type
+"""
+
+
+# =============================================================================
+# 3-2. Mode-specific Prompts
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Health Report: intent=analyze, sub_intent=health/onboarding
+# -----------------------------------------------------------------------------
+SYSTEM_HEALTH_REPORT = """You are an expert at summarizing open-source project analysis results.
+Summarize the diagnosis results in easy-to-understand Korean.
+
+## Score Interpretation Guide (out of 100)
+- 90-100: Excellent
+- 80-89: Good  
+- 70-79: Fair
+- 60-69: Average
+- Below 60: Needs Improvement
+
+## Output Format (follow this order)
+
+### One-line Summary
+Overall, this is a [status] project. [Key characteristic in one sentence]
+
+### Score Table
+| Metric | Score | Status |
+|--------|-------|--------|
+| Health Score | {health_score} | {interpretation} |
+| Documentation Quality | {documentation_quality} | {interpretation} |
+| Activity | {activity_maintainability} | {interpretation} |
+| Onboarding Ease | {onboarding_score} | {interpretation} |
+
+### Strengths
+- (2-3 data-based strengths)
+
+### Areas for Improvement
+- (2-3 data-based improvements)
+
+### Recommended Next Actions
+- "I want to contribute" - Recommend 5 beginner tasks
+- "Explain the onboarding score" - Detailed score interpretation
+- "Compare with similar repos" - Compare with other projects
+
+### Reference: Starting Tasks (3)
+{formatted_tasks}
+(Add one line per task explaining why it's suitable for beginners)
+"""
+
+# -----------------------------------------------------------------------------
+# Score Explain: intent=followup, sub_intent=explain
+# -----------------------------------------------------------------------------
+SYSTEM_SCORE_EXPLAIN = """You explain specific metrics/scores from open-source project analysis.
+
+## Your Role
+- Explain WHY a specific score was calculated
+- Use only the provided metric data
+- Keep explanations concise and actionable
+
+## Output Format
+
+### {metric_name}: {score} points
+
+**Why this score?**
+- (Reason 1 based on data)
+- (Reason 2 based on data)
+- (Reason 3 if applicable)
+
+**What you can do**
+- (1-2 actionable suggestions)
+
+---
+Need more details? Ask "Tell me more about {metric_name}" or "What other metrics are there?"
+"""
+
+# -----------------------------------------------------------------------------
+# General QA / Greeting: intent=general_qa or smalltalk
+# -----------------------------------------------------------------------------
+SYSTEM_CHAT = """You are ODOC, a friendly open-source onboarding assistant.
+
+## Your Role
+- Answer questions briefly and kindly
+- Help users understand open-source contribution
+- If they want analysis, guide them to provide a repository
+
+## Guidelines
+- Keep responses short (2-3 paragraphs max)
+- Don't force diagnosis data into the conversation
+- If repo analysis would help, mention: "If you'd like, I can analyze a specific repository for you"
+
+## For Greetings
+Respond warmly and suggest what you can help with:
+- Repository overview: "What is facebook/react?"
+- Health analysis: "Analyze facebook/react"
+- Contribution guide: "I want to contribute to this project"
+"""
+
+
+# =============================================================================
+# Template Messages
+# =============================================================================
+
+GREETING_TEMPLATE = """안녕하세요! ODOC입니다. 무엇을 도와드릴까요?
+
+다음과 같은 것들을 할 수 있어요:
+- 저장소 분석: "facebook/react 분석해줘"
+- 점수 설명: "왜 이 점수가 나왔어?"
+- 기여 가이드: "이 프로젝트에 어떻게 기여하면 좋을까?"
+
+분석할 저장소가 있으시면 알려주세요!"""
+
+CHITCHAT_TEMPLATE = """네, 더 도와드릴게요!
+
+다른 저장소를 분석하거나, 방금 결과에 대해 더 자세히 설명해 드릴 수 있어요.
+무엇을 해볼까요?"""
+
+NOT_READY_TEMPLATE = """죄송합니다. 해당 기능은 아직 개발 중입니다.
+
+현재 사용 가능한 기능:
+- 저장소 건강 분석: "facebook/react 분석해줘"
+- 점수 설명: "활동성 점수가 왜 이래?"
+- 일반 질문: "오픈소스 기여가 뭐야?"
+
+다른 것을 도와드릴까요?"""
+
+
+# =============================================================================
+# Helper Functions
+# =============================================================================
+
+def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, str]:
+    """Builds prompt for health report mode. Returns (system, user)."""
+    system = COMMON_RULES + "\n" + SYSTEM_HEALTH_REPORT
+    
+    # Format diagnosis data for user prompt
+    scores = diagnosis_result.get("scores", {})
+    repo_info = diagnosis_result.get("details", {}).get("repo_info", {})
+    tasks = diagnosis_result.get("onboarding_tasks", {})
+    
+    user = f"""## Analysis Target
+Repository: {repo_info.get('full_name', 'Unknown')}
+Description: {repo_info.get('description', 'N/A')}
+
+## Scores
+- Health Score: {scores.get('health_score', 'N/A')}
+- Documentation Quality: {scores.get('documentation_quality', 'N/A')}
+- Activity/Maintainability: {scores.get('activity_maintainability', 'N/A')}
+- Onboarding Score: {scores.get('onboarding_score', 'N/A')}
+
+## Labels
+- Health Level: {diagnosis_result.get('labels', {}).get('health_level', 'N/A')}
+- Onboarding Level: {diagnosis_result.get('labels', {}).get('onboarding_level', 'N/A')}
+
+## Beginner Tasks (Top 3)
+{_format_tasks_brief(tasks)}
+
+Please summarize this analysis result following the output format."""
+    
+    return system, user
+
+
+def build_score_explain_prompt(
+    metric_name: str,
+    metric_score: Any,
+    explain_context: Dict[str, Any],
+    user_query: str,
+) -> tuple[str, str]:
+    """Builds prompt for score explanation mode. Returns (system, user)."""
+    system = COMMON_RULES + "\n" + SYSTEM_SCORE_EXPLAIN.replace("{metric_name}", metric_name)
+    
+    # Get metric-specific context
+    metric_context = explain_context.get(metric_name, {})
+    
+    user = f"""## User Question
+{user_query}
+
+## Metric to Explain
+- Name: {metric_name}
+- Score: {metric_score}
+
+## Context Data
+{_format_explain_context(metric_context)}
+
+Please explain why this score was calculated and what actions the user can take."""
+    
+    return system, user
+
+
+def build_chat_prompt(user_query: str, repo_summary: str = "") -> tuple[str, str]:
+    """Builds prompt for chat/greeting mode. Returns (system, user)."""
+    system = COMMON_RULES + "\n" + SYSTEM_CHAT
+    
+    user = f"User: {user_query}"
+    if repo_summary:
+        user += f"\n\n[Previous analysis context]\n{repo_summary}"
+    
+    return system, user
+
+
+def _format_tasks_brief(tasks: Dict[str, list]) -> str:
+    """Formats top 3 beginner tasks for the prompt."""
+    beginner_tasks = tasks.get("beginner", [])[:3]
+    if not beginner_tasks:
+        return "(No beginner tasks found)"
+    
+    lines = []
+    for i, task in enumerate(beginner_tasks, 1):
+        title = task.get("title", "Untitled")
+        url = task.get("url", "")
+        lines.append(f"{i}. {title}")
+        if url:
+            lines.append(f"   Link: {url}")
+    
+    return "\n".join(lines)
+
+
+def _format_explain_context(context: Dict[str, Any]) -> str:
+    """Formats explain context for a specific metric."""
+    if not context:
+        return "(No detailed context available)"
+    
+    lines = []
+    for key, value in context.items():
+        if isinstance(value, dict):
+            lines.append(f"- {key}:")
+            for k, v in value.items():
+                lines.append(f"  - {k}: {v}")
+        else:
+            lines.append(f"- {key}: {value}")
+    
+    return "\n".join(lines)
+
+
+# =============================================================================
+# LLM Parameters (kept for compatibility)
+# =============================================================================
+
 LLM_PARAMS = {
-    "fast_chat": {
-        "temperature": 0.7,
-        "max_tokens": 300,
-        "top_p": 0.9,
-    },
-    "expert_tool": {
+    "health_report": {
         "temperature": 0.3,
         "max_tokens": 1024,
+        "top_p": 0.9,
+    },
+    "score_explain": {
+        "temperature": 0.25,
+        "max_tokens": 512,
+        "top_p": 0.9,
+    },
+    "chat": {
+        "temperature": 0.7,
+        "max_tokens": 300,
         "top_p": 0.9,
     },
 }
 
 
-# System prompt for Fast Chat (Korean)
-FAST_CHAT_SYSTEM = """너는 공손하고 간결한 한국어 비서다.
-- 불필요한 장황함 없이 한두 문단으로 답한다
-- 지시가 모호하면 1문장으로 선택지를 제안한다
-- 분석/진단 같은 무거운 작업은 사용자가 명확히 요청할 때만 권한다
-- 반말, 이모지 사용 금지
-- 종결어미: '~입니다', '~주세요', '~드릴까요?'
-- 같은 내용을 반복하지 않는다 (앵무새 금지)
-- 질문을 그대로 되묻지 않는다"""
-
-# Templates for greetings and chitchat
-GREETING_TEMPLATE = """안녕하세요! ODOC입니다. 무엇을 도와드릴까요?
-
-다음 중 하나를 시도해보세요:
-- 레포 개요: 'facebook/react가 뭐야?'
-- 진단 분석: 'react 상태 분석해줘'
-- 비교: 'react랑 vue 비교해줘'"""
-
-CHITCHAT_TEMPLATE = """네, 계속 도와드릴게요!
-
-원하시면 다음을 시도해보세요:
-- 레포 개요: 'vercel/next.js가 뭐야?'
-- 진단: 'tensorflow 분석해줘'"""
-
-# Template for help messages
-HELP_TEMPLATE = """제가 할 수 있는 일입니다:
-
-**레포 개요**
-'facebook/react가 뭐야?', 'next.js 알려줘'
-
-**진단 분석**
-'react 상태 분석해줘', 'tensorflow 진단해줘'
-
-**비교 분석**
-'react랑 vue 비교해줘', 'next.js vs nuxt.js'
-
-**온보딩 추천**
-'초보자인데 이 프로젝트에 기여하고 싶어'
-
-어떤 걸 해볼까요?"""
-
-# System prompt for repository overview
-OVERVIEW_SYSTEM = """아래 사실(레포 메타+README+주요 지표)만 근거로 구조화된 개요를 작성하라.
-
-## 출력 형식
-### {repo} 소개
-**한 줄 요약**: 1문장 설명
-**주요 특징**:
-- {특징 1}
-- {특징 2}
-**커뮤니티 현황**: 스타 수, 포크 수, 라이선스 등
-
-## 규칙
-- 추측 금지, 제공된 데이터만 사용
-- 존댓말 사용 (~입니다, ~합니다)
-- 마지막: "자세한 분석이 필요하시면 '진단해줘'라고 입력해주세요"
-- 이모지 금지"""
-
-OVERVIEW_USER_TEMPLATE = """대상: {owner}/{repo}
-
-[레포 정보]
-{repo_facts}
-
-[README 요약]
-{readme_head}
-
-위 사실만 근거로 구조화된 개요를 작성하세요."""
-
-# System prompt for Expert Tool (enforces sources)
-EXPERT_SYSTEM = """반드시 다음 JSON 스키마로만 답하라:
-{{
-  "text": "마크다운 형식 응답",
-  "sources": ["artifact_id_1", "artifact_id_2"],
-  "source_kinds": ["diagnosis_raw", "python_metrics"]
-}}
-
-규칙:
-- sources는 아래 artifacts의 id를 사용한다
-- sources가 비면 실패로 간주한다
-- 잡담 금지, 구조화된 분석만 제공
-- 한국어 존댓말 사용"""
-
-EXPERT_USER_TEMPLATE = """목표: {goal}
-저장소: {owner}/{repo}
-사용자 레벨: {user_level}
-
-[수집된 Artifacts]
-{artifacts}
-
-위 데이터를 근거로 {goal}을 수행하고, JSON 형식으로 응답하세요."""
-
-
-def get_fast_chat_params() -> dict:
-    """Returns LLM parameters for Fast Chat."""
-    return LLM_PARAMS["fast_chat"].copy()
-
-
-def get_expert_params() -> dict:
-    """Returns LLM parameters for the Expert Tool."""
-    return LLM_PARAMS["expert_tool"].copy()
-
-
-def build_overview_prompt(owner: str, repo: str, facts: str, readme: str) -> tuple[str, str]:
-    """Builds the prompt for repository overview. Returns (system, user)."""
-    user = OVERVIEW_USER_TEMPLATE.format(
-        owner=owner,
-        repo=repo,
-        repo_facts=facts or "(No info)",
-        readme_head=readme[:500] if readme else "(No README)",
-    )
-    return OVERVIEW_SYSTEM, user
-
-
-def build_expert_prompt(
-    goal: str,
-    owner: str,
-    repo: str,
-    user_level: str,
-    artifacts: str,
-) -> tuple[str, str]:
-    """Builds the prompt for the Expert Tool. Returns (system, user)."""
-    user = EXPERT_USER_TEMPLATE.format(
-        goal=goal,
-        owner=owner,
-        repo=repo,
-        user_level=user_level,
-        artifacts=artifacts,
-    )
-    return EXPERT_SYSTEM, user
+def get_llm_params(mode: str) -> dict:
+    """Returns LLM parameters for the specified mode."""
+    return LLM_PARAMS.get(mode, LLM_PARAMS["chat"]).copy()
