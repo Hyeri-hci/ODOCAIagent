@@ -1,15 +1,24 @@
 """
-Supervisor Graph 정의.
+Supervisor Graph 정의 - Agentic Orchestrator.
 
-새로운 3 Intent + SubIntent 구조:
-- intent: analyze | followup | general_qa
-- sub_intent: health | onboarding | compare | explain | refine | concept | chat
+## 아키텍처 (v2)
+1. Intent 분류 → Active Inference (누락 정보 추론)
+2. Plan 수립 (reasoning_trace 포함)
+3. Plan 실행 (에러 정책 기반 재계획)
+4. 요약 생성 (AnswerContract 검증)
+
+## 관측성
+- 모든 노드 시작/종료 이벤트
+- Artifact 추적 (내용주소화)
+- 스팬 트리 구조 (OpenTelemetry 호환)
 
 라우팅은 INTENT_META[intent, sub_intent]를 기반으로 합니다.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import logging
+import os
+from typing import Any, Dict, Optional
 
 from langgraph.graph import StateGraph, END
 
@@ -31,16 +40,130 @@ from backend.agents.supervisor.intent_config import (
     is_chat,
     is_concept_qa,
 )
+from backend.common.events import (
+    EventType,
+    emit_event,
+    turn_context,
+    span,
+    generate_session_id,
+    set_session_id,
+    get_session_id,
+)
 
+logger = logging.getLogger(__name__)
+
+# Agentic 모드 활성화 여부 (점진적 마이그레이션용)
+AGENTIC_MODE = os.getenv("ODOC_AGENTIC_MODE", "false").lower() in ("1", "true")
+
+
+# =============================================================================
+# Agentic 노드들 (AGENTIC_MODE=true일 때 사용)
+# =============================================================================
+
+def infer_missing_node(state: SupervisorState) -> Dict[str, Any]:
+    """Active Inference 노드 - 누락 정보 추론."""
+    from backend.agents.supervisor.inference import (
+        infer_missing,
+        needs_disambiguation,
+        build_disambiguation_message,
+    )
+    
+    with span("infer_missing", actor="supervisor"):
+        user_query = state.get("user_query", "")
+        hints = infer_missing(user_query, state)
+        
+        # 저장소 정보 업데이트
+        if hints.owner and hints.name and not state.get("repo"):
+            repo_info = {
+                "owner": hints.owner,
+                "name": hints.name,
+                "url": f"https://github.com/{hints.owner}/{hints.name}",
+            }
+            
+            emit_event(
+                EventType.SUPERVISOR_INTENT_DETECTED,
+                outputs={
+                    "inferred_repo": f"{hints.owner}/{hints.name}",
+                    "confidence": hints.confidence,
+                }
+            )
+            
+            return {
+                "repo": repo_info,
+                "_inference_hints": hints.model_dump(),
+                "_inference_confidence": hints.confidence,
+            }
+        
+        # disambiguation 필요 여부 체크
+        if needs_disambiguation(hints):
+            msg = build_disambiguation_message(hints)
+            return {
+                "error_message": msg,
+                "_needs_disambiguation": True,
+            }
+        
+        return {"_inference_hints": hints.model_dump()}
+
+
+def build_plan_node(state: SupervisorState) -> Dict[str, Any]:
+    """Plan 수립 노드."""
+    from backend.agents.supervisor.nodes.planner import planner_node
+    return planner_node(state)
+
+
+def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
+    """Plan 실행 노드."""
+    from backend.agents.supervisor.executor import (
+        execute_plan,
+        create_default_agent_runners,
+        PlanExecutionContext,
+    )
+    from backend.common.events import get_session_id
+    
+    with span("execute_plan", actor="supervisor"):
+        plan_output = state.get("plan_output")
+        if not plan_output or not plan_output.plan:
+            # Plan이 없으면 기존 방식으로 진행
+            return {}
+        
+        session_id = get_session_id() or generate_session_id()
+        ctx = PlanExecutionContext(
+            session_id=session_id,
+            agent_runners=create_default_agent_runners(),
+            state=state,
+        )
+        
+        result = execute_plan(plan_output.plan, ctx)
+        
+        # 결과에서 diagnosis_result 추출
+        diagnosis_result = None
+        for step_id, step_result in result.get("results", {}).items():
+            if "diagnosis" in step_id and step_result.get("result"):
+                diagnosis_result = step_result["result"]
+                break
+        
+        return {
+            "_plan_execution_result": result,
+            "_plan_status": result.get("status"),
+            "diagnosis_result": diagnosis_result,
+        }
+
+
+# =============================================================================
+# 라우팅 함수들
+# =============================================================================
 
 def route_after_mapping(state: SupervisorState) -> str:
     """INTENT_META 기반 라우팅 분기."""
-    # 현재 상태 추출
     intent = state.get("intent", DEFAULT_INTENT)
     sub_intent = state.get("sub_intent") or DEFAULT_SUB_INTENT
     
-    # INTENT_META에서 메타 정보 조회
     meta = get_intent_meta(intent, sub_intent)
+    
+    emit_event(
+        EventType.SUPERVISOR_ROUTE_SELECTED,
+        outputs={"intent": intent, "sub_intent": sub_intent, "meta": dict(meta)}
+    )
     
     # 1. 이미 error_message가 있으면 바로 summarize로
     if state.get("error_message"):
@@ -59,7 +182,40 @@ def route_after_mapping(state: SupervisorState) -> str:
     return "summarize"
 
 
+def route_after_inference(state: SupervisorState) -> str:
+    """Inference 후 라우팅 (Agentic 모드)."""
+    # disambiguation 필요
+    if state.get("_needs_disambiguation"):
+        return "summarize"
+    
+    # 에러 있음
+    if state.get("error_message"):
+        return "summarize"
+    
+    return "build_plan"
+
+
+def route_after_plan(state: SupervisorState) -> str:
+    """Plan 수립 후 라우팅."""
+    plan_output = state.get("plan_output")
+    
+    # Plan이 비어있으면 바로 요약
+    if not plan_output or not plan_output.plan:
+        return "summarize"
+    
+    # disambiguation 필요
+    if plan_output.intent == "disambiguation":
+        return "summarize"
+    
+    return "execute_plan"
+
+
+# =============================================================================
+# Graph Builders
+# =============================================================================
+
 def build_supervisor_graph():
+    """기존 Supervisor Graph (하위 호환)."""
     graph = StateGraph(SupervisorState)
 
     # 노드 등록
@@ -93,6 +249,76 @@ def build_supervisor_graph():
     graph.add_edge("refine_tasks", "summarize")
 
     # 5) 요약 → 종료
+    graph.add_edge("summarize", END)
+
+    return graph.compile()
+
+
+def build_agentic_supervisor_graph():
+    """
+    Agentic Supervisor Graph (v2).
+    
+    확장된 파이프라인:
+    1. classify_intent: Intent/SubIntent 분류
+    2. infer_missing: Active Inference (누락 정보 추론)
+    3. build_plan: Plan 수립 (reasoning_trace 포함)
+    4. execute_plan: Plan 실행 (에러 정책 기반)
+    5. summarize: 최종 요약 (AnswerContract 검증)
+    
+    환경변수 ODOC_AGENTIC_MODE=true로 활성화
+    """
+    graph = StateGraph(SupervisorState)
+
+    # 노드 등록
+    graph.add_node("classify_intent", classify_intent_node)
+    graph.add_node("infer_missing", infer_missing_node)
+    graph.add_node("build_plan", build_plan_node)
+    graph.add_node("execute_plan", execute_plan_node)
+    graph.add_node("summarize", summarize_node)
+
+    # 시작 노드
+    graph.set_entry_point("classify_intent")
+
+    # 1) Intent 분류 → Active Inference
+    graph.add_edge("classify_intent", "infer_missing")
+
+    # 2) Inference 후 조건 분기
+    graph.add_conditional_edges(
+        "infer_missing",
+        route_after_inference,
+        {
+            "build_plan": "build_plan",
+            "summarize": "summarize",
+        },
+    )
+
+    # 3) Plan 수립 후 조건 분기
+    graph.add_conditional_edges(
+        "build_plan",
+        route_after_plan,
+        {
+            "execute_plan": "execute_plan",
+            "summarize": "summarize",
+        },
+    )
+
+    # 4) Plan 실행 → 요약
+    graph.add_edge("execute_plan", "summarize")
+
+    # 5) 요약 → 종료
+    graph.add_edge("summarize", END)
+
+    return graph.compile()
+
+
+def get_supervisor_graph():
+    """환경에 따라 적절한 Graph 반환."""
+    if AGENTIC_MODE:
+        logger.info("Using Agentic Supervisor Graph (v2)")
+        return build_agentic_supervisor_graph()
+    else:
+        logger.info("Using Standard Supervisor Graph (v1)")
+        return build_supervisor_graph()    # 5) 요약 → 종료
     graph.add_edge("summarize", END)
 
     return graph.compile()

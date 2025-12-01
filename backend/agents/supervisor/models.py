@@ -1,7 +1,14 @@
-"""Supervisor 상태 및 타입 정의."""
+"""
+Supervisor 상태 및 타입 정의.
+
+v2: Agentic Orchestrator 지원
+- SupervisorPlanOutput: Plan 수립 결과
+- InferenceHints: Active Inference 결과
+- Event/Artifact 추적 필드 추가
+"""
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict, List
+from typing import Any, Literal, TypedDict, List, Optional, Dict
 
 
 SupervisorIntent = Literal["analyze", "followup", "general_qa"]
@@ -214,6 +221,33 @@ class SupervisorState(TypedDict, total=False):
     
     # 진행 상황 콜백 (UI 표시용)
     _progress_callback: Any
+    
+    # ========================================
+    # Agentic Orchestrator 필드 (v2)
+    # ========================================
+    
+    # Plan 수립 결과 (contracts.SupervisorPlanOutput)
+    plan_output: Any  # SupervisorPlanOutput 타입, 순환 임포트 방지로 Any
+    
+    # Active Inference 결과
+    _inference_hints: Dict[str, Any]
+    _inference_confidence: float
+    _needs_disambiguation: bool
+    
+    # Plan 실행 결과
+    _plan_execution_result: Dict[str, Any]
+    _plan_status: str  # completed | partial | aborted | disambiguation
+    
+    # 내부 추론 로그 (사용자에게 노출 안 함)
+    _reasoning_trace: str
+    _mapped_intent: str
+    
+    # Intent 분류 신뢰도
+    _intent_confidence: float
+    
+    # 세션/턴 ID (관측성용)
+    _session_id: str
+    _turn_id: str
 
 
 def decide_explain_target(state: SupervisorState) -> ExplainTarget:
