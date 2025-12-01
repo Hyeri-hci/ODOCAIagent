@@ -104,9 +104,7 @@ def cached(cache: SimpleCache = github_cache, ttl: Optional[int] = None):
     return decorator
 
 
-# =============================================================================
-# Idempotency: 턴ID×스텝ID 실행 잠금 + 캐시
-# =============================================================================
+# Idempotency Store
 
 @dataclass
 class ExecutionResult:
