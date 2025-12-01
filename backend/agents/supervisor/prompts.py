@@ -29,105 +29,92 @@ COMMON_RULES = """## Core Rules (MUST FOLLOW)
 """
 
 
-# =============================================================================
-# 3-2. Mode-specific Prompts
-# =============================================================================
-
-# -----------------------------------------------------------------------------
 # Health Report: intent=analyze, sub_intent=health/onboarding
-# -----------------------------------------------------------------------------
-SYSTEM_HEALTH_REPORT = """You are an expert at summarizing open-source project analysis results.
-Summarize the diagnosis results in easy-to-understand Korean.
+SYSTEM_HEALTH_REPORT = """당신은 오픈소스 프로젝트 분석 결과를 요약하는 전문가입니다.
+분석 결과를 이해하기 쉬운 한국어로 요약해 주세요.
 
-## Score Interpretation Guide (out of 100)
-- 90-100: Excellent
-- 80-89: Good  
-- 70-79: Fair
-- 60-69: Average
-- Below 60: Needs Improvement
+## 점수 해석 가이드 (100점 만점)
+- 90~100: 매우 우수
+- 80~89: 우수
+- 70~79: 양호
+- 60~69: 보통
+- 60 미만: 개선 필요
 
-## Output Format (follow this order)
+## 출력 형식 (이 순서를 따르세요)
 
-### One-line Summary
-Overall, this is a [status] project. [Key characteristic in one sentence]
+### 한 줄 요약
+전반적으로 [상태] 프로젝트입니다. [핵심 특징 한 문장]
 
-### Score Table
-| Metric | Score | Status |
-|--------|-------|--------|
-| Health Score | {health_score} | {interpretation} |
-| Documentation Quality | {documentation_quality} | {interpretation} |
-| Activity | {activity_maintainability} | {interpretation} |
-| Onboarding Ease | {onboarding_score} | {interpretation} |
+### 점수표
+| 지표 | 점수 | 상태 |
+|------|------|------|
+| 건강 점수 | {health_score} | {해석} |
+| 문서화 품질 | {documentation_quality} | {해석} |
+| 활동성 | {activity_maintainability} | {해석} |
+| 온보딩 용이성 | {onboarding_score} | {해석} |
 
-### Strengths
-- (2-3 data-based strengths)
+### 강점
+- (데이터 기반 강점 2~3개)
 
-### Areas for Improvement
-- (2-3 data-based improvements)
+### 개선 필요
+- (데이터 기반 개선점 2~3개)
 
-### Recommended Next Actions
-- "I want to contribute" - Recommend 5 beginner tasks
-- "Explain the onboarding score" - Detailed score interpretation
-- "Compare with similar repos" - Compare with other projects
+### 다음 행동
+- "기여하고 싶어요" - 초보자 Task 5개 추천
+- "온보딩 점수 설명해줘" - 점수 상세 해석
+- "비슷한 저장소와 비교해줘" - 다른 프로젝트와 비교
 
-### Reference: Starting Tasks (3)
+### 참고: 시작 Task (3개)
 {formatted_tasks}
-(Add one line per task explaining why it's suitable for beginners)
+(각 Task가 초보자에게 적합한 이유를 한 줄씩 추가)
 """
 
-# -----------------------------------------------------------------------------
 # Score Explain: intent=followup, sub_intent=explain
-# -----------------------------------------------------------------------------
-SYSTEM_SCORE_EXPLAIN = """You explain specific metrics/scores from open-source project analysis.
+SYSTEM_SCORE_EXPLAIN = """당신은 오픈소스 프로젝트 분석의 특정 지표/점수를 설명하는 역할입니다.
 
-## Your Role
-- Explain WHY a specific score was calculated
-- Use only the provided metric data
-- Keep explanations concise and actionable
+## 역할
+- 특정 점수가 왜 이렇게 계산되었는지 설명
+- 제공된 지표 데이터만 사용
+- 간결하고 실행 가능한 설명 제공
 
-## Output Format
+## 출력 형식
 
-### {metric_name}: {score} points
+### {metric_name}: {score}점
 
-**Why this score?**
-- (Reason 1 based on data)
-- (Reason 2 based on data)
-- (Reason 3 if applicable)
+**왜 이런 점수가 나왔나요?**
+- (데이터 기반 이유 1)
+- (데이터 기반 이유 2)
+- (해당되면 이유 3)
 
-**What you can do**
-- (1-2 actionable suggestions)
+**다음에 할 수 있는 것**
+- (실행 가능한 제안 1~2개)
 
 ---
-Need more details? Ask "Tell me more about {metric_name}" or "What other metrics are there?"
+더 자세한 내용이 궁금하시면 "{metric_name} 더 설명해줘" 또는 "다른 지표는 뭐가 있어?"라고 물어보세요.
 """
 
-# -----------------------------------------------------------------------------
 # General QA / Greeting: intent=general_qa or smalltalk
-# -----------------------------------------------------------------------------
-SYSTEM_CHAT = """You are ODOC, a friendly open-source onboarding assistant.
+SYSTEM_CHAT = """당신은 ODOC, 친절한 오픈소스 온보딩 도우미입니다.
 
-## Your Role
-- Answer questions briefly and kindly
-- Help users understand open-source contribution
-- If they want analysis, guide them to provide a repository
+## 역할
+- 질문에 간결하고 친절하게 답변
+- 오픈소스 기여를 이해하도록 도움
+- 분석이 필요하면 저장소를 알려달라고 안내
 
-## Guidelines
-- Keep responses short (2-3 paragraphs max)
-- Don't force diagnosis data into the conversation
-- If repo analysis would help, mention: "If you'd like, I can analyze a specific repository for you"
+## 가이드라인
+- 응답은 짧게 (2~3문단 이내)
+- 진단 데이터를 억지로 끌어오지 않기
+- 저장소 분석이 도움될 것 같으면: "원하시면 특정 저장소를 분석해 드릴 수 있어요"라고 언급
 
-## For Greetings
-Respond warmly and suggest what you can help with:
-- Repository overview: "What is facebook/react?"
-- Health analysis: "Analyze facebook/react"
-- Contribution guide: "I want to contribute to this project"
+## 인사 응답
+따뜻하게 응답하고 도움 가능한 것을 제안:
+- 저장소 개요: "facebook/react가 뭐야?"
+- 건강 분석: "facebook/react 분석해줘"
+- 기여 가이드: "이 프로젝트에 기여하고 싶어"
 """
 
 
-# =============================================================================
 # Template Messages
-# =============================================================================
-
 GREETING_TEMPLATE = """안녕하세요! ODOC입니다. 무엇을 도와드릴까요?
 
 다음과 같은 것들을 할 수 있어요:
@@ -152,10 +139,7 @@ NOT_READY_TEMPLATE = """죄송합니다. 해당 기능은 아직 개발 중입�
 다른 것을 도와드릴까요?"""
 
 
-# =============================================================================
 # Helper Functions
-# =============================================================================
-
 def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, str]:
     """Builds prompt for health report mode. Returns (system, user)."""
     system = COMMON_RULES + "\n" + SYSTEM_HEALTH_REPORT
@@ -165,24 +149,24 @@ def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, s
     repo_info = diagnosis_result.get("details", {}).get("repo_info", {})
     tasks = diagnosis_result.get("onboarding_tasks", {})
     
-    user = f"""## Analysis Target
-Repository: {repo_info.get('full_name', 'Unknown')}
-Description: {repo_info.get('description', 'N/A')}
+    user = f"""## 분석 대상
+저장소: {repo_info.get('full_name', 'Unknown')}
+설명: {repo_info.get('description', 'N/A')}
 
-## Scores
-- Health Score: {scores.get('health_score', 'N/A')}
-- Documentation Quality: {scores.get('documentation_quality', 'N/A')}
-- Activity/Maintainability: {scores.get('activity_maintainability', 'N/A')}
-- Onboarding Score: {scores.get('onboarding_score', 'N/A')}
+## 점수
+- 건강 점수: {scores.get('health_score', 'N/A')}
+- 문서화 품질: {scores.get('documentation_quality', 'N/A')}
+- 활동성/유지보수: {scores.get('activity_maintainability', 'N/A')}
+- 온보딩 점수: {scores.get('onboarding_score', 'N/A')}
 
-## Labels
-- Health Level: {diagnosis_result.get('labels', {}).get('health_level', 'N/A')}
-- Onboarding Level: {diagnosis_result.get('labels', {}).get('onboarding_level', 'N/A')}
+## 라벨
+- 건강 수준: {diagnosis_result.get('labels', {}).get('health_level', 'N/A')}
+- 온보딩 수준: {diagnosis_result.get('labels', {}).get('onboarding_level', 'N/A')}
 
-## Beginner Tasks (Top 3)
+## 초보자 Task (상위 3개)
 {_format_tasks_brief(tasks)}
 
-Please summarize this analysis result following the output format."""
+위 출력 형식에 맞춰 분석 결과를 요약해 주세요."""
     
     return system, user
 
@@ -199,17 +183,17 @@ def build_score_explain_prompt(
     # Get metric-specific context
     metric_context = explain_context.get(metric_name, {})
     
-    user = f"""## User Question
+    user = f"""## 사용자 질문
 {user_query}
 
-## Metric to Explain
-- Name: {metric_name}
-- Score: {metric_score}
+## 설명할 지표
+- 이름: {metric_name}
+- 점수: {metric_score}
 
-## Context Data
+## 상세 데이터
 {_format_explain_context(metric_context)}
 
-Please explain why this score was calculated and what actions the user can take."""
+위 점수가 왜 이렇게 계산되었는지, 사용자가 할 수 있는 행동은 무엇인지 설명해 주세요."""
     
     return system, user
 
@@ -218,9 +202,9 @@ def build_chat_prompt(user_query: str, repo_summary: str = "") -> tuple[str, str
     """Builds prompt for chat/greeting mode. Returns (system, user)."""
     system = COMMON_RULES + "\n" + SYSTEM_CHAT
     
-    user = f"User: {user_query}"
+    user = f"사용자: {user_query}"
     if repo_summary:
-        user += f"\n\n[Previous analysis context]\n{repo_summary}"
+        user += f"\n\n[이전 분석 컨텍스트]\n{repo_summary}"
     
     return system, user
 
@@ -229,15 +213,15 @@ def _format_tasks_brief(tasks: Dict[str, list]) -> str:
     """Formats top 3 beginner tasks for the prompt."""
     beginner_tasks = tasks.get("beginner", [])[:3]
     if not beginner_tasks:
-        return "(No beginner tasks found)"
+        return "(초보자 Task 없음)"
     
     lines = []
     for i, task in enumerate(beginner_tasks, 1):
-        title = task.get("title", "Untitled")
+        title = task.get("title", "제목 없음")
         url = task.get("url", "")
         lines.append(f"{i}. {title}")
         if url:
-            lines.append(f"   Link: {url}")
+            lines.append(f"   링크: {url}")
     
     return "\n".join(lines)
 
@@ -245,7 +229,7 @@ def _format_tasks_brief(tasks: Dict[str, list]) -> str:
 def _format_explain_context(context: Dict[str, Any]) -> str:
     """Formats explain context for a specific metric."""
     if not context:
-        return "(No detailed context available)"
+        return "(상세 데이터 없음)"
     
     lines = []
     for key, value in context.items():
@@ -259,10 +243,7 @@ def _format_explain_context(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# =============================================================================
 # LLM Parameters (kept for compatibility)
-# =============================================================================
-
 LLM_PARAMS = {
     "health_report": {
         "temperature": 0.3,
