@@ -1,9 +1,4 @@
-"""
-Supervisor Agent 서비스
-
-LangGraph 기반 워크플로우와 레거시 직접 호출 방식을 모두 지원.
-새로운 코드에서는 build_initial_state() + graph.invoke() 방식을 사용할 것.
-"""
+"""Supervisor Agent 서비스: LangGraph 워크플로우 + 레거시 호환."""
 from __future__ import annotations
 
 from dataclasses import dataclass

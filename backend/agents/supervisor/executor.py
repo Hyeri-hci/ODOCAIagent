@@ -1,9 +1,4 @@
-"""
-Plan Executor - 계획 실행 및 에러 정책 기반 재계획.
-
-PlanStep들을 위상 정렬하여 순차/병렬 실행.
-에러 발생 시 ERROR_POLICY에 따라 재시도/대체/질문 전환.
-"""
+"""Plan Executor: PlanStep 위상 정렬 실행, 에러 정책 기반 재시도."""
 from __future__ import annotations
 
 import logging

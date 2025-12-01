@@ -1,9 +1,4 @@
-"""
-듀얼 모드 프롬프트 템플릿.
-
-Fast Chat: 경량/저지연, 도구 호출 금지
-Expert Tool: 구조화 응답, 출처 강제
-"""
+"""듀얼 모드 프롬프트 템플릿: Fast Chat / Expert Tool."""
 from __future__ import annotations
 
 from typing import Literal

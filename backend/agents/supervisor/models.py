@@ -62,10 +62,7 @@ DEFAULT_INTENT: SupervisorIntent = "analyze"
 DEFAULT_SUB_INTENT: SubIntent = "health"
 
 
-# =============================================================================
-# 레거시 호환용 (기존 7개 Intent → 새 구조 매핑)
-# =============================================================================
-
+# 레거시 호환용 (기존 7개 Intent -> 새 구조 매핑)
 SupervisorTaskType = Literal[
     "diagnose_repo_health",
     "diagnose_repo_onboarding",

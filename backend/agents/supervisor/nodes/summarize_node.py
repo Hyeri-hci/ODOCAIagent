@@ -44,13 +44,7 @@ logger = logging.getLogger(__name__)
 
 
 def _handle_fast_chat_direct(intent: str, sub_intent: str, state: Dict[str, Any]) -> str:
-    """
-    Fast Chat 경로 직접 처리 (기본 그래프 v1용).
-    
-    - smalltalk: 템플릿 응답 (LLM 미사용)
-    - help: 도움말 템플릿 (LLM 미사용)
-    - overview: GitHub API + 경량 LLM
-    """
+    """Fast Chat 직접 처리: smalltalk/help는 템플릿, overview는 GitHub+LLM."""
     from backend.agents.supervisor.prompts import (
         GREETING_TEMPLATE,
         CHITCHAT_TEMPLATE,
@@ -60,9 +54,7 @@ def _handle_fast_chat_direct(intent: str, sub_intent: str, state: Dict[str, Any]
     )
     
     if intent == "smalltalk":
-        if sub_intent == "greeting":
-            return GREETING_TEMPLATE
-        return CHITCHAT_TEMPLATE
+        return GREETING_TEMPLATE if sub_intent == "greeting" else CHITCHAT_TEMPLATE
     
     if intent == "help":
         return HELP_TEMPLATE
@@ -103,18 +95,16 @@ def _handle_fast_chat_direct(intent: str, sub_intent: str, state: Dict[str, Any]
                 temperature=llm_params["temperature"],
                 max_tokens=llm_params["max_tokens"],
             )
-            response = client.chat(request)
-            return response.content
+            return client.chat(request).content
             
         except Exception as e:
-            logger.error(f"Overview failed: {e}")
-            return f"저장소 정보를 가져오는 중 오류가 발생했습니다: {e}\n\n다시 시도하시거나 '진단해줘'로 상세 분석을 요청해주세요."
+            logger.error("Overview failed: %s", e)
+            return f"저장소 정보를 가져오는 중 오류가 발생했습니다: {e}"
     
     return "알 수 없는 요청입니다."
 
 
 def _safe_round(value: Optional[Union[int, float]], digits: int = 1) -> str:
-    """None-safe round 함수"""
     if value is None:
         return "N/A"
     try:
@@ -916,18 +906,8 @@ def _generate_last_brief(summary: str, repo_id: str = "") -> str:
 
 
 def summarize_node(state: SupervisorState) -> SupervisorState:
-    """
-    모든 Agent 결과를 종합하여 사용자에게 최종 응답을 생성합니다.
-    
-    새로운 3 Intent + SubIntent 구조:
-    - intent: analyze | followup | general_qa | smalltalk | help | overview
-    - sub_intent: health | onboarding | compare | explain | refine | concept | chat | greeting | chitchat | usage | faq | repo
-    
-    error_message가 있으면 LLM 호출 없이 바로 반환합니다.
-    """
-    # ========================================
-    # 0. error_message 체크 - LLM 호출 없이 바로 반환
-    # ========================================
+    """Agent 결과를 종합하여 최종 응답 생성."""
+    # error_message 체크
     error_message = state.get("error_message")
     if error_message:
         history = state.get("history", [])
@@ -938,7 +918,7 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
         new_state["llm_summary"] = error_message
         return new_state
     
-    # 0.5 Fast Chat 결과 체크 (smalltalk/help/overview - Agentic 모드)
+    # Fast Chat 결과 체크 (Agentic 모드)
     fast_chat_result = state.get("_fast_chat_result")
     if fast_chat_result and "answer_contract" in fast_chat_result:
         answer_contract = fast_chat_result["answer_contract"]
@@ -956,7 +936,7 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
         )
         return new_state
     
-    # 0.6 Fast Chat 직접 처리 (기본 그래프 v1용)
+    # Fast Chat 직접 처리 (기본 그래프 v1)
     intent = state.get("intent", DEFAULT_INTENT)
     sub_intent = state.get("sub_intent") or DEFAULT_SUB_INTENT
     
@@ -972,7 +952,7 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
         new_state["answer_kind"] = get_answer_kind(intent, sub_intent)
         return new_state
     
-    # 1. 상태 추출
+    # 상태 추출
     diagnosis_result = state.get("diagnosis_result")
     security_result = state.get("security_result")
     recommend_result = state.get("recommend_result")
