@@ -43,15 +43,15 @@ class ReproducibilityResult:
 
 def run_reproducibility_test(repo: RepoInfo, iterations: int = NUM_ITERATIONS) -> ReproducibilityResult:
     """단일 레포에서 규칙 레이어 재현성 테스트"""
-    from backend.agents.diagnosis.tools.health_score import create_health_score
-    from backend.agents.diagnosis.tools.activity_scores import activity_score_to_100, aggregate_activity_score
-    from backend.agents.diagnosis.tools.chaoss_metrics import (
+    from backend.agents.diagnosis.tools.scoring.health_score import create_health_score
+    from backend.agents.diagnosis.tools.scoring.activity_scores import activity_score_to_100, aggregate_activity_score
+    from backend.agents.diagnosis.tools.scoring.chaoss_metrics import (
         compute_commit_activity, compute_issue_activity, compute_pr_activity
     )
-    from backend.agents.diagnosis.tools.readme_categories import classify_readme_sections
-    from backend.agents.diagnosis.tools.readme_loader import fetch_readme_content
-    from backend.agents.diagnosis.tools.diagnosis_labels import create_diagnosis_labels
-    from backend.agents.diagnosis.tools.onboarding_tasks import compute_onboarding_tasks
+    from backend.agents.diagnosis.tools.readme.readme_categories import classify_readme_sections
+    from backend.agents.diagnosis.tools.readme.readme_loader import fetch_readme_content
+    from backend.agents.diagnosis.tools.scoring.diagnosis_labels import create_diagnosis_labels
+    from backend.agents.diagnosis.tools.onboarding.onboarding_tasks import compute_onboarding_tasks
     from backend.agents.diagnosis.tools.repo_parser import fetch_repo_info
     
     result = ReproducibilityResult(
@@ -182,3 +182,6 @@ def run_reproducibility_benchmark(repos: List[RepoInfo] = None, verbose: bool = 
 
 if __name__ == "__main__":
     run_reproducibility_benchmark()
+
+
+

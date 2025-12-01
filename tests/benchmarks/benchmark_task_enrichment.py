@@ -51,10 +51,10 @@ class TaskEnrichmentResult:
 
 def run_task_enrichment_test(repo: RepoInfo) -> TaskEnrichmentResult:
     """단일 레포에서 enrichment 비교"""
-    from backend.agents.diagnosis.tools.onboarding_tasks import compute_onboarding_tasks
-    from backend.agents.diagnosis.tools.onboarding_recommender_llm import enrich_onboarding_tasks
-    from backend.agents.diagnosis.tools.diagnosis_labels import create_diagnosis_labels
-    from backend.agents.diagnosis.tools.health_score import create_health_score
+    from backend.agents.diagnosis.tools.onboarding.onboarding_tasks import compute_onboarding_tasks
+    from backend.agents.diagnosis.tools.onboarding.onboarding_recommender_llm import enrich_onboarding_tasks
+    from backend.agents.diagnosis.tools.scoring.diagnosis_labels import create_diagnosis_labels
+    from backend.agents.diagnosis.tools.scoring.health_score import create_health_score
     
     result = TaskEnrichmentResult(repo=f"{repo.owner}/{repo.repo}")
     
@@ -200,3 +200,6 @@ def run_task_enrichment_benchmark(repos: List[RepoInfo] = None, verbose: bool = 
 
 if __name__ == "__main__":
     run_task_enrichment_benchmark()
+
+
+

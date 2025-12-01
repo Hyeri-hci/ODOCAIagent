@@ -93,3 +93,6 @@ def print_pass_fail(passed: bool, detail: str = ""):
     """통과/실패 출력"""
     status = "✅ PASS" if passed else "❌ FAIL"
     print(f"\n  {status}" + (f" - {detail}" if detail else ""))
+
+
+

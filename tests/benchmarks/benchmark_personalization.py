@@ -48,8 +48,8 @@ class PersonalizationResult:
 
 def run_personalization_test(repo: RepoInfo) -> PersonalizationResult:
     """단일 레포에서 개인화 단조성 테스트"""
-    from backend.agents.diagnosis.tools.onboarding_tasks import compute_onboarding_tasks, filter_tasks_for_user
-    from backend.agents.diagnosis.tools.diagnosis_labels import create_diagnosis_labels
+    from backend.agents.diagnosis.tools.onboarding.onboarding_tasks import compute_onboarding_tasks, filter_tasks_for_user
+    from backend.agents.diagnosis.tools.scoring.diagnosis_labels import create_diagnosis_labels
     
     result = PersonalizationResult(repo=f"{repo.owner}/{repo.repo}")
     
@@ -170,3 +170,6 @@ def run_personalization_benchmark(repos: List[RepoInfo] = None, verbose: bool = 
 
 if __name__ == "__main__":
     run_personalization_benchmark()
+
+
+
