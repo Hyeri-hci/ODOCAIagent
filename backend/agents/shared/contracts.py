@@ -45,6 +45,8 @@ class AgentType(str, Enum):
     RECOMMENDATION = "recommendation"
     COMPARE = "compare"
     ONEPAGER = "onepager"
+    SMALLTALK = "smalltalk"  # 인사/잡담 (경량)
+    HELP = "help"            # 도움말 (경량)
 
 
 class ErrorAction(str, Enum):

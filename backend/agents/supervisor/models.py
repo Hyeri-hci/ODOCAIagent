@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict, List, Optional, Dict
 
 
-SupervisorIntent = Literal["analyze", "followup", "general_qa"]
+SupervisorIntent = Literal["analyze", "followup", "general_qa", "smalltalk", "help"]
 
 SubIntent = Literal[
     "health",
@@ -19,17 +19,22 @@ SubIntent = Literal[
     "compare",
     "explain",
     "refine",
-    "concept",     # 지표 개념 설명
-    "chat",        # 일반 대화/인사
+    "concept",          # 지표 개념 설명
+    "chat",             # 일반 대화
+    "greeting",         # 인사 (smalltalk)
+    "chitchat",         # 잡담 (smalltalk)
+    "getting_started",  # 도움말 (help)
 ]
 
 # 응답 종류 (UI 배지 표시용)
 AnswerKind = Literal[
-    "report",   # 진단 리포트 (analyze → health/onboarding/compare)
-    "explain",  # 점수 해설 (followup → explain)
-    "refine",   # Task 필터링 (followup → refine)
-    "concept",  # 개념 설명 (general_qa → concept)
-    "chat",     # 일반 대화 (general_qa → chat)
+    "report",    # 진단 리포트 (analyze → health/onboarding/compare)
+    "explain",   # 점수 해설 (followup → explain)
+    "refine",    # Task 필터링 (followup → refine)
+    "concept",   # 개념 설명 (general_qa → concept)
+    "chat",      # 일반 대화 (general_qa → chat)
+    "greeting",  # 인사 응답 (smalltalk)
+    "help",      # 도움말 (help)
 ]
 
 # Explain 모드에서 설명 타깃 구분
@@ -39,9 +44,12 @@ ExplainTarget = Literal[
     "general",             # 일반 대화 기반 (정량 점수 없음)
 ]
 
-VALID_INTENTS: List[SupervisorIntent] = ["analyze", "followup", "general_qa"]
+VALID_INTENTS: List[SupervisorIntent] = [
+    "analyze", "followup", "general_qa", "smalltalk", "help"
+]
 VALID_SUB_INTENTS: List[SubIntent] = [
-    "health", "onboarding", "compare", "explain", "refine", "concept", "chat"
+    "health", "onboarding", "compare", "explain", "refine", 
+    "concept", "chat", "greeting", "chitchat", "getting_started"
 ]
 
 # 기본값

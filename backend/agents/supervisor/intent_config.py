@@ -128,6 +128,25 @@ INTENT_META: dict[Tuple[str, str], IntentMeta] = {
         "runs_diagnosis": False,
         "requires_previous_result": False,
     },
+    
+    # smalltalk: 인사/잡담 (경량 경로, 진단 절대 금지)
+    ("smalltalk", "greeting"): {
+        "requires_repo": False,
+        "runs_diagnosis": False,
+        "requires_previous_result": False,
+    },
+    ("smalltalk", "chitchat"): {
+        "requires_repo": False,
+        "runs_diagnosis": False,
+        "requires_previous_result": False,
+    },
+    
+    # help: 도움말 (경량 경로, 진단 절대 금지)
+    ("help", "getting_started"): {
+        "requires_repo": False,
+        "runs_diagnosis": False,
+        "requires_previous_result": False,
+    },
 }
 
 # Fallback 메타데이터 (새 조합이 튀어나왔을 때 사용)
@@ -148,6 +167,8 @@ DEFAULT_INTENT_META: IntentMeta = {
 # - refine: Task 필터링 (조건에 맞게 Task 재정렬)
 # - concept: 개념 설명 (지표/프로세스 교육)
 # - chat: 일반 대화 (인사, 잡담)
+# - greeting: 인사 응답 (smalltalk)
+# - help: 도움말 (help)
 ANSWER_KIND_MAP: dict[tuple[str, str], AnswerKind] = {
     # analyze: 진단 리포트
     ("analyze", "health"): "report",
@@ -161,6 +182,13 @@ ANSWER_KIND_MAP: dict[tuple[str, str], AnswerKind] = {
     # general_qa: 개념/대화
     ("general_qa", "concept"): "concept",
     ("general_qa", "chat"): "chat",
+    
+    # smalltalk: 인사/잡담
+    ("smalltalk", "greeting"): "greeting",
+    ("smalltalk", "chitchat"): "greeting",
+    
+    # help: 도움말
+    ("help", "getting_started"): "help",
 }
 
 # 기본 AnswerKind (매핑되지 않는 조합)
