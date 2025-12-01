@@ -503,6 +503,18 @@ def _run_task_explain(
     import os
     
     task_list = state.get("last_task_list", [])
+    
+    # dict인 경우 flat list로 변환 (onboarding_tasks 구조 대응)
+    if isinstance(task_list, dict):
+        flat_list = []
+        for difficulty in ["beginner", "intermediate", "advanced"]:
+            for task in task_list.get(difficulty, []):
+                if isinstance(task, dict):
+                    task_copy = dict(task)
+                    task_copy["difficulty"] = difficulty
+                    flat_list.append(task_copy)
+        task_list = flat_list
+    
     if not task_list:
         return "추천된 Task 목록이 없어서 설명할 수 없습니다. 먼저 저장소 분석을 요청해 주세요."
     
