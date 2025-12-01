@@ -105,15 +105,15 @@ def compute_plan_metrics(plan: Any, response_time: float = 0.0) -> PlanMetrics:
 
 def run_plan_comparison(repo: RepoInfo) -> PlanComparison:
     """단일 레포에 대해 v0 vs v1 비교"""
-    from backend.agents.diagnosis.tools.onboarding_plan import create_onboarding_plan
-    from backend.agents.diagnosis.tools.health_score import create_health_score
-    from backend.agents.diagnosis.tools.activity_scores import activity_score_to_100, aggregate_activity_score
-    from backend.agents.diagnosis.tools.chaoss_metrics import (
+    from backend.agents.diagnosis.tools.onboarding.onboarding_plan import create_onboarding_plan
+    from backend.agents.diagnosis.tools.scoring.health_score import create_health_score
+    from backend.agents.diagnosis.tools.scoring.activity_scores import activity_score_to_100, aggregate_activity_score
+    from backend.agents.diagnosis.tools.scoring.chaoss_metrics import (
         compute_commit_activity, compute_issue_activity, compute_pr_activity
     )
-    from backend.agents.diagnosis.tools.readme_categories import classify_readme_sections
+    from backend.agents.diagnosis.tools.readme.readme_categories import classify_readme_sections
     from backend.agents.diagnosis.tools.repo_parser import fetch_repo_info
-    from backend.agents.diagnosis.tools.readme_loader import fetch_readme_content
+    from backend.agents.diagnosis.tools.readme.readme_loader import fetch_readme_content
     
     # 기본 데이터 수집
     repo_info = fetch_repo_info(repo.owner, repo.repo)
@@ -254,3 +254,6 @@ def run_plan_ablation_benchmark(repos: List[RepoInfo] = None, verbose: bool = Tr
 
 if __name__ == "__main__":
     run_plan_ablation_benchmark()
+
+
+

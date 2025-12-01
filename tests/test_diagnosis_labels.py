@@ -2,7 +2,7 @@
 Tests for diagnosis_labels.py
 """
 import pytest
-from backend.agents.diagnosis.tools.diagnosis_labels import (
+from backend.agents.diagnosis.tools.scoring.diagnosis_labels import (
     compute_health_level,
     compute_onboarding_level,
     compute_docs_issues,
@@ -154,3 +154,6 @@ class TestCreateDiagnosisLabels:
         assert "activity_issues" in d
         assert isinstance(d["docs_issues"], list)
         assert isinstance(d["activity_issues"], list)
+
+
+

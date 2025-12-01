@@ -3,25 +3,126 @@ Supervisor 상태 및 타입 정의
 
 Supervisor는 사용자 자연어 쿼리를 받아 적절한 Agent로 라우팅하고,
 결과를 종합하여 최종 응답을 생성하는 역할을 담당한다.
+
+## 3개 Intent + SubIntent 구조 (v2)
+- SupervisorIntent: analyze | followup | general_qa
+- SubIntent: health | onboarding | compare | explain | refine | concept | chat
+- (intent, sub_intent) 조합으로 라우팅 결정
 """
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, List
 
 
-# Supervisor가 처리하는 전역 태스크 타입
+# =============================================================================
+# 새로운 Intent 구조 (3개 Intent + SubIntent)
+# =============================================================================
+
+# 3개의 상위 Intent
+SupervisorIntent = Literal["analyze", "followup", "general_qa"]
+
+# 7개의 세부 SubIntent
+SubIntent = Literal[
+    "health",      # 저장소 건강 상태 분석
+    "onboarding",  # 온보딩 Task 추천
+    "compare",     # 두 저장소 비교
+    "explain",     # 점수/결과 상세 설명
+    "refine",      # Task 재필터링 (더 쉬운/어려운)
+    "concept",     # 지표 개념 설명
+    "chat",        # 일반 대화/인사
+]
+
+# 응답 종류 (UI 배지 표시용)
+AnswerKind = Literal[
+    "report",   # 진단 리포트 (analyze → health/onboarding/compare)
+    "explain",  # 점수 해설 (followup → explain)
+    "refine",   # Task 필터링 (followup → refine)
+    "concept",  # 개념 설명 (general_qa → concept)
+    "chat",     # 일반 대화 (general_qa → chat)
+]
+
+# Explain 모드에서 설명 타깃 구분
+ExplainTarget = Literal[
+    "metric",              # 점수/지표 설명 (diagnosis_result 기반)
+    "task_recommendation", # 온보딩 Task 추천 근거 설명
+    "general",             # 일반 대화 기반 (정량 점수 없음)
+]
+
+VALID_INTENTS: List[SupervisorIntent] = ["analyze", "followup", "general_qa"]
+VALID_SUB_INTENTS: List[SubIntent] = [
+    "health", "onboarding", "compare", "explain", "refine", "concept", "chat"
+]
+
+# 기본값
+DEFAULT_INTENT: SupervisorIntent = "analyze"
+DEFAULT_SUB_INTENT: SubIntent = "health"
+
+
+# =============================================================================
+# 레거시 호환용 (기존 7개 Intent → 새 구조 매핑)
+# =============================================================================
+
 SupervisorTaskType = Literal[
     "diagnose_repo_health",
     "diagnose_repo_onboarding",
     "compare_two_repos",
     "refine_onboarding_tasks",
     "explain_scores",
+    "concept_qa_metric",      # 지표 개념 설명 (repo 불필요)
+    "concept_qa_process",     # 프로세스/절차 설명 (repo 불필요)
 ]
+
+# 레거시 task_type → (intent, sub_intent) 변환 매핑
+LEGACY_TASK_TYPE_MAP: dict[str, tuple[SupervisorIntent, SubIntent]] = {
+    "diagnose_repo_health": ("analyze", "health"),
+    "diagnose_repo_onboarding": ("analyze", "onboarding"),
+    "compare_two_repos": ("analyze", "compare"),
+    "refine_onboarding_tasks": ("followup", "refine"),
+    "explain_scores": ("followup", "explain"),
+    "concept_qa_metric": ("general_qa", "concept"),
+    "concept_qa_process": ("general_qa", "concept"),
+}
+
+
+def convert_legacy_task_type(task_type: str) -> tuple[SupervisorIntent, SubIntent]:
+    """
+    레거시 task_type을 새 (intent, sub_intent) 구조로 변환.
+    매핑되지 않으면 기본값 ("analyze", "health") 반환.
+    """
+    return LEGACY_TASK_TYPE_MAP.get(task_type, (DEFAULT_INTENT, DEFAULT_SUB_INTENT))
 
 # Agent별 태스크 타입 (각 Agent 모듈에서 구체화)
 DiagnosisTaskType = str
 SecurityTaskType = str
 RecommendTaskType = str
+
+
+class DiagnosisNeeds(TypedDict):
+    """Diagnosis Agent가 실행할 Phase를 결정하는 플래그"""
+    need_health: bool       # 건강 점수 계산 필요
+    need_readme: bool       # README 분석 필요
+    need_activity: bool     # 활동성(커밋/이슈/PR) 분석 필요
+    need_onboarding: bool   # 온보딩 Task 생성 필요
+
+
+def diagnosis_needs_from_task_type(task_type: str) -> DiagnosisNeeds:
+    """
+    diagnosis_task_type에서 DiagnosisNeeds를 생성
+    
+    Supervisor가 결정한 task_type에 따라 Diagnosis가 어떤 Phase를 실행할지 결정합니다.
+    
+    NOTE: need_onboarding은 항상 True입니다.
+    - 온보딩 Task는 항상 계산하고, 요약 단계에서 표시 개수를 조절합니다.
+    - health 모드: Task 3개 간략히 표시
+    - onboarding 모드: Task 5개+ 상세 표시
+    """
+    # 온보딩 Task는 항상 계산 (요약에서 표시 개수 조절)
+    return {
+        "need_health": True,
+        "need_readme": True,
+        "need_activity": True,
+        "need_onboarding": True,  # 항상 True
+    }
 
 
 class RepoInfo(TypedDict):
@@ -50,22 +151,35 @@ class SupervisorState(TypedDict, total=False):
     Supervisor Agent의 상태 정의
     
     LangGraph 기반 워크플로우에서 노드 간 전달되는 상태 객체.
-    task_type은 UI에서 직접 지정하지 않고, LLM이 user_query를 분석하여 추론한다.
+    
+    ## 새 구조 (v2)
+    - intent: analyze | followup | general_qa
+    - sub_intent: health | onboarding | compare | explain | refine | concept | chat
+    - task_type: 레거시 호환용 (기존 7개 Intent)
     """
     # 입력
     user_query: str
+    
+    # ========================================
+    # 새 Intent 구조 (v2)
+    # ========================================
+    intent: SupervisorIntent           # analyze | followup | general_qa
+    sub_intent: SubIntent              # health | onboarding | compare | explain | refine | concept | chat
+    
+    # 레거시 호환 (기존 7개 Intent)
     task_type: SupervisorTaskType
 
-    # 의도 및 저장소 정보
-    intent: SupervisorTaskType
+    # 저장소 정보
     repo: RepoInfo
     compare_repo: RepoInfo
+    repos: List[RepoInfo]              # compare용 저장소 리스트 (나중에 확장용)
 
     # 사용자 맥락
     user_context: UserContext
 
     # Agent별 태스크 타입 (Supervisor 매핑 노드에서 설정)
     diagnosis_task_type: DiagnosisTaskType
+    diagnosis_needs: DiagnosisNeeds  # Diagnosis가 실행할 Phase 결정
     security_task_type: SecurityTaskType
     recommend_task_type: RecommendTaskType
 
@@ -75,8 +189,19 @@ class SupervisorState(TypedDict, total=False):
 
     # 최종 응답
     llm_summary: str
+    
+    # 응답 메타데이터 (UI 표시용)
+    answer_kind: AnswerKind
+    last_brief: str
+    
+    # Explain 모드 타깃 (followup/explain에서 사용)
+    explain_target: ExplainTarget      # metric | task_recommendation | general
+    explain_metrics: list[str]         # metric 모드에서만 사용 (예: ["health_score", "activity_maintainability"])
+    
+    # 에러 메시지 (LLM 호출 없이 바로 반환할 때 사용)
+    error_message: str
 
-    # 대화 히스토리
+    # 대화 히스토리 (dict 형태로 통일: {"role": "user"|"assistant", "content": "..."})
     history: list[Turn]
 
     # ========================================
@@ -84,23 +209,52 @@ class SupervisorState(TypedDict, total=False):
     # ========================================
     
     # 이전 턴 메타데이터 (follow-up 처리용)
-    last_repo: RepoInfo              # 마지막으로 분석한 저장소
-    last_intent: SupervisorTaskType  # 마지막 intent
-    last_task_list: list[dict]       # 마지막 온보딩 Task 목록 (리랭킹용)
+    last_repo: RepoInfo
+    last_intent: SupervisorIntent
+    last_sub_intent: SubIntent
+    last_answer_kind: AnswerKind
+    last_explain_target: ExplainTarget
+    last_task_list: list[dict]
     
     # 현재 턴 분류 결과
-    is_followup: bool                # 이전 턴 컨텍스트 참조 여부
-    followup_type: Literal[          # follow-up 유형
-        "refine_easier",             # "더 쉬운 거 없어?"
-        "refine_harder",             # "더 어려운 거?"
-        "refine_different",          # "다른 종류는?"
-        "ask_detail",                # "이거 더 자세히"
-        "compare_similar",           # "비슷한 repo는?"
-        "continue_same",             # 같은 repo 계속 분석
+    is_followup: bool
+    followup_type: Literal[
+        "refine_easier",
+        "refine_harder",
+        "refine_different",
+        "ask_detail",
+        "compare_similar",
+        "continue_same",
         None
     ]
     
-    # ========================================
     # 진행 상황 콜백 (UI 표시용)
-    # ========================================
-    _progress_callback: Any  # Callable[[str, str], None] - 단계명, 상세 내용
+    _progress_callback: Any
+
+
+def decide_explain_target(state: SupervisorState) -> ExplainTarget:
+    """이전 턴 정보를 기반으로 explain 모드의 타깃을 결정. (레거시 호환용)"""
+    last_answer_kind = state.get("last_answer_kind")
+    last_explain_target = state.get("last_explain_target")
+    last_task_list = state.get("last_task_list")
+    diagnosis_result = state.get("diagnosis_result")
+    
+    if last_answer_kind == "report":
+        return "metric"
+    
+    if last_answer_kind == "explain" and last_explain_target == "metric":
+        return "metric"
+    
+    if last_explain_target == "task_recommendation":
+        return "task_recommendation"
+    
+    if last_task_list:
+        return "task_recommendation"
+    
+    if diagnosis_result and isinstance(diagnosis_result, dict):
+        if diagnosis_result.get("scores"):
+            return "metric"
+        if diagnosis_result.get("onboarding_tasks"):
+            return "task_recommendation"
+    
+    return "general"

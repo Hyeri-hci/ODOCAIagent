@@ -117,7 +117,7 @@ def summarize_diagnosis_repository(
     ]
 
     client = fetch_llm_client()
-    request = ChatRequest(messages=messages, max_tokens=2000, temperature=0.2)
+    request = ChatRequest(messages=messages, max_tokens=4000, temperature=0.2)
     response = client.chat(request)
 
     if not is_healthy:

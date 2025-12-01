@@ -11,7 +11,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from backend.agents.diagnosis.tools.chaoss_metrics import (
+from backend.agents.diagnosis.tools.scoring.chaoss_metrics import (
     _parse_iso8601,
     _parse_commit_date,
     _extract_author_id,
@@ -169,7 +169,7 @@ class TestComputeCommitActivity:
             },
         }
 
-    @patch("backend.agents.diagnosis.tools.chaoss_metrics.fetch_recent_commits")
+    @patch("backend.agents.diagnosis.tools.scoring.chaoss_metrics.fetch_recent_commits")
     def test_basic_metrics(self, mock_fetch):
         mock_fetch.return_value = [
             self._make_commit("user1", "2024-11-15T10:00:00Z"),
@@ -185,7 +185,7 @@ class TestComputeCommitActivity:
         assert result.commits_per_day == pytest.approx(0.1, rel=0.01)
         assert result.commits_per_week == pytest.approx(0.7, rel=0.01)
 
-    @patch("backend.agents.diagnosis.tools.chaoss_metrics.fetch_recent_commits")
+    @patch("backend.agents.diagnosis.tools.scoring.chaoss_metrics.fetch_recent_commits")
     def test_first_last_commit_dates(self, mock_fetch):
         mock_fetch.return_value = [
             self._make_commit("user1", "2024-11-20T10:00:00Z"),
@@ -198,7 +198,7 @@ class TestComputeCommitActivity:
         assert result.first_commit_date == date(2024, 11, 10)
         assert result.last_commit_date == date(2024, 11, 20)
 
-    @patch("backend.agents.diagnosis.tools.chaoss_metrics.fetch_recent_commits")
+    @patch("backend.agents.diagnosis.tools.scoring.chaoss_metrics.fetch_recent_commits")
     def test_empty_commits(self, mock_fetch):
         mock_fetch.return_value = []
 
@@ -212,7 +212,7 @@ class TestComputeCommitActivity:
         assert result.first_commit_date is None
         assert result.last_commit_date is None
 
-    @patch("backend.agents.diagnosis.tools.chaoss_metrics.fetch_recent_commits")
+    @patch("backend.agents.diagnosis.tools.scoring.chaoss_metrics.fetch_recent_commits")
     def test_api_error_handling(self, mock_fetch):
         mock_fetch.side_effect = Exception("API Error")
 
@@ -223,7 +223,7 @@ class TestComputeCommitActivity:
         assert result.owner == "owner"
         assert result.repo == "repo"
 
-    @patch("backend.agents.diagnosis.tools.chaoss_metrics.fetch_recent_commits")
+    @patch("backend.agents.diagnosis.tools.scoring.chaoss_metrics.fetch_recent_commits")
     def test_unique_authors_deduplication(self, mock_fetch):
         mock_fetch.return_value = [
             self._make_commit("user1", "2024-11-15T10:00:00Z"),
@@ -237,7 +237,7 @@ class TestComputeCommitActivity:
         assert result.total_commits == 4
         assert result.unique_authors == 2
 
-    @patch("backend.agents.diagnosis.tools.chaoss_metrics.fetch_recent_commits")
+    @patch("backend.agents.diagnosis.tools.scoring.chaoss_metrics.fetch_recent_commits")
     def test_days_since_last_commit(self, mock_fetch):
         today = datetime.now(timezone.utc).date()
         yesterday = today.replace(day=today.day - 1) if today.day > 1 else today
@@ -252,7 +252,7 @@ class TestComputeCommitActivity:
         assert result.days_since_last_commit >= 0
         assert result.days_since_last_commit <= 2
 
-    @patch("backend.agents.diagnosis.tools.chaoss_metrics.fetch_recent_commits")
+    @patch("backend.agents.diagnosis.tools.scoring.chaoss_metrics.fetch_recent_commits")
     def test_minimum_window_days(self, mock_fetch):
         mock_fetch.return_value = []
 
@@ -260,7 +260,7 @@ class TestComputeCommitActivity:
 
         assert result.window_days == 1
 
-    @patch("backend.agents.diagnosis.tools.chaoss_metrics.fetch_recent_commits")
+    @patch("backend.agents.diagnosis.tools.scoring.chaoss_metrics.fetch_recent_commits")
     def test_to_dict(self, mock_fetch):
         mock_fetch.return_value = [
             self._make_commit("user1", "2024-11-15T10:00:00Z"),
@@ -300,3 +300,6 @@ class TestIntegration:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+

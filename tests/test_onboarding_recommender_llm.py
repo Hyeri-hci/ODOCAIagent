@@ -6,11 +6,11 @@ LLM 보강 및 Fallback 로직 테스트.
 import pytest
 from unittest.mock import patch, MagicMock
 
-from backend.agents.diagnosis.tools.onboarding_tasks import (
+from backend.agents.diagnosis.tools.onboarding.onboarding_tasks import (
     TaskSuggestion,
     OnboardingTasks,
 )
-from backend.agents.diagnosis.tools.onboarding_recommender_llm import (
+from backend.agents.diagnosis.tools.onboarding.onboarding_recommender_llm import (
     EnrichedTask,
     OnboardingScenario,
     LLMEnrichedTasks,
@@ -282,3 +282,6 @@ class TestEnrichOnboardingTasks:
         # Fallback 사용됨
         assert "enriched_tasks" in result
         assert result["enriched_tasks"]["issue#1"]["reason_text"] == "Fallback 이유"
+
+
+

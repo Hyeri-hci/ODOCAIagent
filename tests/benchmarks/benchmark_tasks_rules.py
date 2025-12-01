@@ -61,9 +61,9 @@ class TaskRuleResult:
 
 def analyze_tasks_for_repo(repo: RepoInfo) -> TaskRuleResult:
     """레포의 Task 규칙 분석"""
-    from backend.agents.diagnosis.tools.onboarding_tasks import compute_onboarding_tasks
-    from backend.agents.diagnosis.tools.readme_categories import classify_readme_sections
-    from backend.agents.diagnosis.tools.readme_loader import fetch_readme_content
+    from backend.agents.diagnosis.tools.onboarding.onboarding_tasks import compute_onboarding_tasks
+    from backend.agents.diagnosis.tools.readme.readme_categories import classify_readme_sections
+    from backend.agents.diagnosis.tools.readme.readme_loader import fetch_readme_content
     
     try:
         # README 분석으로 docs_issues 결정
@@ -92,7 +92,7 @@ def analyze_tasks_for_repo(repo: RepoInfo) -> TaskRuleResult:
         tasks = compute_onboarding_tasks(repo.owner, repo.repo, labels, max_issues=30, min_tasks=3)
         
         # 실제 사용자에게 보여줄 Task (filter_tasks_for_user 적용)
-        from backend.agents.diagnosis.tools.onboarding_tasks import filter_tasks_for_user
+        from backend.agents.diagnosis.tools.onboarding.onboarding_tasks import filter_tasks_for_user
         beginner_filtered = filter_tasks_for_user(tasks, user_level="beginner")
         top_5_beginner = beginner_filtered[:5]  # 상위 5개만 측정 (실제 UX)
         
@@ -230,3 +230,6 @@ def run_tasks_rules_benchmark(repos: List[RepoInfo] = None, verbose: bool = True
 
 if __name__ == "__main__":
     run_tasks_rules_benchmark()
+
+
+

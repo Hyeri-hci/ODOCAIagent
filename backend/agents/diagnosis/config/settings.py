@@ -100,7 +100,7 @@ class LLMPolicy:
     max_tasks_per_prompt: int = 15
     max_retries: int = 2
     temperature: float = 0.7
-    max_tokens: int = 2000
+    max_tokens: int = 4000
     timeout_seconds: int = 30
 
 

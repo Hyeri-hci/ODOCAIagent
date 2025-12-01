@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from backend.common.github_client import fetch_repo_overview
-from .readme_loader import (
+from .readme.readme_loader import (
     compute_reademe_metrics,
     ReadmeContent,
 )

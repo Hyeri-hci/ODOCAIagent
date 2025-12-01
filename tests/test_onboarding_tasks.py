@@ -6,7 +6,7 @@ Onboarding Tasks 단위 테스트
 import pytest
 from unittest.mock import patch, MagicMock
 
-from backend.agents.diagnosis.tools.onboarding_tasks import (
+from backend.agents.diagnosis.tools.onboarding.onboarding_tasks import (
     TaskSuggestion,
     OnboardingTasks,
     determine_difficulty_from_labels,
@@ -350,7 +350,7 @@ class TestOnboardingTasks:
 class TestComputeOnboardingTasks:
     """compute_onboarding_tasks 통합 테스트."""
     
-    @patch("backend.agents.diagnosis.tools.onboarding_tasks.fetch_open_issues_for_tasks")
+    @patch("backend.agents.diagnosis.tools.onboarding.onboarding_tasks.fetch_open_issues_for_tasks")
     def test_with_mocked_issues(self, mock_fetch):
         mock_fetch.return_value = [
             {
@@ -606,3 +606,6 @@ class TestFilterTasksForUser:
         
         filtered = filter_tasks_for_user(tasks, user_level="beginner")
         assert not any(t.id == "a1" for t in filtered)
+
+
+

@@ -82,6 +82,8 @@ if "last_result" not in st.session_state:
 if "analysis_history" not in st.session_state:
     # 분석된 저장소 결과들을 저장 (owner/repo -> result)
     st.session_state.analysis_history = {}
+if "example_query" not in st.session_state:
+    st.session_state.example_query = None
 
 
 # ============================================================================
@@ -98,16 +100,49 @@ with st.sidebar:
     show_scores = st.checkbox("점수 상세 표시", value=False)
     show_tasks = st.checkbox("온보딩 Task 표시", value=False)
     debug_mode = st.checkbox("디버그 모드", value=False)
+    developer_mode = st.checkbox("개발자 모드", value=False, help="answer_kind, last_brief 등 내부 정보 표시")
+    
+    st.divider()
+    
+    # 예시 질문 버튼
+    st.markdown("**예시 질문**")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("상태 분석", use_container_width=True, help="facebook/react 상태 분석해줘"):
+            st.session_state.example_query = "facebook/react 상태 분석해줘"
+            st.rerun()
+    with col2:
+        if st.button("기여하기", use_container_width=True, help="초보자인데 vue에 기여하고 싶어요"):
+            st.session_state.example_query = "초보자인데 vuejs/vue에 기여하고 싶어요"
+            st.rerun()
+    
+    col3, col4 = st.columns(2)
+    with col3:
+        if st.button("개념 설명", use_container_width=True, help="온보딩 용이성이 뭐야?"):
+            st.session_state.example_query = "온보딩 용이성이 뭐야?"
+            st.rerun()
+    with col4:
+        if st.button("PR 가이드", use_container_width=True, help="PR은 어떻게 보내?"):
+            st.session_state.example_query = "PR은 어떻게 보내?"
+            st.rerun()
     
     st.divider()
     
     st.markdown("**지원 질문 유형**")
     st.markdown("""
-- Health 분석: "facebook/react 상태 분석해줘"
-- 온보딩 추천: "초보자인데 vue에 기여하고 싶어요"
-- 점수 설명: "왜 이 점수가 나왔어?"
-- 비교 분석: "react와 vue를 비교해줘"
-- 후속 질문: "더 쉬운 거 없어?"
+**저장소 분석** (repo 필요)
+- :blue[Health]: "facebook/react 상태 분석해줘"
+- :green[온보딩]: "초보자인데 vue에 기여하고 싶어요"
+- :orange[비교]: "react와 vue를 비교해줘"
+
+**개념 Q&A** (repo 불필요)
+- :violet[지표 설명]: "온보딩 용이성이 뭐야?"
+- :violet[프로세스]: "PR은 어떻게 보내?"
+
+**후속 질문** (이전 결과 참조)
+- :gray[필터링]: "더 쉬운 거 없어?"
+- :gray[상세]: "이 점수는 어떻게 계산된 거야?"
     """)
     
     st.divider()
@@ -116,6 +151,8 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.last_result = None
         st.session_state.analysis_history = {}
+        if "example_query" in st.session_state:
+            del st.session_state["example_query"]
         st.rerun()
     
     # 분석된 저장소 히스토리 표시
@@ -127,14 +164,51 @@ with st.sidebar:
 
 
 # ============================================================================
+# 응답 유형 배지 표시
+# ============================================================================
+ANSWER_KIND_BADGES = {
+    "report": ("📊 진단 리포트", "blue"),
+    "explain": ("💡 점수 해설", "green"),
+    "refine": ("🔍 Task 필터링", "orange"),
+    "concept": ("📚 개념 설명", "violet"),
+    "chat": ("💬 일반 대화", "gray"),
+}
+
+
+def get_answer_kind_badge(answer_kind: str) -> str:
+    """answer_kind에 해당하는 Streamlit 배지 마크다운 반환"""
+    label, color = ANSWER_KIND_BADGES.get(answer_kind, ("💬 응답", "gray"))
+    return f":{color}[{label}]"
+
+
+# ============================================================================
 # 대화 히스토리 표시
 # ============================================================================
 chat_container = st.container()
 
 with chat_container:
-    for msg in st.session_state.messages:
+    messages = st.session_state.messages
+    total_msgs = len(messages)
+    
+    for idx, msg in enumerate(messages):
+        is_last = (idx == total_msgs - 1)
+        
         with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
+            # assistant 메시지에 배지 표시
+            if msg["role"] == "assistant" and msg.get("metadata"):
+                meta = msg["metadata"]
+                answer_kind = meta.get("answer_kind", "chat")
+                badge = get_answer_kind_badge(answer_kind)
+                st.markdown(badge)
+            
+            # 이전 응답은 접기로 표시 (마지막 응답 제외)
+            if msg["role"] == "assistant" and not is_last and msg["content"]:
+                # 이전 응답은 접어서 표시
+                content_preview = msg["content"][:100] + "..." if len(msg["content"]) > 100 else msg["content"]
+                with st.expander(f"이전 응답: {content_preview}", expanded=False):
+                    st.markdown(msg["content"])
+            else:
+                st.markdown(msg["content"])
             
             # 로그/상세정보 표시 (assistant 메시지에만)
             if msg["role"] == "assistant" and msg.get("metadata"):
@@ -145,11 +219,18 @@ with chat_container:
                 with cols[0]:
                     st.caption(f"실행 시간: {meta.get('elapsed', 'N/A')}")
                 with cols[1]:
-                    st.caption(f"Intent: {meta.get('intent', 'N/A')}")
+                    # intent → sub_intent 표시 (새 구조)
+                    intent_display = f"{meta.get('intent', 'N/A')}/{meta.get('sub_intent', 'N/A')}"
+                    st.caption(f"Intent: {intent_display}")
                 with cols[2]:
                     st.caption(f"Level: {meta.get('level', 'N/A')}")
                 with cols[3]:
                     st.caption(f"Follow-up: {'예' if meta.get('is_followup') else '아니오'}")
+                
+                # 개발자 모드: last_brief 표시
+                if developer_mode and meta.get("last_brief"):
+                    with st.expander("last_brief (맥락 요약)"):
+                        st.caption(meta["last_brief"])
                 
                 # 로그
                 if show_log and meta.get("log_summary"):
@@ -175,7 +256,16 @@ with chat_container:
 # ============================================================================
 # 채팅 입력 (하단 고정)
 # ============================================================================
-if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상태 분석해줘)"):
+
+# 예시 질문 버튼에서 설정한 쿼리 처리
+example_query = st.session_state.example_query
+if example_query:
+    st.session_state.example_query = None  # 리셋
+    prompt = example_query
+else:
+    prompt = st.chat_input("질문을 입력하세요 (예: facebook/react 상태 분석해줘)")
+
+if prompt:
     # 사용자 메시지 추가
     st.session_state.messages.append({
         "role": "user",
@@ -226,7 +316,16 @@ if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상�
                     # diagnosis_result가 dict인 경우만 처리
                     diag = prev.get("diagnosis_result")
                     if isinstance(diag, dict) and diag.get("onboarding_tasks"):
-                        initial_state["last_task_list"] = diag.get("onboarding_tasks")
+                        # onboarding_tasks를 flat list로 변환
+                        onboarding_tasks = diag.get("onboarding_tasks", {})
+                        task_list = []
+                        for difficulty in ["beginner", "intermediate", "advanced"]:
+                            for task in onboarding_tasks.get(difficulty, []):
+                                task_copy = dict(task) if isinstance(task, dict) else {}
+                                if "difficulty" not in task_copy:
+                                    task_copy["difficulty"] = difficulty
+                                task_list.append(task_copy)
+                        initial_state["last_task_list"] = task_list
                     if prev.get("task_type"):
                         initial_state["last_intent"] = prev.get("task_type")
                 
@@ -270,6 +369,11 @@ if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상�
                             "task_type": result.get("task_type"),
                         }
                 
+                # 배지 표시 (응답 위에)
+                answer_kind = result.get("answer_kind", "chat")
+                badge = get_answer_kind_badge(answer_kind)
+                st.markdown(badge)
+                
                 # 응답 표시
                 llm_summary = result.get("llm_summary", "")
                 if llm_summary:
@@ -309,7 +413,10 @@ if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상�
                 
                 metadata = {
                     "elapsed": f"{elapsed:.1f}초",
-                    "intent": result.get("task_type", "N/A"),
+                    "intent": result.get("intent", result.get("task_type", "N/A")),
+                    "sub_intent": result.get("sub_intent", "N/A"),
+                    "answer_kind": result.get("answer_kind", "chat"),
+                    "last_brief": result.get("last_brief", ""),
                     "level": level,
                     "is_followup": result.get("is_followup", False),
                     "log_summary": "\n".join(log_lines),
@@ -322,11 +429,17 @@ if prompt := st.chat_input("질문을 입력하세요 (예: facebook/react 상�
                 with cols[0]:
                     st.caption(f"실행 시간: {metadata['elapsed']}")
                 with cols[1]:
-                    st.caption(f"Intent: {metadata['intent']}")
+                    intent_display = f"{metadata['intent']}/{metadata['sub_intent']}"
+                    st.caption(f"Intent: {intent_display}")
                 with cols[2]:
                     st.caption(f"Level: {metadata['level']}")
                 with cols[3]:
                     st.caption(f"Follow-up: {'예' if metadata['is_followup'] else '아니오'}")
+                
+                # 개발자 모드: last_brief 표시
+                if developer_mode and metadata.get("last_brief"):
+                    with st.expander("last_brief (맥락 요약)"):
+                        st.caption(metadata["last_brief"])
                 
                 # 로그 표시
                 if show_log:

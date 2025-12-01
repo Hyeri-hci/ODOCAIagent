@@ -2,7 +2,7 @@
 Tests for onboarding_plan.py
 """
 import pytest
-from backend.agents.diagnosis.tools.onboarding_plan import (
+from backend.agents.diagnosis.tools.onboarding.onboarding_plan import (
     OnboardingPlan,
     create_onboarding_plan_v0,
     create_onboarding_plan,
@@ -180,3 +180,6 @@ class TestCreateOnboardingPlan:
         assert plan.recommended_for_beginner is True
         assert plan.difficulty == "easy"
         assert len(plan.first_steps) == 5
+
+
+
