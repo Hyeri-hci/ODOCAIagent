@@ -1,42 +1,33 @@
-"""The Supervisor Agent, which routes user queries and synthesizes final responses."""
+"""Supervisor Agent V1: Routes user queries and synthesizes responses."""
 from .models import (
     SupervisorState,
-    SupervisorTaskType,
     RepoInfo,
     UserContext,
-    Turn,
-    DiagnosisTaskType,
-    SecurityTaskType,
-    RecommendTaskType,
+    SupervisorIntent,
+    SubIntent,
+    AnswerKind,
 )
 from .service import (
-    SupervisorInput,
-    SupervisorOutput,
-    run_supervisor,
+    call_diagnosis_agent,
     build_initial_state,
 )
-from .nodes import (
-    classify_intent_node,
-    map_task_types_node,
-    map_to_diagnosis_task_type,
-    run_diagnosis_node,
+from .graph import (
+    get_supervisor_graph,
+    build_supervisor_graph,
 )
 
 __all__ = [
+    # Models
     "SupervisorState",
-    "SupervisorTaskType",
     "RepoInfo",
     "UserContext",
-    "Turn",
-    "DiagnosisTaskType",
-    "SecurityTaskType",
-    "RecommendTaskType",
-    "SupervisorInput",
-    "SupervisorOutput",
-    "run_supervisor",
+    "SupervisorIntent",
+    "SubIntent",
+    "AnswerKind",
+    # Service
+    "call_diagnosis_agent",
     "build_initial_state",
-    "classify_intent_node",
-    "map_task_types_node",
-    "map_to_diagnosis_task_type",
-    "run_diagnosis_node",
+    # Graph
+    "get_supervisor_graph",
+    "build_supervisor_graph",
 ]
