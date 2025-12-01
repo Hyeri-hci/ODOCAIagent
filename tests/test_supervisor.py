@@ -25,6 +25,7 @@ Supervisor 통합 테스트
 
 import sys
 import os
+import uuid
 from pathlib import Path
 from unittest.mock import patch
 
@@ -498,10 +499,17 @@ def run_e2e_tests():
         print("-" * 50)
         
         try:
-            result = graph.invoke({
-                "user_query": tc["query"],
-                "history": [],
-            })
+            result = graph.invoke(
+                {
+                    "user_query": tc["query"],
+                    "history": [],
+                },
+                config={
+                    "configurable": {
+                        "thread_id": uuid.uuid4().hex,
+                    }
+                },
+            )
             
             detected_intent = result.get("intent", "unknown")
             detected_sub_intent = result.get("sub_intent", "unknown")
