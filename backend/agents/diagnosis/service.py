@@ -4,27 +4,28 @@ from dataclasses import asdict
 from typing import Any, Dict, List
 import logging
 
-from backend.agents.diagnosis.tools.readme_loader import (
+from backend.agents.diagnosis.tools.readme.readme_loader import (
     fetch_readme_content,
     compute_reademe_metrics,
 )
-from backend.agents.diagnosis.tools.readme_categories import classify_readme_sections
+from backend.agents.diagnosis.tools.readme.readme_categories import classify_readme_sections
 from backend.common.github_client import DEFAULT_ACTIVITY_DAYS
 from backend.common.parallel import run_parallel
 from .tools.repo_parser import fetch_repo_info
-from .tools.chaoss_metrics import (
+from .tools.scoring.chaoss_metrics import (
     compute_commit_activity,
     compute_issue_activity,
     compute_pr_activity,
 )
-from .tools.activity_scores import (
+from .tools.scoring.activity_scores import (
     aggregate_activity_score,
     activity_score_to_100,
 )
-from .tools.health_score import HealthScore, create_health_score
-from .tools.diagnosis_labels import create_diagnosis_labels
-from .tools.onboarding_plan import create_onboarding_plan
-from .tools.onboarding_tasks import compute_onboarding_tasks
+from .tools.scoring.health_score import HealthScore, create_health_score
+from .tools.scoring.diagnosis_labels import create_diagnosis_labels
+from .tools.onboarding.onboarding_plan import create_onboarding_plan
+from .tools.onboarding.onboarding_tasks import compute_onboarding_tasks
+from .tools.scoring.reasoning_builder import build_explain_context
 from .task_type import DiagnosisTaskType, parse_task_type
 from .llm_summarizer import summarize_diagnosis_repository
 
@@ -164,7 +165,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             advanced_mode=advanced_analysis,
         )
     else:
-        from backend.agents.diagnosis.tools.readme_summarizer import ReadmeUnifiedSummary
+        from backend.agents.diagnosis.tools.readme.readme_summarizer import ReadmeUnifiedSummary
         readme_categories, readme_category_score = {}, 0
         unified_summary = ReadmeUnifiedSummary(summary_en="", summary_ko="")
     
@@ -320,7 +321,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             "task_type": task_type.value if isinstance(task_type, DiagnosisTaskType) else str(task_type),
             "focus": focus,
             "user_context": user_context,
-            "needs": needs,  # 어떤 Phase가 실행되었는지 기록
+            "needs": needs,
         },
         "scores": asdict(scores),
         "labels": labels.to_dict(),
@@ -328,6 +329,9 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         "onboarding_tasks": onboarding_tasks.to_dict() if onboarding_tasks else None,
         "details": details,
     }
+
+    # explain 모드를 위한 reasoning 데이터 생성
+    result_json["explain_context"] = build_explain_context(result_json)
 
     # LLM 기반 요약
     if USE_LLM_SUMMARY:
