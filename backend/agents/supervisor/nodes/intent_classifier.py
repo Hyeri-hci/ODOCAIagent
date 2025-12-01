@@ -44,43 +44,55 @@ HELP_PATTERNS = [
     r"사용법",
     r"기능",
 ]
-# 분석/진단 관련 키워드 (있으면 경량 분류 스킵)
+# 개요 패턴: "facebook/react가 뭐야?", "react 알려줘"
+OVERVIEW_PATTERNS = [
+    r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)(가|이|는|은)?\s*(뭐|뭔|무엇|what)",
+    r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*알려",
+    r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*(소개|개요)",
+]
+# 분석/진단 관련 키워드 (있으면 Expert Tool 경로)
 ANALYSIS_KEYWORDS = {
-    "분석", "진단", "비교", "알려", "설명", "추천", "건강", "온보딩",
+    "분석", "진단", "비교", "추천", "건강", "온보딩", "기여",
     "analyze", "diagnose", "compare", "health", "onboarding",
-    "/",  # owner/repo 형식 감지
 }
 
 
 def _fast_classify_smalltalk(query: str) -> Optional[Tuple[SupervisorIntent, SubIntent]]:
     """
-    경량 분류: 인사/잡담/도움말 빠른 판별 (LLM 호출 없이).
+    경량 분류: Fast Chat 경로 빠른 판별 (LLM 호출 없이).
     
-    규칙:
-    - 도움 요청 패턴 포함 → help.getting_started (우선)
-    - 분석/진단 키워드 포함 → None (일반 분류 필요)
-    - 토큰 수 ≤ 8, 인사 키워드 포함 → smalltalk.greeting
-    - 토큰 수 ≤ 8, 잡담 키워드 포함 → smalltalk.chitchat  
+    규칙 (우선순위 순):
+    1. 도움 요청 패턴 → help.getting_started
+    2. 분석/진단 키워드 → None (Expert Tool)
+    3. 개요 패턴 (owner/repo가 뭐야?) → overview.repo
+    4. 짧은 인사 (≤8 토큰) → smalltalk.greeting
+    5. 짧은 잡담 (≤8 토큰) → smalltalk.chitchat
     
     Returns:
-        (intent, sub_intent) 튜플 또는 None (일반 분류 필요)
+        (intent, sub_intent) 튜플 또는 None (LLM 분류 필요)
     """
     query_lower = query.lower().strip()
     tokens = query_lower.split()
     token_count = len(tokens)
     
-    # 1) 도움말 패턴 먼저 체크 (최우선, 분석 키워드보다 먼저)
+    # 1) 도움말 패턴 먼저 체크 (최우선)
     for pattern in HELP_PATTERNS:
         if re.search(pattern, query_lower):
             logger.info("[fast_classify] help.getting_started: %s", query[:50])
             return ("help", "getting_started")
     
-    # 2) 분석/진단 관련 키워드가 있으면 경량 분류 스킵
+    # 2) 분석/진단 관련 키워드가 있으면 Expert Tool 경로
     for kw in ANALYSIS_KEYWORDS:
         if kw in query_lower:
             return None
     
-    # 3) 짧은 쿼리 (≤ 8 토큰)에서만 인사/잡담 체크
+    # 3) 개요 패턴 체크 (owner/repo가 뭐야?)
+    for pattern in OVERVIEW_PATTERNS:
+        if re.search(pattern, query_lower):
+            logger.info("[fast_classify] overview.repo: %s", query[:50])
+            return ("overview", "repo")
+    
+    # 4) 짧은 쿼리 (≤ 8 토큰)에서만 인사/잡담 체크
     if token_count <= 8:
         # 인사 키워드 체크
         for kw in GREETING_KEYWORDS:
@@ -94,7 +106,7 @@ def _fast_classify_smalltalk(query: str) -> Optional[Tuple[SupervisorIntent, Sub
                 logger.info("[fast_classify] smalltalk.chitchat: %s", query[:50])
                 return ("smalltalk", "chitchat")
     
-    # 4) 경량 분류 불가 → LLM 분류 필요
+    # 5) 경량 분류 불가 → LLM 분류 필요
     return None
 
 
