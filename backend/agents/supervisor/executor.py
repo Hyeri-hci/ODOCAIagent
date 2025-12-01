@@ -539,28 +539,11 @@ def create_default_agent_runners() -> Dict[AgentType, Callable]:
         }
     
     def smalltalk_runner(params: Dict, state: Dict, dependencies: Dict) -> Dict:
-        """
-        Smalltalk runner - 인사/잡담 응답 (LLM 미사용, 즉시 응답).
+        """Smalltalk runner - 인사/잡담 (LLM 미사용, p95 < 100ms)."""
+        from backend.agents.supervisor.prompts import GREETING_TEMPLATE, CHITCHAT_TEMPLATE
         
-        p95 < 100ms 목표로 템플릿 기반 응답 생성.
-        """
         style = params.get("style", "greeting")
-        
-        if style == "greeting":
-            text = (
-                "안녕하세요! ODOC입니다. 무엇을 도와드릴까요?\n\n"
-                "예시:\n"
-                "- 레포 개요: 'facebook/react가 뭐야?'\n"
-                "- 진단: 'react 상태 분석해줘'\n"
-                "- 비교: 'react랑 vue 비교해줘'"
-            )
-        else:  # chitchat
-            text = (
-                "네, 계속 도와드릴게요! 다음 중 하나를 시도해보세요:\n\n"
-                "- 레포 개요: 'vercel/next.js가 뭐야?'\n"
-                "- 진단: 'tensorflow 분석해줘'\n"
-                "- 온보딩: '이 프로젝트에 기여하고 싶어'"
-            )
+        text = GREETING_TEMPLATE if style == "greeting" else CHITCHAT_TEMPLATE
         
         return {
             "style": style,
@@ -572,34 +555,94 @@ def create_default_agent_runners() -> Dict[AgentType, Callable]:
         }
     
     def help_runner(params: Dict, state: Dict, dependencies: Dict) -> Dict:
-        """
-        Help runner - 도움말 응답 (LLM 미사용, 즉시 응답).
-        
-        p95 < 100ms 목표로 템플릿 기반 기능 안내.
-        """
-        text = (
-            "제가 할 수 있는 일:\n\n"
-            "**레포 개요**\n"
-            "'facebook/react가 뭐야?', 'vercel/next.js 알려줘'\n\n"
-            "**진단 분석**\n"
-            "'react 상태 분석해줘', 'tensorflow 진단해줘'\n\n"
-            "**비교 분석**\n"
-            "'react랑 vue 비교해줘', 'next.js vs nuxt.js'\n\n"
-            "**온보딩 추천**\n"
-            "'초보자인데 이 프로젝트에 기여하고 싶어'\n\n"
-            "**발표용 요약**\n"
-            "'한 장 요약 만들어줘'\n\n"
-            "어떤 걸 해볼까요?"
-        )
+        """Help runner - 도움말 (LLM 미사용, p95 < 100ms)."""
+        from backend.agents.supervisor.prompts import HELP_TEMPLATE
         
         return {
             "style": "help",
             "answer_contract": {
-                "text": text,
+                "text": HELP_TEMPLATE,
                 "sources": ["SYS:TEMPLATES:HELP"],
                 "source_kinds": ["system_template"],
             }
         }
+    
+    def overview_runner(params: Dict, state: Dict, dependencies: Dict) -> Dict:
+        """
+        Overview runner - 레포 개요 (경량 LLM, facts+readme만).
+        
+        Fast Chat 경로: temperature=0.7, max_tokens=300
+        """
+        from backend.agents.supervisor.prompts import (
+            build_overview_prompt, 
+            get_fast_chat_params,
+        )
+        from backend.common.github_client import fetch_repo_overview
+        
+        repo = state.get("repo") or {}
+        owner = repo.get("owner", "")
+        name = repo.get("name", "")
+        
+        if not owner or not name:
+            return {
+                "answer_contract": {
+                    "text": "저장소 정보를 찾을 수 없습니다. 'owner/repo' 형식으로 입력해주세요.",
+                    "sources": ["SYS:ERROR"],
+                    "source_kinds": ["system_template"],
+                }
+            }
+        
+        try:
+            # GitHub에서 기본 정보만 수집 (진단 없이)
+            overview = fetch_repo_overview(owner, name)
+            
+            # 레포 facts 구성
+            facts = (
+                f"이름: {overview.get('full_name', f'{owner}/{name}')}\n"
+                f"설명: {overview.get('description', '(없음)')}\n"
+                f"언어: {overview.get('primaryLanguage', '(없음)')}\n"
+                f"스타: {overview.get('stargazers_count', 0):,}개\n"
+                f"포크: {overview.get('forks_count', 0):,}개\n"
+                f"라이선스: {overview.get('license', {}).get('spdx_id', '(없음)')}"
+            )
+            readme = overview.get("readme_content", "")[:500]
+            
+            # 프롬프트 빌드 및 LLM 호출
+            system_prompt, user_prompt = build_overview_prompt(owner, name, facts, readme)
+            
+            from backend.llm.factory import fetch_llm_client
+            from backend.llm.base import ChatMessage, ChatRequest
+            
+            client = fetch_llm_client()
+            llm_params = get_fast_chat_params()
+            
+            request = ChatRequest(
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt),
+                ],
+                temperature=llm_params["temperature"],
+                max_tokens=llm_params["max_tokens"],
+            )
+            response = client.chat(request)
+            
+            return {
+                "answer_contract": {
+                    "text": response.content,
+                    "sources": [f"github:{owner}/{name}:overview", f"github:{owner}/{name}:readme"],
+                    "source_kinds": ["repo_facts", "readme_head"],
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Overview runner failed: {e}")
+            return {
+                "answer_contract": {
+                    "text": f"저장소 정보를 가져오는 중 오류가 발생했습니다: {e}\n\n다시 시도하시거나 '진단해줘'로 상세 분석을 요청해주세요.",
+                    "sources": ["SYS:ERROR"],
+                    "source_kinds": ["system_template"],
+                }
+            }
     
     return {
         AgentType.DIAGNOSIS: diagnosis_runner,
@@ -607,4 +650,5 @@ def create_default_agent_runners() -> Dict[AgentType, Callable]:
         AgentType.COMPARE: compare_runner,
         AgentType.SMALLTALK: smalltalk_runner,
         AgentType.HELP: help_runner,
+        AgentType.OVERVIEW: overview_runner,
     }
