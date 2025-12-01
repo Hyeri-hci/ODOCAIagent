@@ -133,12 +133,6 @@ def infer_user_level(text: str) -> Tuple[str, float]:
 
 
 def infer_goal(text: str) -> Tuple[Optional[str], float]:
-    """
-    사용자 목표 추론.
-    
-    Returns:
-        Tuple[goal, confidence]
-    """
     text_lower = text.lower()
     
     goal_patterns = [
@@ -160,16 +154,6 @@ def infer_missing(
     user_text: str,
     current_state: Dict[str, Any],
 ) -> InferenceHints:
-    """
-    사용자 입력에서 누락된 정보 추론.
-    
-    Args:
-        user_text: 사용자 쿼리
-        current_state: 현재 상태 (이전 repo, context 등)
-    
-    Returns:
-        InferenceHints: 추론된 정보
-    """
     hints = InferenceHints()
     inferred_fields: List[str] = []
     confidences: List[float] = []

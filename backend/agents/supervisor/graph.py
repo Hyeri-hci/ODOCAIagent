@@ -1,19 +1,3 @@
-"""
-Supervisor Graph 정의 - Agentic Orchestrator.
-
-## 아키텍처 (v2)
-1. Intent 분류 → Active Inference (누락 정보 추론)
-2. Plan 수립 (reasoning_trace 포함)
-3. Plan 실행 (에러 정책 기반 재계획)
-4. 요약 생성 (AnswerContract 검증)
-
-## 관측성
-- 모든 노드 시작/종료 이벤트
-- Artifact 추적 (내용주소화)
-- 스팬 트리 구조 (OpenTelemetry 호환)
-
-라우팅은 INTENT_META[intent, sub_intent]를 기반으로 합니다.
-"""
 from __future__ import annotations
 
 import logging
@@ -56,10 +40,7 @@ logger = logging.getLogger(__name__)
 AGENTIC_MODE = os.getenv("ODOC_AGENTIC_MODE", "false").lower() in ("1", "true")
 
 
-# =============================================================================
 # Agentic 노드들 (AGENTIC_MODE=true일 때 사용)
-# =============================================================================
-
 def infer_missing_node(state: SupervisorState) -> Dict[str, Any]:
     """Active Inference 노드 - 누락 정보 추론."""
     from backend.agents.supervisor.inference import (
@@ -149,10 +130,7 @@ def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
         }
 
 
-# =============================================================================
 # 라우팅 함수들
-# =============================================================================
-
 def route_after_mapping(state: SupervisorState) -> str:
     """INTENT_META 기반 라우팅 분기."""
     intent = state.get("intent", DEFAULT_INTENT)
@@ -210,10 +188,7 @@ def route_after_plan(state: SupervisorState) -> str:
     return "execute_plan"
 
 
-# =============================================================================
 # Graph Builders
-# =============================================================================
-
 def build_supervisor_graph():
     """기존 Supervisor Graph (하위 호환)."""
     graph = StateGraph(SupervisorState)

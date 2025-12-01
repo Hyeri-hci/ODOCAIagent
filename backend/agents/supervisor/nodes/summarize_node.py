@@ -1071,7 +1071,71 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
                     task_list.append(task_copy)
             new_state["last_task_list"] = task_list
 
+    # ========================================
+    # 6. Agentic 모드: AgenticSupervisorOutput 생성
+    # ========================================
+    import os
+    if os.getenv("ODOC_AGENTIC_MODE", "").lower() in ("1", "true"):
+        new_state["_agentic_output"] = _build_agentic_output(new_state, summary)
+
     return new_state
+
+
+def _build_agentic_output(state: SupervisorState, summary: str) -> dict:
+    """AgenticSupervisorOutput 생성."""
+    from backend.agents.shared.contracts import (
+        AgenticSupervisorOutput,
+        AnswerContract,
+    )
+    
+    # Executor 결과에서 sources 추출
+    plan_result = state.get("_plan_execution_result", {})
+    results = plan_result.get("results", {})
+    artifacts = plan_result.get("artifacts", {})
+    
+    sources = []
+    source_kinds = []
+    plan_executed = []
+    
+    for step_id, step_result in results.items():
+        plan_executed.append(step_id)
+        if isinstance(step_result, dict):
+            # answer_contract가 있으면 sources 추출
+            answer_contract = step_result.get("result", {}).get("answer_contract")
+            if answer_contract and isinstance(answer_contract, dict):
+                sources.extend(answer_contract.get("sources", []))
+                source_kinds.extend(answer_contract.get("source_kinds", []))
+    
+    # artifacts에서도 수집
+    for step_id, artifact_ids in artifacts.items():
+        sources.extend(artifact_ids)
+    
+    # 중복 제거
+    sources = list(dict.fromkeys(sources))
+    source_kinds = list(dict.fromkeys(source_kinds))
+    
+    # 길이 맞추기
+    while len(source_kinds) < len(sources):
+        source_kinds.append("unknown")
+    
+    answer = AnswerContract(
+        text=summary,
+        sources=sources[:10],  # 최대 10개
+        source_kinds=source_kinds[:10],
+    )
+    
+    output = AgenticSupervisorOutput(
+        answer=answer,
+        intent=state.get("intent", "analyze"),
+        plan_executed=plan_executed,
+        artifacts_used=sources,
+        session_id=state.get("_session_id", ""),
+        turn_id=state.get("_turn_id", ""),
+        status="success" if not state.get("error_message") else "error",
+        error_message=state.get("error_message"),
+    )
+    
+    return output.model_dump()
 
 
 def _format_onboarding_tasks(

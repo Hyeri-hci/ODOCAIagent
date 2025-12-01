@@ -1,8 +1,5 @@
 """
 Planner 노드 - Agentic Planning 구현.
-
-Intent 분류 결과를 기반으로 실행 계획(Plan)을 수립.
-reasoning_trace를 통해 계획 수립 과정을 추적.
 """
 from __future__ import annotations
 

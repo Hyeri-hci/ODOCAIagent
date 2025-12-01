@@ -100,6 +100,28 @@ class SupervisorPlanOutput(BaseModel):
     )
 
 
+class AgenticSupervisorOutput(BaseModel):
+    """Agentic Supervisor 최종 출력."""
+    answer: AnswerContract = Field(..., description="사용자에게 보여줄 응답")
+    intent: str = Field(..., description="분류된 Intent")
+    plan_executed: List[str] = Field(
+        default_factory=list,
+        description="실행된 PlanStep ID 목록"
+    )
+    artifacts_used: List[str] = Field(
+        default_factory=list,
+        description="참조한 Artifact ID 목록"
+    )
+    session_id: str = Field(default="", description="세션 ID")
+    turn_id: str = Field(default="", description="턴 ID")
+    execution_time_ms: float = Field(default=0.0, description="총 실행 시간(ms)")
+    status: Literal["success", "partial", "error", "disambiguation"] = Field(
+        default="success",
+        description="실행 상태"
+    )
+    error_message: Optional[str] = Field(default=None, description="에러 메시지")
+
+
 # Error Policy & Inference Hints
 
 class ErrorKind(str, Enum):

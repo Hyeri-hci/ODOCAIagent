@@ -238,6 +238,9 @@ class SupervisorState(TypedDict, total=False):
     _plan_execution_result: Dict[str, Any]
     _plan_status: str  # completed | partial | aborted | disambiguation
     
+    # 최종 Agentic 출력 (AgenticSupervisorOutput.model_dump())
+    _agentic_output: Dict[str, Any]
+    
     # 내부 추론 로그 (사용자에게 노출 안 함)
     _reasoning_trace: str
     _mapped_intent: str

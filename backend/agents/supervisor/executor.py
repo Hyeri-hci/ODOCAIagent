@@ -36,14 +36,6 @@ BACKOFF_MULTIPLIER = 1.5
 
 
 def topological_sort(steps: List[PlanStep]) -> List[List[PlanStep]]:
-    """
-    PlanStep들을 위상 정렬하여 실행 레벨별로 그룹화.
-    
-    같은 레벨의 스텝들은 병렬 실행 가능.
-    
-    Returns:
-        List[List[PlanStep]]: 레벨별 스텝 그룹
-    """
     if not steps:
         return []
     
@@ -80,7 +72,6 @@ def topological_sort(steps: List[PlanStep]) -> List[List[PlanStep]]:
 
 class PlanExecutionContext:
     """Plan 실행 컨텍스트."""
-    
     def __init__(
         self, 
         session_id: str,
@@ -220,14 +211,6 @@ def execute_plan(
     Plan 실행.
     
     위상 정렬된 스텝들을 레벨별로 실행.
-    같은 레벨은 병렬 실행 가능 (현재는 순차).
-    
-    Args:
-        steps: 실행할 PlanStep 목록
-        ctx: 실행 컨텍스트
-    
-    Returns:
-        실행 결과 딕셔너리
     """
     if not steps:
         return {"results": {}, "artifacts": {}, "errors": [], "status": "empty"}
