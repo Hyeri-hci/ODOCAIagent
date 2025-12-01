@@ -73,3 +73,21 @@ test/benchmark_results/
 tests/test_graph_result.txt
 tests/*_result.txt
 tests/*_result.json
+
+# ------------------------------------
+# JetBrains / IntelliJ / PyCharm 설정
+# ------------------------------------
+.idea/
+*.iml
+*.iws
+
+# ------------------------------------
+# Jupyter notebook (필요 없으면 무시)
+# ------------------------------------
+*.ipynb
+
+# ------------------------------------
+# 로컬 설정파일
+# ------------------------------------
+settings.local.json
+*.local.json

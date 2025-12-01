@@ -1,13 +1,19 @@
 """
-Security Agent (예정)
-
-향후 보안 취약점 분석, 의존성 검사 등을 담당할 Agent.
-현재는 placeholder로 유지.
+Security analysis module for analyzing dependencies in GitHub repositories
 """
+from .service import SecurityAnalysisService, analyze_repository
+from .github import GitHubClient, RepositoryAnalyzer
+from .models import Dependency, DependencyFile
+from .extractors import DependencyExtractor
 
-# TODO: Security Agent 구현 시 아래 항목 추가
-# - run_security_scan: 보안 스캔 실행
-# - SecurityResult: 스캔 결과 타입
-# - VulnerabilityReport: 취약점 리포트
+__version__ = "1.0.0"
 
-__all__: list[str] = []
+__all__ = [
+    "SecurityAnalysisService",
+    "analyze_repository",
+    "GitHubClient",
+    "RepositoryAnalyzer",
+    "Dependency",
+    "DependencyFile",
+    "DependencyExtractor",
+]
