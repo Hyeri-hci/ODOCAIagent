@@ -1,14 +1,4 @@
-"""
-Task 리파인 노드
-
-기존 진단 결과를 재사용하여 Task 목록을 재필터링하는 노드.
-새로운 Diagnosis 호출 없이 last_task_list를 기반으로 처리한다.
-
-사용 시나리오:
-- "더 쉬운 Task 없어?" → beginner Task만 필터링
-- "좀 더 어려운 거?" → advanced Task 위주로 필터링
-- "다른 종류는?" → 다른 kind의 Task 필터링
-"""
+"""Task 리파인 노드. 기존 결과 재사용하여 Task 재필터링."""
 from __future__ import annotations
 
 import logging

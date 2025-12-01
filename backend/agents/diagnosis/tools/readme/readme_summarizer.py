@@ -1,11 +1,4 @@
-"""
-README Summarizer
-
-README 카테고리별 요약 및 통합 요약을 생성하는 모듈.
-임베딩, 검색, 분류에 활용됨.
-
-전체 진단 결과 요약은 ../llm_summarizer.py 참조.
-"""
+"""README Summarizer - 카테고리별/통합 요약 생성. 임베딩/검색/분류에 활용."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -21,14 +14,12 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ReadmeUnifiedSummary:
-    """README 통합 요약 (영문/한글)"""
     summary_en: str
     summary_ko: str
 
 
 @dataclass
 class ReadmeAdvancedSummary:
-    """README 고급 요약 (통합 + 카테고리별)"""
     unified: ReadmeUnifiedSummary
     category_summaries: Dict[str, str]
 

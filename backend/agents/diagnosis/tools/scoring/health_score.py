@@ -1,13 +1,4 @@
-"""
-Health Score v1.0 - 프로젝트 건강도 및 온보딩 점수
-
-Scores:
-  - health_score: 운영/유지보수 중심 (doc 30% + activity 70%)
-  - onboarding_score: 초보자 친화도 (doc 60% + activity 40%)
-  - is_healthy: 임계값 기반 플래그 (doc >= 60 AND activity >= 50)
-
-Spec: docs/CHAOSS_ACTIVITY_SCORE_v1.md
-"""
+"""Health Score v1.0 - 프로젝트 건강도 및 온보딩 점수 (0.3*D + 0.7*A, 0.6*D + 0.4*A)."""
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 

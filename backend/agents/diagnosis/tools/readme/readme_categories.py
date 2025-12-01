@@ -24,8 +24,6 @@ logger = logging.getLogger(__name__)
 
 
 class ReadmeCategory(Enum):
-    """8가지 README 카테고리."""
-
     WHAT = "WHAT"
     WHY = "WHY"
     HOW = "HOW"

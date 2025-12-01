@@ -1,20 +1,4 @@
-"""
-Intent 중앙 설정
-
-모든 Intent 관련 설정을 한 곳에서 관리합니다.
-새 Intent 추가 시 이 파일만 수정하면 됩니다.
-
-## 새 구조 (v2): 3개 Intent + SubIntent
-- SupervisorIntent: analyze | followup | general_qa
-- SubIntent: health | onboarding | compare | explain | refine | concept | chat
-- INTENT_META: (intent, sub_intent) 튜플 키로 라우팅 플래그 관리
-
-## Intent 추가 체크리스트
-1. INTENT_META에 새 (intent, sub_intent) 조합 추가
-2. (필요시) summarize_node.py에 응답 형식 규칙 추가
-3. (필요시) intent_classifier.py 프롬프트에 분류 예시 추가
-4. (필요시) 테스트 파일 추가
-"""
+"""Intent 중앙 설정. 새 Intent 추가 시 INTENT_META만 수정."""
 from __future__ import annotations
 
 from typing import Literal, TypedDict, List, Tuple

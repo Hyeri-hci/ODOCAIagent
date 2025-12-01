@@ -1,12 +1,4 @@
-"""
-Intent 분류 노드
-
-사용자 자연어 쿼리를 분석하여 Intent와 SubIntent를 추론한다.
-- Intent: analyze | followup | general_qa
-- SubIntent: health | onboarding | compare | explain | refine | concept | chat
-
-멀티턴 대화에서 이전 컨텍스트를 참조하는 follow-up 질의도 처리한다.
-"""
+"""Intent 분류 노드. LLM으로 Intent/SubIntent 추론."""
 from __future__ import annotations
 
 import json
@@ -35,30 +27,11 @@ from ..intent_config import validate_followup_type, validate_intent, validate_su
 
 
 def _normalize_history(history: Any) -> list[dict]:
-    """
-    history를 표준화된 list[dict] 형태로 변환.
-    
-    문자열이 들어오는 등 비정상 입력 에러 방지.
-    
-    Args:
-        history: 원본 history (다양한 타입 가능)
-    
-    Returns:
-        정규화된 list[dict] 형태의 history
-    
-    Examples:
-        >>> _normalize_history(None)
-        []
-        >>> _normalize_history("invalid")
-        []
-        >>> _normalize_history([{"role": "user", "content": "hi"}])
-        [{"role": "user", "content": "hi"}]
-    """
+    """비정상 history 입력을 list[dict]로 정규화."""
     if history is None:
         return []
     
     if isinstance(history, str):
-        # 문자열이 들어오면 무시
         logger.warning("[_normalize_history] history가 문자열입니다: %s", history[:100])
         return []
     
@@ -66,7 +39,6 @@ def _normalize_history(history: Any) -> list[dict]:
         logger.warning("[_normalize_history] history가 list가 아닙니다: %s", type(history))
         return []
     
-    # 각 요소가 dict인지 확인
     normalized = []
     for item in history:
         if isinstance(item, dict) and "role" in item and "content" in item:
@@ -76,10 +48,6 @@ def _normalize_history(history: Any) -> list[dict]:
     
     return normalized
 
-
-# =============================================================================
-# 새 Intent 분류 프롬프트 (v2: 3개 Intent + SubIntent)
-# =============================================================================
 
 INTENT_SYSTEM_PROMPT = """
 당신은 OSS 온보딩 플랫폼 ODOC의 Supervisor Agent입니다.

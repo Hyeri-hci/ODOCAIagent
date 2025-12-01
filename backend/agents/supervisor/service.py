@@ -21,7 +21,6 @@ UserLevel = Literal["beginner", "intermediate", "advanced"]
 
 @dataclass
 class SupervisorInput:
-    """Supervisor 입력 데이터"""
     user_query: str
     user_level: UserLevel = "beginner"
     language: str = "ko"
@@ -32,7 +31,6 @@ class SupervisorInput:
 
 @dataclass
 class SupervisorOutput:
-    """Supervisor 출력 데이터"""
     answer: str
     route: str
     intermediate: dict[str, Any]

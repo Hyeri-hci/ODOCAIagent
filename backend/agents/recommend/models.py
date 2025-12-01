@@ -1,10 +1,4 @@
-"""
-Onboarding Agent v0 - 데이터 모델
-
-User → Agent → 여러 Tool → 추천/계획 구조를 위한 모델 정의.
-
-Related: docs/DIAGNOSIS_SCHEMA_v1.md
-"""
+"""Onboarding Agent v0 - 데이터 모델."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
@@ -17,19 +11,7 @@ from typing import Any, Dict, List, Literal, Optional
 
 @dataclass
 class UserContext:
-    """
-    사용자 컨텍스트 (입력 스키마)
-    
-    예시:
-    {
-        "target_language": "ko",
-        "experience_level": "beginner",
-        "preferred_stack": ["python", "react", "go"],
-        "available_hours_per_week": 5,
-        "goal": "첫 PR 경험"
-    }
-    """
-    # 기본 정보
+    """사용자 컨텍스트 (언어, 경험, 스택, 목표)."""
     target_language: str = "ko"  # "ko" | "en"
     experience_level: str = "beginner"  # "beginner" | "intermediate" | "advanced"
     

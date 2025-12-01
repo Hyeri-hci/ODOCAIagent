@@ -1,10 +1,4 @@
-"""
-Diagnosis Labels
-
-진단 결과를 요약한 구조적 라벨 생성.
-- 건강/온보딩 레벨 결정
-- 문서/활동성 이슈 추출
-"""
+"""Diagnosis Labels - 건강/온보딩 레벨 및 문서/활동성 이슈 추출."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
@@ -13,7 +7,6 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class DiagnosisLabels:
-    """진단 라벨 결과."""
     health_level: str  # good | warning | bad
     onboarding_level: str  # easy | normal | hard
     docs_issues: List[str] = field(default_factory=list)
@@ -45,14 +38,7 @@ def compute_docs_issues(
     doc_score: int,
     readme_categories: Optional[Dict[str, Any]] = None,
 ) -> List[str]:
-    """
-    문서 관련 이슈 추출.
-
-    Args:
-        doc_score: 문서화 점수 (0-100)
-        readme_categories: README 카테고리 정보 (CategoryInfo dict 형태)
-            예: {"WHAT": {"present": True}, "WHY": {"present": False}, ...}
-    """
+    """doc_score 및 readme_categories 기반 문서 이슈 추출."""
     issues: List[str] = []
 
     # 전반적 문서화 부족
@@ -82,13 +68,7 @@ def compute_activity_issues(
     activity_score: int,
     activity_scores: Optional[Dict[str, float]] = None,
 ) -> List[str]:
-    """
-    활동성 관련 이슈 추출.
-
-    Args:
-        activity_score: 전반적 활동 점수 (0-100)
-        activity_scores: 세부 점수 {"commit_score", "issue_score", "pr_score"}
-    """
+    """activity_score 및 세부 점수 기반 활동성 이슈 추출."""
     issues: List[str] = []
 
     # 전반적 비활성

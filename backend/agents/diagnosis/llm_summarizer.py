@@ -1,9 +1,4 @@
-"""
-Diagnosis Result Summarizer
-
-전체 진단 결과를 LLM으로 요약하는 모듈.
-README 관련 요약은 tools/readme_summarizer.py 참조.
-"""
+"""Diagnosis 결과 LLM 요약."""
 from __future__ import annotations
 
 from typing import Any, Dict
@@ -19,10 +14,7 @@ def summarize_diagnosis_repository(
     user_level: str = "beginner",
     language: str = "ko",
 ) -> str:
-    """
-    Diagnosis Agent 전체 JSON 결과를 LLM으로 요약.
-    is_healthy=False인 경우 경고 문구를 앞에 추가.
-    """
+    """Diagnosis JSON을 LLM으로 요약. is_healthy=False면 경고 문구 추가."""
     try:
         diagnosis_json_str = json.dumps(diagnosis_result, ensure_ascii=False, indent=2)
     except Exception:

@@ -1,16 +1,4 @@
-"""
-Diagnosis Agent 호출 노드
-
-SupervisorState의 diagnosis_task_type을 기반으로 Diagnosis Agent를 호출한다.
-어떤 종류의 진단을 할지는 오직 diagnosis_task_type만이 결정하며,
-그 값은 map_task_types_node에서 관리한다.
-
-새로운 3 Intent + SubIntent 구조:
-- intent: analyze | followup | general_qa
-- sub_intent: health | onboarding | compare | explain | refine | concept | chat
-
-intent != "analyze"이면 진단을 건너뛴다.
-"""
+"""Diagnosis Agent 호출 노드."""
 from __future__ import annotations
 
 import logging
@@ -24,22 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
-    """
-    Diagnosis Agent 호출 노드
-    
-    state.repo, user_context, diagnosis_task_type을 기반으로 진단을 수행한다.
-    sub_intent == "compare"인 경우 compare_repo도 함께 진단한다.
-    
-    가드 조건 (진단 건너뜀):
-    - intent != "analyze": followup/general_qa는 진단 불필요
-    - diagnosis_task_type == "none": 매핑 단계에서 진단 불필요로 판단
-    
-    에러 케이스:
-    - repo 정보가 없으면 사용자 친화적 에러 메시지 반환
-    """
-    # ========================================
-    # 0. Intent 기반 가드 - analyze가 아니면 진단 건너뜀
-    # ========================================
+    """Diagnosis Agent 호출. intent=analyze일 때만 실행."""
     intent = state.get("intent", DEFAULT_INTENT)
     if intent != "analyze":
         logger.debug("[run_diagnosis_node] intent=%s, 진단 건너뜀", intent)

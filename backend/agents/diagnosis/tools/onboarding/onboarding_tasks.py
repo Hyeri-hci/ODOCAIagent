@@ -1,10 +1,4 @@
-"""
-Onboarding Tasks Generator
-
-진단 결과 기반 난이도/레벨별 기여 Task 제안.
-- GitHub 이슈 기반 (good-first-issue 등)
-- 진단 결과 기반 메타 Task
-"""
+"""Onboarding Tasks Generator - 난이도/레벨별 기여 Task 제안."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
@@ -20,7 +14,6 @@ TaskIntent = Literal["contribute", "study", "evaluate"]
 
 @dataclass
 class TaskSuggestion:
-    """기여 Task 제안."""
     kind: TaskKind
     difficulty: Difficulty
     level: int  # 1-6 (게임식 레벨)
@@ -44,7 +37,6 @@ class TaskSuggestion:
 
 @dataclass
 class OnboardingTasks:
-    """난이도별 그룹핑된 Task 목록."""
     beginner: List[TaskSuggestion] = field(default_factory=list)
     intermediate: List[TaskSuggestion] = field(default_factory=list)
     advanced: List[TaskSuggestion] = field(default_factory=list)

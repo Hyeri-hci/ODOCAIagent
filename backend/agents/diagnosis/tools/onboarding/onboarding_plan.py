@@ -1,10 +1,4 @@
-"""
-Onboarding Plan Generator
-
-초보자를 위한 온보딩 계획 생성.
-- v0: 규칙 기반
-- v1: LLM 기반
-"""
+"""Onboarding Plan Generator - 초보자 온보딩 계획 생성 (v0: 규칙, v1: LLM)."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
@@ -19,8 +13,6 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class OnboardingPlan:
-    """초보자 온보딩 계획."""
-    
     recommended_for_beginner: bool
     difficulty: str  # easy | normal | hard
     first_steps: List[str] = field(default_factory=list)
@@ -32,14 +24,7 @@ class OnboardingPlan:
 
 
 def _compute_difficulty(onboarding_score: int) -> str:
-    """
-    onboarding_score 기반 난이도 판정.
-    
-    임계값 근거: 100개 저장소 벤치마크 (docs/DIAGNOSIS_SCHEMA_v1.md)
-    - easy(75+): 초보자 첫 기여 성공률 85%
-    - normal(55-74): 성공률 60%
-    - hard(<55): 성공률 35%
-    """
+    """onboarding_score 기반 난이도 판정 (easy/normal/hard)."""
     thresholds = DIAGNOSIS_CONFIG.thresholds
     if onboarding_score >= thresholds.onboarding_easy:
         return "easy"

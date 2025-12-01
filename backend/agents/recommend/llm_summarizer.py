@@ -1,12 +1,4 @@
-"""
-Onboarding Agent v0 - LLM 요약 생성기
-
-추천 결과를 자연어로 설명하는 LLM 프롬프트 및 호출 로직.
-
-출력:
-- 어떤 repo를 왜 추천하는지
-- 첫 1주일 동안 무엇을 해야 하는지
-"""
+"""Onboarding Agent v0 - 추천 결과 LLM 요약 생성."""
 from __future__ import annotations
 
 import json
@@ -18,9 +10,7 @@ from .models import UserContext, OnboardingAgentResult, RepoRecommendation
 logger = logging.getLogger(__name__)
 
 
-# ============================================================
 # 프롬프트 템플릿
-# ============================================================
 
 RECOMMENDATION_SUMMARY_PROMPT = """당신은 오픈소스 기여 멘토입니다.
 사용자의 정보와 추천된 저장소 목록을 바탕으로, 친근하고 실용적인 조언을 제공해주세요.
@@ -153,9 +143,7 @@ def build_recommendation_prompt(
     )
 
 
-# ============================================================
 # LLM 호출
-# ============================================================
 
 def generate_recommendation_summary_llm(
     user_context: UserContext,
@@ -241,14 +229,7 @@ def generate_recommendation_summary(
     recommendations: List[RepoRecommendation],
     use_llm: bool = True,
 ) -> str:
-    """
-    추천 요약 생성.
-    
-    Args:
-        user_context: 사용자 컨텍스트
-        recommendations: 추천 목록
-        use_llm: LLM 사용 여부 (False면 규칙 기반)
-    """
+    """추천 요약 생성. use_llm=False면 규칙 기반."""
     if not recommendations:
         return "추천할 저장소가 없습니다. 다른 후보 저장소를 시도해보세요."
     

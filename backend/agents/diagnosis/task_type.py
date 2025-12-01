@@ -1,13 +1,10 @@
-"""
-Diagnosis Agent 태스크 타입 정의
-"""
+"""Diagnosis Agent 태스크 타입."""
 from __future__ import annotations
 
 from enum import Enum
 
 
 class DiagnosisTaskType(str, Enum):
-    """Diagnosis Agent가 처리하는 태스크 유형"""
     FULL = "full_diagnosis"
     DOCS_ONLY = "docs_only"
     ACTIVITY_ONLY = "activity_only"
@@ -17,7 +14,7 @@ DEFAULT_TASK_TYPE = DiagnosisTaskType.FULL
 
 
 def parse_task_type(value: str | None) -> DiagnosisTaskType:
-    """문자열 입력을 DiagnosisTaskType으로 변환"""
+    """str -> DiagnosisTaskType 변환."""
     if value is None:
         return DEFAULT_TASK_TYPE
 

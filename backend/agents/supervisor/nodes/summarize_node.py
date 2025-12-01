@@ -1,4 +1,4 @@
-"""Summarize Node - 분석 결과 요약 및 사용자 응답 생성."""
+"""Summarize Node."""
 from __future__ import annotations
 
 import logging
@@ -53,9 +53,7 @@ def _safe_round(value: Optional[Union[int, float]], digits: int = 1) -> str:
         return "N/A"
 
 
-# ============================================================================
-# Metric alias helpers (Single Source of Truth)
-# ============================================================================
+# Metric alias helpers
 
 METRIC_ALIAS_MAP = get_all_aliases()
 SORTED_ALIASES = sorted(METRIC_ALIAS_MAP.keys(), key=len, reverse=True)
@@ -195,9 +193,7 @@ SUMMARIZE_ONBOARDING_PROMPT = """
 **더 도움이 필요하시면**: "이 Task에 대해 더 자세히 설명해줘", "다른 난이도 Task도 보여줘"
 """
 
-# ============================================================================
-# Intent별 프롬프트 정의
-# ============================================================================
+# Intent별 프롬프트
 
 # 단일 metric explain 프롬프트
 EXPLAIN_SINGLE_PROMPT = """오픈소스 프로젝트 건강 지표를 해설합니다.

@@ -1,33 +1,17 @@
-"""
-Supervisor 상태 및 타입 정의
-
-Supervisor는 사용자 자연어 쿼리를 받아 적절한 Agent로 라우팅하고,
-결과를 종합하여 최종 응답을 생성하는 역할을 담당한다.
-
-## 3개 Intent + SubIntent 구조 (v2)
-- SupervisorIntent: analyze | followup | general_qa
-- SubIntent: health | onboarding | compare | explain | refine | concept | chat
-- (intent, sub_intent) 조합으로 라우팅 결정
-"""
+"""Supervisor 상태 및 타입 정의."""
 from __future__ import annotations
 
 from typing import Any, Literal, TypedDict, List
 
 
-# =============================================================================
-# 새로운 Intent 구조 (3개 Intent + SubIntent)
-# =============================================================================
-
-# 3개의 상위 Intent
 SupervisorIntent = Literal["analyze", "followup", "general_qa"]
 
-# 7개의 세부 SubIntent
 SubIntent = Literal[
-    "health",      # 저장소 건강 상태 분석
-    "onboarding",  # 온보딩 Task 추천
-    "compare",     # 두 저장소 비교
-    "explain",     # 점수/결과 상세 설명
-    "refine",      # Task 재필터링 (더 쉬운/어려운)
+    "health",
+    "onboarding",
+    "compare",
+    "explain",
+    "refine",
     "concept",     # 지표 개념 설명
     "chat",        # 일반 대화/인사
 ]

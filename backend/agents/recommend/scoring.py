@@ -1,14 +1,4 @@
-"""
-Onboarding Agent v0 - 스코어링 엔진
-
-다중 repo 진단 결과를 사용자 컨텍스트와 매칭하여 점수를 계산합니다.
-
-스코어링 규칙:
-1. 건강 조건: is_healthy=True → +20점
-2. 온보딩 점수: onboarding_score → 가중치 반영
-3. 스택 매칭: preferred_stack과 repo 언어 매칭 → +점수
-4. 경험 레벨 매칭: 초보자에게 easy 프로젝트 추천 등
-"""
+"""Onboarding Agent v0 - 스코어링 엔진 (건강+온보딩+스택 매칭)."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -19,9 +9,7 @@ from .models import UserContext, RepoRecommendation
 logger = logging.getLogger(__name__)
 
 
-# ============================================================
 # 스택 매칭
-# ============================================================
 
 # 언어/프레임워크 정규화 맵
 LANGUAGE_ALIASES = {
@@ -123,9 +111,7 @@ def compute_stack_match_score(
     return score, matched
 
 
-# ============================================================
 # 경험 레벨 매칭
-# ============================================================
 
 def compute_level_match_score(
     experience_level: str,
@@ -163,9 +149,7 @@ def compute_level_match_score(
     return max(0, min(25, base_score))
 
 
-# ============================================================
 # 목표 매칭
-# ============================================================
 
 def compute_goal_match_score(
     goal: str,
@@ -204,9 +188,7 @@ def compute_goal_match_score(
     return min(20, score)
 
 
-# ============================================================
 # 종합 점수 계산
-# ============================================================
 
 def compute_recommendation_score(
     user_context: UserContext,
@@ -325,9 +307,7 @@ def generate_recommendation_reason(
     return ", ".join(p for p in parts if p)
 
 
-# ============================================================
 # 추천 결과 생성
-# ============================================================
 
 def create_recommendation_from_diagnosis(
     repo_full_name: str,

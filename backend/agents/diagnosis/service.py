@@ -68,13 +68,7 @@ def _summarize_common(repo_info, scores: HealthScore, commit_metrics=None) -> st
 
 
 def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Diagnosis Agent 진입점.
-    payload: owner, repo, task_type, focus, user_context, needs, user_query, advanced_analysis
-    
-    needs가 제공되면 해당 플래그에 따라 Phase를 선택적으로 실행합니다.
-    needs가 없으면 task_type 기반으로 기존 로직을 따릅니다.
-    """
+    """Diagnosis Agent 진입점. 5-Phase 파이프라인 실행."""
 
     owner = (payload.get("owner") or "").strip()
     repo = (payload.get("repo") or "").strip()

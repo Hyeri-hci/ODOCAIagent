@@ -34,17 +34,7 @@ from backend.agents.supervisor.intent_config import (
 
 
 def route_after_mapping(state: SupervisorState) -> str:
-    """
-    mapping 이후 어떤 Agent 노드로 갈지 결정.
-    
-    INTENT_META[(intent, sub_intent)]를 기반으로 분기합니다.
-    
-    라우팅 우선순위 (단순화):
-    1. error_message가 이미 있으면 → summarize (LLM 호출 없이 반환)
-    2. requires_repo=True인데 repo 없음 → error_message 설정 후 summarize
-    3. runs_diagnosis=True → run_diagnosis
-    4. 기타 (general_qa 등) → summarize
-    """
+    """INTENT_META 기반 라우팅 분기."""
     # 현재 상태 추출
     intent = state.get("intent", DEFAULT_INTENT)
     sub_intent = state.get("sub_intent") or DEFAULT_SUB_INTENT

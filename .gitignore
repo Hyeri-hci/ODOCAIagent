@@ -91,3 +91,8 @@ tests/*_result.json
 # ------------------------------------
 settings.local.json
 *.local.json
+
+# ------------------------------------
+# AI Coding Assistant 설정 (로컬 전용)
+# ------------------------------------
+.github/copilot-instructions.md

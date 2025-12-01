@@ -1,15 +1,4 @@
-"""
-Onboarding Agent v0 - 메인 서비스
-
-User → Agent → 여러 Tool → 추천/계획 구조의 핵심 로직.
-
-흐름:
-1. 사용자 컨텍스트 + 후보 repo 리스트 입력
-2. 각 repo에 대해 run_diagnosis(task_type='full') 병렬 호출
-3. scores, labels, onboarding_plan 추출
-4. 스코어링 규칙으로 TOP N 추천
-5. LLM으로 자연어 요약 생성
-"""
+"""Onboarding Agent v0 - 후보 repo 병렬 진단 후 TOP N 추천."""
 from __future__ import annotations
 
 import logging
@@ -34,9 +23,7 @@ DEFAULT_TOP_N = 3
 USE_LLM_SUMMARY = True  # True: LLM 요약, False: 규칙 기반 요약
 
 
-# ============================================================
 # 진단 실행
-# ============================================================
 
 def diagnose_single_repo(owner: str, repo: str) -> Dict[str, Any]:
     """단일 repo 진단 실행."""
@@ -55,12 +42,7 @@ def diagnose_multiple_repos(
     candidates: List[CandidateRepo],
     max_workers: int = 3,
 ) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Exception]]:
-    """
-    여러 repo 병렬 진단.
-    
-    Returns:
-        (성공 결과 딕셔너리, 실패 에러 딕셔너리)
-    """
+    """여러 repo 병렬 진단. Returns: (성공, 실패) 딕셔너리 튜플."""
     if not candidates:
         return {}, {}
     
@@ -82,9 +64,7 @@ def diagnose_multiple_repos(
     return successful_results, errors
 
 
-# ============================================================
 # 추천 생성
-# ============================================================
 
 def rank_and_filter_recommendations(
     recommendations: List[RepoRecommendation],
@@ -109,9 +89,7 @@ def rank_and_filter_recommendations(
     return sorted_recs[:top_n]
 
 
-# ============================================================
 # 메인 에이전트 함수
-# ============================================================
 
 def run_onboarding_agent(
     user_context: Dict[str, Any],
@@ -219,9 +197,7 @@ def run_onboarding_agent(
     return result.to_dict()
 
 
-# ============================================================
 # 편의 함수
-# ============================================================
 
 def quick_recommend(
     preferred_stack: List[str],
