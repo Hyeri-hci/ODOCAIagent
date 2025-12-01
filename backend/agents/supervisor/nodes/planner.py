@@ -185,6 +185,19 @@ def _build_help_plan(state: SupervisorState) -> List[PlanStep]:
     ]
 
 
+def _build_overview_plan(state: SupervisorState) -> List[PlanStep]:
+    """Overview Plan 생성 (경량, facts+readme만 수집)."""
+    return [
+        PlanStep(
+            id="fetch_overview",
+            agent=AgentType.OVERVIEW,
+            params={},
+            needs=[],
+            on_error=ErrorAction.FALLBACK,
+        ),
+    ]
+
+
 def build_plan(state: SupervisorState) -> SupervisorPlanOutput:
     """
     Intent와 SubIntent를 기반으로 실행 계획 수립.
@@ -276,6 +289,13 @@ def build_plan(state: SupervisorState) -> SupervisorPlanOutput:
             plan = _build_help_plan(state)
             mapped_intent = "explain"
             artifacts_required = []  # 외부 데이터 불필요
+        
+        elif intent == "overview":
+            # 경량 경로: 레포 개요 (facts+readme만, 진단 없음)
+            reasoning_parts.append("개요 요청 → Fast Chat 경로 (facts+readme)")
+            plan = _build_overview_plan(state)
+            mapped_intent = "explain"
+            artifacts_required = ["repo_facts", "readme_head"]
         
         # 사용자 컨텍스트 반영
         user_context = state.get("user_context") or {}
