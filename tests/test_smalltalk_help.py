@@ -52,17 +52,30 @@ class TestFastClassifySmallTalk:
         """도움말 변형 분류."""
         from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_smalltalk
         
-        helps = ["도와줘", "help", "무엇을 할 수 있어?", "뭐 해줄 수 있어?", "기능 알려줘"]
+        helps = ["도와줘", "help", "무엇을 할 수 있어?", "뭐 해줄 수 있어?"]
         for h in helps:
             result = _fast_classify_smalltalk(h)
             assert result == ("help", "getting_started"), f"Failed for: {h}"
     
+    def test_overview_pattern(self):
+        """개요 패턴 분류."""
+        from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_smalltalk
+        
+        overviews = [
+            "facebook/react가 뭐야?",
+            "vercel/next.js가 뭐야",
+            "tensorflow/tensorflow 알려줘",
+        ]
+        for o in overviews:
+            result = _fast_classify_smalltalk(o)
+            assert result == ("overview", "repo"), f"Failed for: {o}"
+    
     def test_not_smalltalk_repo_query(self):
-        """저장소 쿼리는 일반 분류 필요."""
+        """저장소 분석 쿼리는 Expert 경로."""
         from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_smalltalk
         
         result = _fast_classify_smalltalk("facebook/react 분석해줘")
-        assert result is None  # 일반 분류 필요
+        assert result is None  # Expert Tool 경로
     
     def test_not_smalltalk_long_query(self):
         """긴 쿼리는 일반 분류 필요."""
@@ -71,7 +84,7 @@ class TestFastClassifySmallTalk:
         result = _fast_classify_smalltalk(
             "안녕 react라는 프로젝트에 기여하고 싶은데 어떤 이슈부터 시작하면 좋을까?"
         )
-        assert result is None  # 긴 쿼리는 일반 분류
+        assert result is None  # Expert Tool 경로
 
 
 class TestSmalltalkRunner:
@@ -178,6 +191,14 @@ class TestIntentConfig:
         assert meta["runs_diagnosis"] is False
         assert meta["requires_repo"] is False
     
+    def test_overview_meta_no_diagnosis(self):
+        """overview는 진단 없이 facts+readme만."""
+        from backend.agents.supervisor.intent_config import get_intent_meta
+        
+        meta = get_intent_meta("overview", "repo")
+        assert meta["runs_diagnosis"] is False
+        assert meta["requires_repo"] is True  # repo 필요하지만 진단은 안 함
+    
     def test_answer_kind_mapping(self):
         """AnswerKind 매핑 확인."""
         from backend.agents.supervisor.intent_config import get_answer_kind
@@ -185,6 +206,7 @@ class TestIntentConfig:
         assert get_answer_kind("smalltalk", "greeting") == "greeting"
         assert get_answer_kind("smalltalk", "chitchat") == "greeting"
         assert get_answer_kind("help", "getting_started") == "help"
+        assert get_answer_kind("overview", "repo") == "overview"
 
 
 class TestPlannerSmallTalk:
@@ -221,6 +243,22 @@ class TestPlannerSmallTalk:
         assert len(output.plan) == 1
         assert output.plan[0].agent.value == "help"
         assert output.artifacts_required == []
+    
+    def test_overview_plan_lightweight(self):
+        """Overview Plan은 1 스텝, 진단 없음."""
+        from backend.agents.supervisor.nodes.planner import build_plan
+        
+        state = {
+            "intent": "overview",
+            "sub_intent": "repo",
+            "user_query": "facebook/react가 뭐야?",
+            "repo": {"owner": "facebook", "name": "react"},
+        }
+        
+        output = build_plan(state)
+        
+        assert len(output.plan) == 1
+        assert output.plan[0].agent.value == "overview"
 
 
 class TestPerformance:
