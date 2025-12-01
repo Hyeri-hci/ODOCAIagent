@@ -996,6 +996,7 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
                 user_level=user_level,
                 intent=intent,
                 last_brief=last_brief,
+                state=state,
             )
         elif sub_intent == "compare":
             summary = "두 저장소를 비교하려면 두 개의 저장소 URL이 필요합니다. 예: 'facebook/react와 vuejs/vue를 비교해줘'"
@@ -1007,6 +1008,7 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
                 user_level=user_level,
                 intent=intent,
                 last_brief=last_brief,
+                state=state,
             )
     else:
         context = "\n\n".join(context_parts)
@@ -1017,6 +1019,7 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
             user_level=user_level,
             intent=intent,
             last_brief=last_brief,
+            state=state,
         )
 
     logger.info("[summarize_node] repo=%s, intent=%s, sub_intent=%s, user_level=%s, summary_length=%d", 
@@ -1495,6 +1498,7 @@ def _generate_summary_with_llm_v2(
     user_level: str = "beginner",
     intent: str = "analyze",
     last_brief: str = "",
+    state: Optional[dict] = None,
 ) -> str:
     """
     LLM을 사용하여 최종 요약 생성 (v2 - sub_intent 기반).
@@ -1506,8 +1510,23 @@ def _generate_summary_with_llm_v2(
         user_level: 사용자 레벨 (beginner/intermediate/advanced)
         intent: 상위 의도 (analyze | followup | general_qa)
         last_brief: 이전 응답 요약 (followup 맥락용, 200자 이내)
+        state: SupervisorState (Agentic 모드에서 AnswerContract에 필요)
     """
     import os
+    from backend.common.events import get_artifact_store, persist_artifact
+    
+    # Agentic 모드 체크: answer_contract가 이미 있으면 사용
+    if state:
+        plan_result = state.get("_plan_execution_result", {})
+        results = plan_result.get("results", {})
+        for step_id, step_result in results.items():
+            if isinstance(step_result, dict):
+                answer_contract = step_result.get("result", {}).get("answer_contract")
+                if answer_contract and isinstance(answer_contract, dict):
+                    text = answer_contract.get("text", "")
+                    if text:
+                        logger.info("[summarize_node] Using AnswerContract from executor")
+                        return text
     
     llm_client = fetch_llm_client()
     model_name = os.getenv("LLM_MODEL_NAME", "gpt-4o-mini")
@@ -1529,6 +1548,70 @@ def _generate_summary_with_llm_v2(
 
 """
     
+    # Agentic 모드: Contract 기반 호출 시도
+    use_contract = os.getenv("ODOC_AGENTIC_MODE", "").lower() in ("1", "true")
+    
+    if use_contract and state:
+        try:
+            from backend.llm.contract_wrapper import generate_answer_with_contract
+            from backend.agents.shared.contracts import ArtifactRef, ArtifactKind
+            
+            # Artifact 수집
+            session_id = state.get("_session_id", "")
+            artifact_refs = []
+            
+            if session_id:
+                store = get_artifact_store()
+                for kind in ["diagnosis_raw", "onboarding_tasks", "activity_metrics"]:
+                    artifacts = store.get_by_kind(session_id, kind)
+                    for art in artifacts:
+                        try:
+                            art_kind = ArtifactKind(art.kind)
+                        except ValueError:
+                            art_kind = ArtifactKind.SUMMARY
+                        artifact_refs.append(ArtifactRef(
+                            id=art.id,
+                            kind=art_kind,
+                            session_id=session_id,
+                        ))
+            
+            # diagnosis_result가 있으면 inline artifact로 추가
+            diagnosis_result = state.get("diagnosis_result")
+            if diagnosis_result and not artifact_refs:
+                inline_id = persist_artifact(
+                    kind="diagnosis_raw",
+                    content=diagnosis_result,
+                )
+                artifact_refs.append(ArtifactRef(
+                    id=inline_id,
+                    kind=ArtifactKind.DIAGNOSIS_RAW,
+                    session_id=session_id or "inline",
+                ))
+            
+            if artifact_refs:
+                prompt = f"""사용자 질문: {user_query}
+
+{context_prefix}분석 결과:
+{context}
+
+위 결과를 바탕으로 사용자 질문에 답변해 주세요.
+최소 3문단 이상, 서론-본론(데이터 분석)-결론(제안) 구조로 작성하세요."""
+
+                answer = generate_answer_with_contract(
+                    prompt=prompt,
+                    context_artifacts=artifact_refs,
+                    require_sources=True,
+                    max_tokens=4096,
+                    temperature=0.3,
+                )
+                
+                logger.info("[summarize_node] Contract-based answer generated, sources=%d", len(answer.sources))
+                return answer.text
+                
+        except Exception as e:
+            logger.warning("[summarize_node] Contract-based generation failed, falling back: %s", e)
+    
+    # 기본 LLM 호출 (fallback)
     user_message = f"""
 사용자 질문: {user_query}
 
