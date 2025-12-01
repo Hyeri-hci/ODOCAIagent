@@ -538,8 +538,73 @@ def create_default_agent_runners() -> Dict[AgentType, Callable]:
             "diagnosis_b": results[1] if len(results) > 1 else None,
         }
     
+    def smalltalk_runner(params: Dict, state: Dict, dependencies: Dict) -> Dict:
+        """
+        Smalltalk runner - 인사/잡담 응답 (LLM 미사용, 즉시 응답).
+        
+        p95 < 100ms 목표로 템플릿 기반 응답 생성.
+        """
+        style = params.get("style", "greeting")
+        
+        if style == "greeting":
+            text = (
+                "안녕하세요! ODOC입니다. 무엇을 도와드릴까요?\n\n"
+                "예시:\n"
+                "- 레포 개요: 'facebook/react가 뭐야?'\n"
+                "- 진단: 'react 상태 분석해줘'\n"
+                "- 비교: 'react랑 vue 비교해줘'"
+            )
+        else:  # chitchat
+            text = (
+                "네, 계속 도와드릴게요! 다음 중 하나를 시도해보세요:\n\n"
+                "- 레포 개요: 'vercel/next.js가 뭐야?'\n"
+                "- 진단: 'tensorflow 분석해줘'\n"
+                "- 온보딩: '이 프로젝트에 기여하고 싶어'"
+            )
+        
+        return {
+            "style": style,
+            "answer_contract": {
+                "text": text,
+                "sources": ["SYS:TEMPLATES:SMALLTALK"],
+                "source_kinds": ["system_template"],
+            }
+        }
+    
+    def help_runner(params: Dict, state: Dict, dependencies: Dict) -> Dict:
+        """
+        Help runner - 도움말 응답 (LLM 미사용, 즉시 응답).
+        
+        p95 < 100ms 목표로 템플릿 기반 기능 안내.
+        """
+        text = (
+            "제가 할 수 있는 일:\n\n"
+            "**레포 개요**\n"
+            "'facebook/react가 뭐야?', 'vercel/next.js 알려줘'\n\n"
+            "**진단 분석**\n"
+            "'react 상태 분석해줘', 'tensorflow 진단해줘'\n\n"
+            "**비교 분석**\n"
+            "'react랑 vue 비교해줘', 'next.js vs nuxt.js'\n\n"
+            "**온보딩 추천**\n"
+            "'초보자인데 이 프로젝트에 기여하고 싶어'\n\n"
+            "**발표용 요약**\n"
+            "'한 장 요약 만들어줘'\n\n"
+            "어떤 걸 해볼까요?"
+        )
+        
+        return {
+            "style": "help",
+            "answer_contract": {
+                "text": text,
+                "sources": ["SYS:TEMPLATES:HELP"],
+                "source_kinds": ["system_template"],
+            }
+        }
+    
     return {
         AgentType.DIAGNOSIS: diagnosis_runner,
         AgentType.RECOMMENDATION: recommendation_runner,
         AgentType.COMPARE: compare_runner,
+        AgentType.SMALLTALK: smalltalk_runner,
+        AgentType.HELP: help_runner,
     }
