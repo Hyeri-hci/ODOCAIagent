@@ -876,13 +876,14 @@ def test_heuristic_no_match():
     """Heuristic: LLM 필요한 경우 (None 반환)"""
     from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_heuristic
     
-    # 분석 키워드 + repo -> LLM 필요
+    # 분석 키워드 + repo -> LLM 필요 (상세 분류)
     result = _fast_classify_heuristic("facebook/react 분석해줘")
-    assert result is None, "Analysis request should go to LLM"
+    assert result is None, "Analysis with repo should go to LLM for detailed classification"
     
-    # 복잡한 질문 (도움말 패턴 없음) -> LLM 필요
-    result = _fast_classify_heuristic("fastapi로 REST API 만드는 프로젝트 추천해줘")
-    assert result is None, "Complex query should go to LLM"
+    # 분석 키워드만 (repo 없음) -> analyze로 분류 (저장소 되묻기 유도)
+    result = _fast_classify_heuristic("문서 품질 알려줘")
+    assert result is not None, "Analysis keyword without repo should route to analyze"
+    assert result[0] == "analyze", "Should be analyze intent"
 
 
 def test_diagnosis_cache():

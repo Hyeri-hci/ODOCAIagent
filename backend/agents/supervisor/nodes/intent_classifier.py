@@ -34,6 +34,12 @@ CHITCHAT_KEYWORDS = {
     "고마워", "감사", "thanks", "thank you", "ㅋㅋ", "ㅎㅎ", "좋아", "굿", "good",
     "오케이", "okay", "ok", "알겠어", "네", "응", "ㅇㅇ",
 }
+# 정체성/역할 질문 패턴 ("너 누구야?" 등)
+IDENTITY_PATTERNS = [
+    r"(누구|뭐하는|정체|역할|소개)",
+    r"(who are you|what do you do|what is this)",
+    r"(너는|넌|당신은)\s*(뭐|무엇|누구)",
+]
 HELP_PATTERNS = [
     r"뭘?\s*할\s*수\s*있",
     r"도와",
@@ -57,10 +63,11 @@ TOOL_HELP_PATTERNS = [
     r"(어떻게|how to)",
 ]
 
-# 분석/진단 키워드 (Expert Tool 경로)
+# 분석/진단 키워드 (Expert Tool 경로) - 저장소 없어도 analyze로 보내서 되묻기
 ANALYSIS_KEYWORDS = {
     "분석", "진단", "비교", "추천", "건강", "온보딩", "기여", "점수",
-    "analyze", "diagnose", "compare", "health", "onboarding", "score",
+    "품질", "상태", "평가", "어때",  # 추가: 분석 의도 강화
+    "analyze", "diagnose", "compare", "health", "onboarding", "score", "quality", "check",
 }
 
 # 후속 질문 패턴 (followup 감지)
@@ -100,22 +107,31 @@ def _fast_classify_heuristic(query: str, ctx: Optional[dict] = None) -> Optional
     tokens = query_lower.split()
     token_count = len(tokens)
     
-    # 1) 도움말 패턴 (최우선)
+    # 0) 정체성/역할 질문 ("너 누구야?") -> smalltalk
+    for pattern in IDENTITY_PATTERNS:
+        if re.search(pattern, query_lower):
+            return ("smalltalk", "greeting", None, 1.0)
+    
+    # 1) 분석/진단 키워드 -> analyze (저장소 없어도! 나중에 되묻기)
+    has_analysis_kw = any(kw in query_lower for kw in ANALYSIS_KEYWORDS)
+    has_repo = _has_repo_entity(query)
+    
+    if has_analysis_kw:
+        # repo가 있으면 LLM에서 상세 분류, 없으면 analyze로 보내서 되묻기
+        if has_repo:
+            return None  # LLM에서 상세 분류
+        else:
+            return ("analyze", "health", None, 0.8)  # 저장소 되묻기 유도
+    
+    # 2) 도움말 패턴
     for pattern in HELP_PATTERNS:
         if re.search(pattern, query_lower):
             return ("help", "getting_started", None, 1.0)
     
-    # 2) 설치/업데이트/설정 관련 -> help (VSCode 업데이트 등)
+    # 3) 설치/업데이트/설정 관련 -> help (VSCode 업데이트 등)
     for pattern in TOOL_HELP_PATTERNS:
         if re.search(pattern, query_lower):
             return ("help", "getting_started", None, 0.9)
-    
-    # 3) 분석/진단 키워드 + repo 있음 -> analyze
-    has_analysis_kw = any(kw in query_lower for kw in ANALYSIS_KEYWORDS)
-    has_repo = _has_repo_entity(query)
-    
-    if has_analysis_kw and has_repo:
-        return None  # LLM에서 상세 분류
     
     # 4) 개요 패턴 (owner/repo가 뭐야?)
     for pattern in OVERVIEW_PATTERNS:

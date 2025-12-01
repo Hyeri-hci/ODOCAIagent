@@ -50,10 +50,18 @@ def map_task_types_node(state: SupervisorState) -> SupervisorState:
     state.task_type(Supervisor 전역)을 읽고
     diagnosis_task_type / diagnosis_needs / security_task_type / recommend_task_type을 설정한다.
     """
-    if "task_type" not in state:
-        raise ValueError("map_task_types_node: state['task_type']가 없습니다.")
-
-    task_type = state["task_type"]
+    # [Crash Fix] task_type이 없으면 intent/sub_intent로 생성
+    if "task_type" not in state or not state.get("task_type"):
+        intent = state.get("intent", "general_qa")
+        sub_intent = state.get("sub_intent", "chat")
+        # smalltalk/help/overview 등은 diagnosis 불필요
+        if intent in ("smalltalk", "help", "overview"):
+            task_type = "concept_qa_process"  # 가벼운 경로로
+        else:
+            task_type = f"{intent}_{sub_intent}" if sub_intent else intent
+        logger.warning("[map_task_types_node] task_type 없음, 생성: %s", task_type)
+    else:
+        task_type = state["task_type"]
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]
     
