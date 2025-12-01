@@ -4,10 +4,7 @@ from __future__ import annotations
 from typing import Dict, Any
 
 
-# =============================================================================
 # 3-1. COMMON_RULES: Always prepended to system prompts
-# =============================================================================
-
 COMMON_RULES = """## Core Rules (MUST FOLLOW)
 
 ### Data Rules
