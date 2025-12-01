@@ -25,9 +25,9 @@ class ChatResponse:
     raw: Dict[str, Any]
 
 class LLMClient(ABC):
-    """LLM 클라이언트 추상 클래스."""
+    """Abstract base class for an LLM client."""
 
     @abstractmethod
     def chat(self, request: ChatRequest, timeout: int = 60) -> ChatResponse:
-        """채팅 요청 처리."""
+        """Handles a chat request."""
         raise NotImplementedError

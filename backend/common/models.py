@@ -45,8 +45,8 @@ class RepoMetrics(BaseModel):
 class DiagnosisReport(BaseModel):
     repo: str
     health_score: float         # 0.0 to 1.0
-    activity_level: str         # "높음", "보통", "낮음"
-    maintenance_level: str      # "높음", "보통", "낮음"
-    onbording_difficulty: str   # "쉬움", "보통", "어려움" (문서 및 이슈 기반)
+    activity_level: str         # "High", "Moderate", "Low"
+    maintenance_level: str      # "High", "Moderate", "Low"
+    onboarding_difficulty: str  # "Easy", "Moderate", "Hard" (based on docs and issues)
     summary: Optional[str] = None
     metrics: RepoMetrics 

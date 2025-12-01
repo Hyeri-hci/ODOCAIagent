@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import uuid
 import logging
 from typing import Any
 
@@ -84,6 +85,8 @@ if "analysis_history" not in st.session_state:
     st.session_state.analysis_history = {}
 if "example_query" not in st.session_state:
     st.session_state.example_query = None
+if "session_id" not in st.session_state:
+    st.session_state.session_id = uuid.uuid4().hex
 
 
 # ============================================================================
@@ -306,6 +309,8 @@ if prompt:
                         {"role": m["role"], "content": m["content"]} 
                         for m in st.session_state.messages[:-1]
                     ],
+                    # 세션 ID 전달 (세션 연속성 보장)
+                    "_session_id": st.session_state.session_id,
                 }
                 
                 # 이전 결과가 있으면 컨텍스트 전달
@@ -339,8 +344,15 @@ if prompt:
                 
                 initial_state["_progress_callback"] = progress_callback
                 
-                # 그래프 실행
-                result = graph.invoke(initial_state)
+                # 그래프 실행 (thread_id로 세션 상태 유지)
+                result = graph.invoke(
+                    initial_state,
+                    config={
+                        "configurable": {
+                            "thread_id": st.session_state.session_id,
+                        }
+                    },
+                )
                 elapsed = time.time() - start_time
                 
                 update_status("응답 생성 완료", f"{elapsed:.1f}초")

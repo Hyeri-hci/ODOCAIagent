@@ -10,7 +10,7 @@ GITHUB_API_BASE: str = os.getenv("GITHUB_API_BASE", "https://api.github.com")
 
 DEFAULT_ACTIVITY_DAYS: int = 90
 
-# LLM 설정
+# LLM Settings
 LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "openai_compatible")
 LLM_API_BASE: str | None = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
 LLM_API_KEY: str | None = os.getenv("LLM_API_KEY")
