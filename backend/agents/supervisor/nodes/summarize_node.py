@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+import time
+from typing import Any, Dict, List, Optional, Tuple
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
@@ -11,6 +12,13 @@ from backend.agents.diagnosis.tools.scoring.metric_definitions import (
     get_all_aliases,
     METRIC_DEFINITIONS,
 )
+from backend.agents.shared.contracts import (
+    AnswerContract,
+    safe_get,
+    safe_get_nested,
+)
+from backend.common.events import EventType, emit_event
+from backend.common.config import DEGRADE_ENABLED
 
 from ..models import (
     SupervisorState,
@@ -19,6 +27,37 @@ from ..models import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# =============================================================================
+# Degrade Templates (아티팩트 부족/스키마 실패 시 응답)
+# =============================================================================
+
+DEGRADE_NO_ARTIFACT = """죄송합니다, 분석에 필요한 데이터를 가져오지 못했습니다.
+
+**다음 행동을 시도해 보세요:**
+1. 저장소 URL이 올바른지 확인해 주세요 (예: `facebook/react`)
+2. 잠시 후 다시 시도해 주세요
+
+문제가 계속되면 다른 저장소로 테스트해 보세요."""
+
+DEGRADE_SCHEMA_FAIL = """분석 결과를 정리하는 중 문제가 발생했습니다.
+
+**다음 행동을 시도해 보세요:**
+1. 동일한 질문을 다시 시도해 주세요
+2. 질문을 더 구체적으로 바꿔 보세요 (예: "health score 설명해줘")
+
+데이터는 수집되었으나 요약에 실패했습니다."""
+
+DEGRADE_LLM_FAIL = """응답 생성에 실패했습니다.
+
+**다음 행동을 시도해 보세요:**
+1. 잠시 후 다시 시도해 주세요
+2. 더 간단한 질문으로 바꿔 보세요"""
+
+# Source for degrade responses
+DEGRADE_SOURCE_ID = "system_degrade_template"
+DEGRADE_SOURCE_KIND = "system_template"
 
 
 # =============================================================================
@@ -59,13 +98,13 @@ def _ensure_metrics_exist(
     state: SupervisorState, 
     requested_metrics: List[str]
 ) -> tuple[List[str], Optional[str]]:
-    """Validates that requested metrics exist in diagnosis result."""
-    diagnosis_result = state.get("diagnosis_result")
+    """Validates that requested metrics exist in diagnosis result. Null-safe."""
+    diagnosis_result = safe_get(state, "diagnosis_result")
     if not diagnosis_result or not isinstance(diagnosis_result, dict):
         return [], "진단 결과가 없어 점수를 설명할 수 없습니다."
     
-    scores = diagnosis_result.get("scores", {})
-    available = set(scores.keys())
+    scores = safe_get(diagnosis_result, "scores", {})
+    available = set(scores.keys()) if isinstance(scores, dict) else set()
     
     valid = [m for m in requested_metrics if m in available]
     missing = [m for m in requested_metrics if m not in available and m not in AVAILABLE_METRICS]
@@ -121,45 +160,133 @@ def _generate_last_brief(summary: str, repo_id: str = "") -> str:
 
 
 # =============================================================================
-# LLM Call
+# LLM Call with Retry and Degrade
 # =============================================================================
+
+class LLMCallResult:
+    """Result of LLM call with metadata."""
+    def __init__(self, content: str, success: bool, retried: bool = False, degraded: bool = False):
+        self.content = content
+        self.success = success
+        self.retried = retried
+        self.degraded = degraded
+
+
+def _call_llm_with_retry(
+    system_prompt: str, 
+    user_prompt: str, 
+    params: dict,
+    max_retries: int = 1,
+) -> LLMCallResult:
+    """Calls LLM with retry logic. Returns LLMCallResult."""
+    client = fetch_llm_client()
+    last_error: Optional[Exception] = None
+    retried = False
+    
+    for attempt in range(max_retries + 1):
+        try:
+            request = ChatRequest(
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt),
+                ],
+                temperature=params.get("temperature", 0.3),
+                max_tokens=params.get("max_tokens", 1024),
+                top_p=params.get("top_p", 0.9),
+            )
+            content = client.chat(request).content
+            
+            if content and content.strip():
+                return LLMCallResult(content, success=True, retried=retried)
+            
+            # Empty response - retry
+            retried = True
+            logger.warning(f"LLM returned empty response, attempt {attempt + 1}")
+            
+        except Exception as e:
+            last_error = e
+            retried = True
+            logger.warning(f"LLM call failed (attempt {attempt + 1}): {e}")
+            if attempt < max_retries:
+                time.sleep(0.5)  # Brief delay before retry
+    
+    # All retries failed - return degrade response
+    logger.error(f"LLM call failed after {max_retries + 1} attempts: {last_error}")
+    return LLMCallResult(
+        content=DEGRADE_LLM_FAIL,
+        success=False,
+        retried=True,
+        degraded=True
+    )
+
 
 def _call_llm(system_prompt: str, user_prompt: str, params: dict) -> str:
-    """Calls LLM with the given prompts and parameters."""
-    try:
-        client = fetch_llm_client()
-        request = ChatRequest(
-            messages=[
-                ChatMessage(role="system", content=system_prompt),
-                ChatMessage(role="user", content=user_prompt),
-            ],
-            temperature=params.get("temperature", 0.3),
-            max_tokens=params.get("max_tokens", 1024),
-            top_p=params.get("top_p", 0.9),
-        )
-        return client.chat(request).content
-    except Exception as e:
-        logger.error("LLM call failed: %s", e)
-        return f"응답 생성 중 오류가 발생했습니다: {str(e)}"
+    """Calls LLM with the given prompts and parameters. Legacy wrapper."""
+    result = _call_llm_with_retry(system_prompt, user_prompt, params)
+    return result.content
 
 
 # =============================================================================
-# Response Builder
+# Response Builder (with AnswerContract enforcement + Degrade support)
 # =============================================================================
+
+# Source kinds by answer_kind
+SOURCE_KIND_MAP = {
+    "report": ["diagnosis_result"],
+    "explain": ["diagnosis_result", "explain_context"],
+    "greeting": ["system_template"],
+    "chat": ["system_template"],
+    "degrade": ["system_template"],
+}
+
 
 def _build_response(
     state: SupervisorState,
     summary: str,
     answer_kind: str,
     diagnosis_result: Optional[Dict] = None,
+    degraded: bool = False,
 ) -> Dict[str, Any]:
-    """Builds the response state update."""
-    repo = state.get("repo")
-    repo_id = f"{repo.get('owner', '')}/{repo.get('name', '')}" if repo else ""
+    """Builds the response state update with AnswerContract enforcement. Null-safe."""
+    repo = safe_get(state, "repo")
+    owner = safe_get(repo, "owner", "") if repo else ""
+    name = safe_get(repo, "name", "") if repo else ""
+    repo_id = f"{owner}/{name}" if owner or name else ""
+    
+    # AnswerContract enforcement (sources == [] 방지)
+    source_kinds = SOURCE_KIND_MAP.get(answer_kind, ["system_template"])
+    sources: List[str] = []
+    
+    if diagnosis_result and not degraded:
+        # 정상 경로: 진단 결과 참조
+        sources.append(f"diagnosis_{repo_id.replace('/', '_')}")
+    else:
+        # 디그레이드 경로: system_template 참조
+        sources.append(DEGRADE_SOURCE_ID)
+        source_kinds = [DEGRADE_SOURCE_KIND]
+    
+    answer_contract = AnswerContract(
+        text=summary or "",
+        sources=sources,
+        source_kinds=source_kinds[:len(sources)] if sources else [],
+    )
+    
+    # Emit ANSWER_GENERATED event
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": answer_kind, "repo": repo_id},
+        outputs={
+            "text_length": len(summary or ""),
+            "source_count": len(sources),
+            "source_kinds": source_kinds,
+        },
+    )
     
     result: Dict[str, Any] = {
-        "llm_summary": summary,
+        "llm_summary": answer_contract.text,
         "answer_kind": answer_kind,
+        "answer_contract": answer_contract.model_dump(),
         "last_brief": _generate_last_brief(summary, repo_id),
         "last_answer_kind": answer_kind,
     }
@@ -196,11 +323,12 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     )
     from ..intent_config import is_v1_supported
     
-    intent = state.get("intent", DEFAULT_INTENT)
-    sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
-    user_query = state.get("user_query", "")
-    diagnosis_result = state.get("diagnosis_result")
-    error_message = state.get("error_message")
+    # Null-safe state access
+    intent = safe_get(state, "intent", DEFAULT_INTENT)
+    sub_intent = safe_get(state, "sub_intent", DEFAULT_SUB_INTENT)
+    user_query = safe_get(state, "user_query", "")
+    diagnosis_result = safe_get(state, "diagnosis_result")
+    error_message = safe_get(state, "error_message")
     
     # 0. Error message takes priority
     if error_message:
@@ -216,36 +344,60 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     
     # --- Health Report Mode ---
     if mode in [("analyze", "health"), ("analyze", "onboarding")]:
+        # 아티팩트 부족 시 디그레이드
         if not diagnosis_result:
+            if DEGRADE_ENABLED:
+                return _build_response(
+                    state, 
+                    DEGRADE_NO_ARTIFACT,
+                    "report",
+                    degraded=True
+                )
             return _build_response(
                 state, 
                 "저장소 분석 결과가 없습니다. 먼저 저장소를 분석해 주세요.",
-                "report"
+                "report",
+                degraded=True
             )
         
         system_prompt, user_prompt = build_health_report_prompt(diagnosis_result)
         llm_params = get_llm_params("health_report")
-        summary = _call_llm(system_prompt, user_prompt, llm_params)
-        return _build_response(state, summary, "report", diagnosis_result)
+        
+        # LLM 호출 + 재시도 + 디그레이드
+        llm_result = _call_llm_with_retry(system_prompt, user_prompt, llm_params)
+        
+        if llm_result.degraded and DEGRADE_ENABLED:
+            return _build_response(state, DEGRADE_SCHEMA_FAIL, "report", diagnosis_result, degraded=True)
+        
+        return _build_response(state, llm_result.content, "report", diagnosis_result)
     
     # --- Score Explain Mode ---
     elif mode == ("followup", "explain"):
         if not diagnosis_result:
+            if DEGRADE_ENABLED:
+                return _build_response(
+                    state,
+                    DEGRADE_NO_ARTIFACT,
+                    "explain",
+                    degraded=True
+                )
             return _build_response(
                 state,
                 "설명할 진단 결과가 없습니다. 먼저 저장소를 분석해 주세요. (예: 'facebook/react 분석해줘')",
-                "explain"
+                "explain",
+                degraded=True
             )
         
         target_metrics = _extract_target_metrics(user_query)
         if not target_metrics:
             target_metrics = ["health_score"]
         
-        scores = diagnosis_result.get("scores", {})
-        explain_context = diagnosis_result.get("explain_context", {})
+        # Null-safe nested access
+        scores = safe_get(diagnosis_result, "scores", {})
+        explain_context = safe_get(diagnosis_result, "explain_context", {})
         
         metric_name = target_metrics[0]
-        metric_score = scores.get(metric_name, "N/A")
+        metric_score = safe_get(scores, metric_name, "N/A")
         
         system_prompt, user_prompt = build_score_explain_prompt(
             metric_name=metric_name,
@@ -254,8 +406,14 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
             user_query=user_query,
         )
         llm_params = get_llm_params("score_explain")
-        summary = _call_llm(system_prompt, user_prompt, llm_params)
-        return _build_response(state, summary, "explain", diagnosis_result)
+        
+        # LLM 호출 + 재시도 + 디그레이드
+        llm_result = _call_llm_with_retry(system_prompt, user_prompt, llm_params)
+        
+        if llm_result.degraded and DEGRADE_ENABLED:
+            return _build_response(state, DEGRADE_SCHEMA_FAIL, "explain", diagnosis_result, degraded=True)
+        
+        return _build_response(state, llm_result.content, "explain", diagnosis_result)
     
     # --- Greeting Mode ---
     elif intent == "smalltalk":
@@ -263,16 +421,25 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     
     # --- Chat Mode ---
     elif intent == "general_qa":
-        repo = state.get("repo")
+        repo = safe_get(state, "repo")
         repo_summary = ""
         if repo and diagnosis_result:
-            scores = diagnosis_result.get("scores", {})
-            repo_summary = f"이전 분석: {repo.get('owner')}/{repo.get('name')} (건강 점수: {scores.get('health_score', 'N/A')})"
+            scores = safe_get(diagnosis_result, "scores", {})
+            owner = safe_get(repo, "owner", "")
+            name = safe_get(repo, "name", "")
+            health_score = safe_get(scores, "health_score", "N/A")
+            repo_summary = f"이전 분석: {owner}/{name} (건강 점수: {health_score})"
         
         system_prompt, user_prompt = build_chat_prompt(user_query, repo_summary)
         llm_params = get_llm_params("chat")
-        summary = _call_llm(system_prompt, user_prompt, llm_params)
-        return _build_response(state, summary, "chat")
+        
+        # LLM 호출 + 재시도 + 디그레이드
+        llm_result = _call_llm_with_retry(system_prompt, user_prompt, llm_params)
+        
+        if llm_result.degraded and DEGRADE_ENABLED:
+            return _build_response(state, DEGRADE_LLM_FAIL, "chat", degraded=True)
+        
+        return _build_response(state, llm_result.content, "chat")
     
     # --- Fallback ---
     else:

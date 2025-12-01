@@ -166,5 +166,228 @@ class TestSummarizeNode:
         assert "저장소" in brief or "건강" in brief
 
 
+class TestRunnerOutputNormalization:
+    """러너 출력 정규화 테스트."""
+    
+    def test_safe_get_none(self):
+        """safe_get: None 처리."""
+        from backend.agents.shared.contracts import safe_get
+        
+        assert safe_get(None, "key") is None
+        assert safe_get(None, "key", "default") == "default"
+    
+    def test_safe_get_non_dict(self):
+        """safe_get: dict가 아닌 값 처리."""
+        from backend.agents.shared.contracts import safe_get
+        
+        assert safe_get("string", "key") is None
+        assert safe_get(123, "key", "default") == "default"
+        assert safe_get([], "key", "default") == "default"
+    
+    def test_safe_get_dict(self):
+        """safe_get: 정상 dict 처리."""
+        from backend.agents.shared.contracts import safe_get
+        
+        d = {"a": 1, "b": {"c": 2}}
+        assert safe_get(d, "a") == 1
+        assert safe_get(d, "b") == {"c": 2}
+        assert safe_get(d, "missing") is None
+        assert safe_get(d, "missing", "default") == "default"
+    
+    def test_safe_get_nested(self):
+        """safe_get_nested: 중첩 접근."""
+        from backend.agents.shared.contracts import safe_get_nested
+        
+        d = {"a": {"b": {"c": 3}}}
+        assert safe_get_nested(d, "a", "b", "c") == 3
+        assert safe_get_nested(d, "a", "b", "missing") is None
+        assert safe_get_nested(d, "a", "b", "missing", default=0) == 0
+        assert safe_get_nested(None, "a", "b") is None
+    
+    def test_normalize_none(self):
+        """normalize_runner_output: None → 빈 성공."""
+        from backend.agents.shared.contracts import normalize_runner_output, RunnerStatus
+        
+        output = normalize_runner_output(None)
+        assert output.status == RunnerStatus.SUCCESS
+        assert output.result == {}
+    
+    def test_normalize_dict(self):
+        """normalize_runner_output: dict → RunnerOutput."""
+        from backend.agents.shared.contracts import normalize_runner_output, RunnerStatus
+        
+        # 일반 dict
+        output = normalize_runner_output({"scores": {"health": 80}})
+        assert output.status == RunnerStatus.SUCCESS
+        assert output.result == {"scores": {"health": 80}}
+        
+        # 에러 표시 dict
+        output = normalize_runner_output({"error_message": "실패"})
+        assert output.status == RunnerStatus.ERROR
+        assert output.error_message == "실패"
+    
+    def test_normalize_runner_output_passthrough(self):
+        """normalize_runner_output: RunnerOutput은 그대로 반환."""
+        from backend.agents.shared.contracts import normalize_runner_output, RunnerOutput, RunnerStatus
+        
+        original = RunnerOutput.success(result={"test": 1})
+        output = normalize_runner_output(original)
+        assert output is original
+    
+    def test_normalize_exception(self):
+        """normalize_runner_output: Exception → 에러."""
+        from backend.agents.shared.contracts import normalize_runner_output, RunnerStatus
+        
+        output = normalize_runner_output(ValueError("테스트 에러"))
+        assert output.status == RunnerStatus.ERROR
+        assert "테스트 에러" in output.error_message
+    
+    def test_validate_runner_output(self):
+        """validate_runner_output: 계약 검증."""
+        from backend.agents.shared.contracts import (
+            validate_runner_output, RunnerOutput, RunnerStatus, ContractViolation
+        )
+        
+        # 유효한 출력
+        valid = RunnerOutput.success(result={"data": 1})
+        assert validate_runner_output(valid) is True
+        
+        # ERROR 상태인데 error_message 없음 (strict=False)
+        invalid = RunnerOutput(status=RunnerStatus.ERROR, result={})
+        assert validate_runner_output(invalid, strict=False) is False
+        
+        # ERROR 상태인데 error_message 없음 (strict=True)
+        with pytest.raises(ContractViolation):
+            validate_runner_output(invalid, strict=True)
+
+
+class TestDegradeResponse:
+    """디그레이드 응답 테스트."""
+    
+    def test_build_response_no_artifact_has_source(self):
+        """아티팩트 없을 때도 sources != []."""
+        from backend.agents.supervisor.nodes.summarize_node import (
+            _build_response, DEGRADE_SOURCE_ID
+        )
+        
+        state = {"intent": "analyze", "sub_intent": "health"}
+        result = _build_response(state, "테스트 응답", "report", degraded=True)
+        
+        contract = result.get("answer_contract", {})
+        assert contract.get("sources") != [], "sources는 빈 리스트가 아니어야 함"
+        assert DEGRADE_SOURCE_ID in contract.get("sources", [])
+    
+    def test_build_response_normal_path_has_diagnosis_source(self):
+        """정상 경로에서는 diagnosis source 포함."""
+        from backend.agents.supervisor.nodes.summarize_node import _build_response
+        
+        state = {"repo": {"owner": "test", "name": "repo"}}
+        diagnosis_result = {"scores": {"health_score": 80}}
+        
+        result = _build_response(state, "테스트 응답", "report", diagnosis_result)
+        
+        contract = result.get("answer_contract", {})
+        assert contract.get("sources") != []
+        assert "diagnosis_test_repo" in contract.get("sources", [])
+    
+    def test_llm_call_result_degraded_flag(self):
+        """LLMCallResult의 degraded 플래그."""
+        from backend.agents.supervisor.nodes.summarize_node import LLMCallResult
+        
+        # 정상
+        normal = LLMCallResult("content", success=True)
+        assert normal.degraded is False
+        
+        # 디그레이드
+        degraded = LLMCallResult("fallback", success=False, degraded=True)
+        assert degraded.degraded is True
+    
+    def test_greeting_response_has_source(self):
+        """인사 응답도 source 포함."""
+        from backend.agents.supervisor.nodes.summarize_node import _build_response
+        
+        state = {"intent": "smalltalk", "sub_intent": "greeting"}
+        result = _build_response(state, "안녕하세요!", "greeting")
+        
+        contract = result.get("answer_contract", {})
+        # 인사는 system_template source
+        assert contract.get("sources") != []
+
+
+class TestIdempotency:
+    """Idempotency 테스트."""
+    
+    def test_idempotency_store_basic(self):
+        """IdempotencyStore 기본 동작."""
+        from backend.common.cache import IdempotencyStore
+        
+        store = IdempotencyStore(ttl=10)
+        
+        # 저장
+        entry = store.store_result("sess1", "turn1", "step1", {"data": 1})
+        assert entry.answer_id.startswith("ans_")
+        assert entry.result == {"data": 1}
+        
+        # 조회
+        cached = store.get_cached("sess1", "turn1", "step1")
+        assert cached is not None
+        assert cached.answer_id == entry.answer_id
+    
+    def test_idempotency_store_different_keys(self):
+        """다른 키는 다른 결과."""
+        from backend.common.cache import IdempotencyStore
+        
+        store = IdempotencyStore(ttl=10)
+        
+        store.store_result("sess1", "turn1", "step1", {"a": 1})
+        store.store_result("sess1", "turn2", "step1", {"b": 2})
+        
+        cached1 = store.get_cached("sess1", "turn1", "step1")
+        cached2 = store.get_cached("sess1", "turn2", "step1")
+        
+        assert cached1.result == {"a": 1}
+        assert cached2.result == {"b": 2}
+        assert cached1.answer_id != cached2.answer_id
+    
+    def test_idempotency_store_disable(self):
+        """비활성화 시 캐시 안함."""
+        from backend.common.cache import IdempotencyStore
+        
+        store = IdempotencyStore(ttl=10)
+        store.disable()
+        
+        store.store_result("sess1", "turn1", "step1", {"data": 1})
+        cached = store.get_cached("sess1", "turn1", "step1")
+        
+        assert cached is None  # 비활성화 시 None 반환
+    
+    def test_answer_id_in_graph_result(self):
+        """Graph 결과에 answer_id 포함."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("안녕!")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        assert "answer_id" in result
+        assert result["answer_id"].startswith("ans_")
+    
+    def test_duplicate_execution_same_answer_id(self):
+        """동일 실행은 같은 answer_id 반환."""
+        from backend.common.cache import idempotency_store
+        
+        # 캐시 초기화
+        idempotency_store.clear()
+        
+        # 첫 번째 저장
+        entry1 = idempotency_store.store_result("sess_test", "turn_test", "summarize", {"x": 1})
+        
+        # 동일 키로 조회
+        cached = idempotency_store.get_cached("sess_test", "turn_test", "summarize")
+        
+        assert cached is not None
+        assert cached.answer_id == entry1.answer_id
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

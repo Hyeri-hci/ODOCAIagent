@@ -213,3 +213,260 @@ class AgentError(Exception):
     def suggested_fallback(self) -> Dict[str, Any]:
         """Provides suggested fallback parameters."""
         return self._suggested_fallback
+
+
+# =============================================================================
+# Runner Output Contract (Unified output for all runners/agents)
+# =============================================================================
+
+class RunnerStatus(str, Enum):
+    """Execution status for runners."""
+    SUCCESS = "success"
+    PARTIAL = "partial"
+    ERROR = "error"
+    SKIPPED = "skipped"
+
+
+class RunnerOutput(BaseModel):
+    """Unified output contract for all agent runners."""
+    status: RunnerStatus = Field(
+        default=RunnerStatus.SUCCESS,
+        description="Execution status."
+    )
+    result: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="The main result payload."
+    )
+    artifacts_out: List[str] = Field(
+        default_factory=list,
+        description="List of artifact IDs created during execution."
+    )
+    meta: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Additional metadata (timing, token count, etc.)."
+    )
+    error_message: Optional[str] = Field(
+        default=None,
+        description="Error message if status is ERROR."
+    )
+    
+    @classmethod
+    def success(
+        cls, 
+        result: Dict[str, Any], 
+        artifacts_out: Optional[List[str]] = None,
+        meta: Optional[Dict[str, Any]] = None
+    ) -> "RunnerOutput":
+        """Factory for successful output."""
+        return cls(
+            status=RunnerStatus.SUCCESS,
+            result=result,
+            artifacts_out=artifacts_out or [],
+            meta=meta or {}
+        )
+    
+    @classmethod
+    def error(cls, message: str, meta: Optional[Dict[str, Any]] = None) -> "RunnerOutput":
+        """Factory for error output."""
+        return cls(
+            status=RunnerStatus.ERROR,
+            result={},
+            error_message=message,
+            meta=meta or {}
+        )
+
+
+# =============================================================================
+# Answer Contract Validator
+# =============================================================================
+
+def validate_answer_contract(answer: AnswerContract, enforce: bool = True) -> bool:
+    """
+    Validates the AnswerContract.
+    
+    Args:
+        answer: The answer to validate
+        enforce: If True, raises ValueError on empty sources
+        
+    Returns:
+        True if valid
+        
+    Raises:
+        ValueError: If enforce=True and sources are empty
+    """
+    if not answer.text or not answer.text.strip():
+        if enforce:
+            raise ValueError("AnswerContract.text cannot be empty")
+        return False
+    
+    if not answer.validate_sources_match():
+        if enforce:
+            raise ValueError("AnswerContract.sources and source_kinds length mismatch")
+        return False
+    
+    # Note: Empty sources are allowed for greeting/chat modes
+    # The caller should decide whether to enforce non-empty sources
+    
+    return True
+
+
+def create_answer_with_sources(
+    text: str,
+    source_artifacts: List[str],
+    source_kinds: Optional[List[str]] = None
+) -> AnswerContract:
+    """
+    Creates an AnswerContract with proper source tracking.
+    
+    Args:
+        text: Response text
+        source_artifacts: List of artifact IDs used
+        source_kinds: List of artifact kinds (auto-inferred if None)
+    """
+    if source_kinds is None:
+        # Infer kinds from artifact IDs (format: {kind}_{hash})
+        source_kinds = []
+        for aid in source_artifacts:
+            parts = aid.split("_")
+            kind = parts[0] if parts else "unknown"
+            source_kinds.append(kind)
+    
+    return AnswerContract(
+        text=text,
+        sources=source_artifacts,
+        source_kinds=source_kinds
+    )
+
+
+# =============================================================================
+# Runner Output Normalization (Null-safe)
+# =============================================================================
+
+def normalize_runner_output(raw: Any) -> RunnerOutput:
+    """
+    Normalizes any runner output to RunnerOutput contract.
+    
+    Handles:
+    - None -> empty success
+    - dict -> RunnerOutput
+    - RunnerOutput -> pass-through
+    - Exception -> error output
+    
+    This is the SINGLE normalization point for all runners.
+    """
+    # None -> empty success
+    if raw is None:
+        return RunnerOutput.success(result={})
+    
+    # Already RunnerOutput
+    if isinstance(raw, RunnerOutput):
+        return raw
+    
+    # Exception -> error
+    if isinstance(raw, Exception):
+        return RunnerOutput.error(str(raw))
+    
+    # Dict -> convert to RunnerOutput
+    if isinstance(raw, dict):
+        return _normalize_dict_output(raw)
+    
+    # Unknown type -> wrap in result
+    return RunnerOutput.success(result={"value": raw})
+
+
+def _normalize_dict_output(raw: Dict[str, Any]) -> RunnerOutput:
+    """Normalizes a dictionary to RunnerOutput."""
+    # Check if already RunnerOutput-like
+    if "status" in raw and raw.get("status") in [s.value for s in RunnerStatus]:
+        return RunnerOutput(
+            status=RunnerStatus(raw.get("status", "success")),
+            result=safe_get(raw, "result", {}),
+            artifacts_out=safe_get(raw, "artifacts_out", []),
+            meta=safe_get(raw, "meta", {}),
+            error_message=raw.get("error_message"),
+        )
+    
+    # Check for error indicators
+    if raw.get("error") or raw.get("error_message"):
+        return RunnerOutput.error(
+            message=raw.get("error_message") or raw.get("error") or "Unknown error",
+            meta={"original_keys": list(raw.keys())},
+        )
+    
+    # Treat as successful result payload
+    return RunnerOutput.success(result=raw)
+
+
+def safe_get(d: Any, key: str, default: Any = None) -> Any:
+    """Null-safe dictionary get. Works with None, non-dict, and missing keys."""
+    if d is None:
+        return default
+    if not isinstance(d, dict):
+        return default
+    return d.get(key, default)
+
+
+def safe_get_nested(d: Any, *keys: str, default: Any = None) -> Any:
+    """Null-safe nested dictionary access."""
+    current = d
+    for key in keys:
+        current = safe_get(current, key)
+        if current is None:
+            return default
+    return current if current is not None else default
+
+
+# =============================================================================
+# Contract Validation Helpers
+# =============================================================================
+
+class ContractViolation(Exception):
+    """Raised when a contract is violated."""
+    def __init__(self, message: str, contract_name: str, field: str = ""):
+        super().__init__(message)
+        self.contract_name = contract_name
+        self.field = field
+
+
+def validate_runner_output(output: RunnerOutput, strict: bool = False) -> bool:
+    """
+    Validates a RunnerOutput.
+    
+    Args:
+        output: The output to validate
+        strict: If True, raises ContractViolation on issues
+        
+    Returns:
+        True if valid
+    """
+    # Status must be valid
+    if output.status not in RunnerStatus:
+        if strict:
+            raise ContractViolation(
+                f"Invalid status: {output.status}",
+                "RunnerOutput",
+                "status"
+            )
+        return False
+    
+    # Error status must have error_message
+    if output.status == RunnerStatus.ERROR and not output.error_message:
+        if strict:
+            raise ContractViolation(
+                "ERROR status requires error_message",
+                "RunnerOutput",
+                "error_message"
+            )
+        return False
+    
+    # result must be dict
+    if not isinstance(output.result, dict):
+        if strict:
+            raise ContractViolation(
+                f"result must be dict, got {type(output.result)}",
+                "RunnerOutput",
+                "result"
+            )
+        return False
+    
+    return True

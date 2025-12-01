@@ -8,6 +8,8 @@ from typing import Any, Optional, Tuple
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
+from backend.common.events import EventType, emit_event
+from backend.agents.shared.contracts import safe_get
 
 from ..models import (
     SupervisorState, 
@@ -173,55 +175,87 @@ def _parse_user_context(raw: dict | None) -> Optional[UserContext]:
 
 
 def classify_intent_node(state: SupervisorState) -> SupervisorState:
-    """Classify user intent (Heuristic first, then LLM)."""
-    query = state.get("user_query", "")
+    """Classify user intent (Heuristic first, then LLM). Null-safe."""
+    query = safe_get(state, "user_query", "")
     if not query:
         raise ValueError("user_query is empty")
     
     new_state: SupervisorState = dict(state)  # type: ignore
+    classification_method = "unknown"
     
     # 1) Heuristic classification
     fast = _fast_classify(query)
     if fast and fast[3] >= 0.9:
-        intent, sub_intent, repo, _ = fast
+        intent, sub_intent, repo, conf = fast
         new_state["intent"] = intent
         new_state["sub_intent"] = sub_intent
         if repo:
             new_state["repo"] = repo
+        classification_method = "heuristic"
+        
+        # Emit INTENT_DETECTED event
+        emit_event(
+            event_type=EventType.SUPERVISOR_INTENT_DETECTED,
+            actor="intent_classifier",
+            inputs={"query": query[:200]},
+            outputs={
+                "intent": intent,
+                "sub_intent": sub_intent,
+                "method": classification_method,
+                "confidence": conf,
+                "repo": f"{repo['owner']}/{repo['name']}" if repo else None,
+            },
+        )
+        
         logger.info("[classify] Heuristic: %s.%s", intent, sub_intent)
         return new_state
     
     # 2) Fallback repo extraction
     fallback_repo = _extract_repo(query)
     
-    # 3) LLM classification
-    history = state.get("history", [])
-    if isinstance(history, str):
+    # 3) LLM classification (Null-safe history access)
+    history = safe_get(state, "history", [])
+    if not isinstance(history, list):
         history = []
     
     raw = _call_llm(query, history)
     parsed = _parse_response(raw)
     
-    intent = validate_intent(parsed.get("intent"))
-    sub_intent = validate_sub_intent(parsed.get("sub_intent"))
+    intent = validate_intent(safe_get(parsed, "intent"))
+    sub_intent = validate_sub_intent(safe_get(parsed, "sub_intent"))
     
     new_state["intent"] = intent
     new_state["sub_intent"] = sub_intent
+    classification_method = "llm"
     
     # Repo info (LLM result or fallback)
-    repo = _parse_repo_url(parsed.get("repo_url")) or fallback_repo
+    repo = _parse_repo_url(safe_get(parsed, "repo_url")) or fallback_repo
     if repo:
         new_state["repo"] = repo
     
     # User context
-    ctx = _parse_user_context(parsed.get("user_context"))
+    ctx = _parse_user_context(safe_get(parsed, "user_context"))
     if ctx:
         new_state["user_context"] = ctx
     
-    # Update history
-    hist = list(state.get("history", []))
+    # Update history (Null-safe)
+    hist = list(safe_get(state, "history", []) or [])
     hist.append({"role": "user", "content": query})
     new_state["history"] = hist
+    
+    # Emit INTENT_DETECTED event
+    emit_event(
+        event_type=EventType.SUPERVISOR_INTENT_DETECTED,
+        actor="intent_classifier",
+        inputs={"query": query[:200]},
+        outputs={
+            "intent": intent,
+            "sub_intent": sub_intent,
+            "method": classification_method,
+            "confidence": 0.8,  # LLM default confidence
+            "repo": f"{repo['owner']}/{repo['name']}" if repo else None,
+        },
+    )
     
     logger.info("[classify] LLM: %s.%s, repo=%s", intent, sub_intent, repo)
     return new_state
