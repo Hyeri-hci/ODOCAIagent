@@ -1,9 +1,4 @@
-"""
-Supervisor Agent 모듈
-
-사용자 자연어 쿼리를 받아 적절한 Agent로 라우팅하고,
-결과를 종합하여 최종 응답을 생성하는 역할을 담당한다.
-"""
+"""The Supervisor Agent, which routes user queries and synthesizes final responses."""
 from .models import (
     SupervisorState,
     SupervisorTaskType,

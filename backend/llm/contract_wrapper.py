@@ -1,8 +1,8 @@
 """
-LLM 호출 래퍼 - AnswerContract 강제 및 이벤트 추적.
+LLM call wrapper to enforce AnswerContract and track events.
 
-모든 LLM 호출은 이 모듈을 통해 수행되어야 함.
-출처(sources)가 없는 응답은 거부됨.
+All LLM calls should be made through this module.
+Responses without sources will be rejected.
 """
 from __future__ import annotations
 
@@ -30,13 +30,13 @@ from backend.llm.factory import fetch_llm_client
 
 logger = logging.getLogger(__name__)
 
-# 환경변수로 재시도 횟수 설정
+# Set max retries from environment variable
 MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
 REQUIRE_SOURCES = os.getenv("LLM_REQUIRE_SOURCES", "true").lower() in ("1", "true")
 
 
 def _build_contract_system_prompt(artifact_refs: List[ArtifactRef]) -> str:
-    """AnswerContract 강제를 위한 시스템 프롬프트 생성."""
+    """Builds the system prompt to enforce the AnswerContract."""
     artifact_list = "\n".join([
         f"- id: {ref.id}, kind: {ref.kind.value if hasattr(ref.kind, 'value') else ref.kind}"
         for ref in artifact_refs
@@ -72,11 +72,11 @@ def _build_contract_system_prompt(artifact_refs: List[ArtifactRef]) -> str:
 
 
 def _parse_contract_response(raw_content: str) -> AnswerContract:
-    """LLM 응답을 AnswerContract로 파싱."""
-    # JSON 추출 시도
+    """Parses the LLM response into an AnswerContract."""
+    # Attempt to extract JSON
     content = raw_content.strip()
     
-    # 코드 블록 제거
+    # Remove code blocks
     if content.startswith("```"):
         lines = content.split("\n")
         content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
@@ -88,13 +88,13 @@ def _parse_contract_response(raw_content: str) -> AnswerContract:
         logger.error(f"Failed to parse LLM response as JSON: {e}")
         logger.debug(f"Raw content: {raw_content[:500]}")
         raise AgentError(
-            f"LLM 응답 파싱 실패: {e}",
+            f"Failed to parse LLM response: {e}",
             kind=ErrorKind.INVALID_INPUT
         )
     except Exception as e:
         logger.error(f"Failed to create AnswerContract: {e}")
         raise AgentError(
-            f"AnswerContract 생성 실패: {e}",
+            f"Failed to create AnswerContract: {e}",
             kind=ErrorKind.INVALID_INPUT
         )
 
@@ -109,21 +109,21 @@ def generate_answer_with_contract(
     max_tokens: int = 2048,
 ) -> AnswerContract:
     """
-    AnswerContract를 강제하는 LLM 호출.
+    Makes an LLM call that enforces the AnswerContract.
     
     Args:
-        prompt: 사용자 프롬프트
-        context_artifacts: 참조 가능한 artifact 목록
-        require_sources: True면 sources가 비어있을 때 에러 발생
-        max_retries: 최대 재시도 횟수
-        temperature: LLM temperature
-        max_tokens: 최대 토큰 수
+        prompt: The user prompt.
+        context_artifacts: A list of artifacts that can be referenced.
+        require_sources: If True, raises an error if sources are empty.
+        max_retries: The maximum number of retries.
+        temperature: The LLM temperature.
+        max_tokens: The maximum number of tokens.
     
     Returns:
-        AnswerContract: 검증된 응답
+        A validated AnswerContract.
     
     Raises:
-        AgentError: 파싱 실패, 출처 누락, 검증 실패 시
+        AgentError: If parsing fails, sources are missing, or validation fails.
     """
     with span("generate_answer_with_contract", actor="llm"):
         client = fetch_llm_client()
@@ -156,26 +156,26 @@ def generate_answer_with_contract(
                 
                 response = client.chat(request)
                 
-                # 응답 파싱
+                # Parse the response
                 answer = _parse_contract_response(response.content)
                 
-                # 출처 검증
+                # Validate sources
                 if require_sources and REQUIRE_SOURCES:
                     if not answer.sources:
                         raise AgentError(
-                            "응답에 출처(sources)가 없습니다.",
+                            "Response is missing sources.",
                             kind=ErrorKind.INVALID_INPUT
                         )
                     
                     if not answer.validate_sources_match():
                         raise AgentError(
-                            f"sources({len(answer.sources)})와 source_kinds({len(answer.source_kinds)}) 길이 불일치",
+                            f"sources({len(answer.sources)}) and source_kinds({len(answer.source_kinds)}) length mismatch",
                             kind=ErrorKind.INVALID_INPUT
                         )
                     
-                    # Artifact 존재 검증
+                    # Validate that artifacts exist
                     if not ensure_artifacts_exist(answer.sources):
-                        # 경고만 로그, 에러는 발생시키지 않음 (LLM이 생성한 ID일 수 있음)
+                        # Log a warning only, don't raise an error (LLM might hallucinate IDs)
                         logger.warning(f"Some artifacts not found: {answer.sources}")
                 
                 duration_ms = (time.time() - start_time) * 1000
@@ -209,11 +209,11 @@ def generate_answer_with_contract(
                 last_error = e
                 logger.warning(f"LLM call attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries:
-                    time.sleep(0.5 * (attempt + 1))  # 백오프
+                    time.sleep(0.5 * (attempt + 1))  # Exponential backoff
         
-        # 모든 재시도 실패
+        # All retries failed
         raise AgentError(
-            f"LLM 호출 실패 ({max_retries + 1}회 시도): {last_error}",
+            f"LLM call failed after {max_retries + 1} attempts: {last_error}",
             kind=ErrorKind.TIMEOUT
         )
 
@@ -226,10 +226,10 @@ def generate_simple_answer(
     max_tokens: int = 2048,
 ) -> str:
     """
-    단순 LLM 호출 (Contract 강제 없음).
+    Makes a simple LLM call without enforcing a contract.
     
-    출처 추적이 필요 없는 간단한 응답에 사용.
-    예: 개념 설명, 일반 대화 등
+    Used for simple responses where source tracking is not needed.
+    (e.g., concept explanations, general chat).
     """
     with span("generate_simple_answer", actor="llm"):
         client = fetch_llm_client()
@@ -275,17 +275,17 @@ def generate_structured_output(
     max_tokens: int = 2048,
 ) -> Dict[str, Any]:
     """
-    구조화된 JSON 출력을 강제하는 LLM 호출.
+    Makes an LLM call that enforces a structured JSON output.
     
     Args:
-        prompt: 사용자 프롬프트
-        output_schema: 출력 JSON 스키마 (예시 또는 설명)
-        system_prompt: 추가 시스템 프롬프트
-        temperature: LLM temperature
-        max_tokens: 최대 토큰 수
+        prompt: The user prompt.
+        output_schema: The output JSON schema (as an example or description).
+        system_prompt: An additional system prompt.
+        temperature: The LLM temperature.
+        max_tokens: The maximum number of tokens.
     
     Returns:
-        파싱된 JSON 딕셔너리
+        A parsed JSON dictionary.
     """
     schema_str = json.dumps(output_schema, indent=2, ensure_ascii=False)
     
@@ -324,7 +324,7 @@ def generate_structured_output(
         response = client.chat(request)
         duration_ms = (time.time() - start_time) * 1000
         
-        # JSON 파싱
+        # Parse JSON
         content = response.content.strip()
         if content.startswith("```"):
             lines = content.split("\n")
@@ -336,7 +336,7 @@ def generate_structured_output(
             logger.error(f"Failed to parse structured output: {e}")
             logger.debug(f"Raw content: {response.content[:500]}")
             raise AgentError(
-                f"구조화된 출력 파싱 실패: {e}",
+                f"Failed to parse structured output: {e}",
                 kind=ErrorKind.INVALID_INPUT
             )
         

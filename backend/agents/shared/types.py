@@ -1,7 +1,7 @@
 """
 Shared types for all agents.
 
-이 모듈은 Diagnosis, Security, Recommend Agent 간 공유되는 타입을 정의합니다.
+This module defines types shared between Diagnosis, Security, and Recommend Agents.
 """
 from dataclasses import dataclass, field
 from typing import Any, Literal
@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 @dataclass
 class AgentResult:
-    """모든 Agent의 표준 결과 타입."""
+    """Standard result type for all Agents."""
     success: bool
     data: dict[str, Any] = field(default_factory=dict)
     error_message: str | None = None
@@ -18,14 +18,14 @@ class AgentResult:
 
 @dataclass  
 class AgentError:
-    """Agent 실행 중 발생한 에러."""
+    """Error raised during Agent execution."""
     code: str
     message: str
     details: dict[str, Any] = field(default_factory=dict)
 
 
-# 공통 점수 타입
+# Common score type
 ScoreValue = float | int | None
 
-# Agent 종류
+# Agent types
 AgentType = Literal["diagnosis", "security", "recommend", "supervisor"]

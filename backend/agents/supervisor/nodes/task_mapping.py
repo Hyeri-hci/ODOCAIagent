@@ -1,4 +1,4 @@
-"""Task Type 매핑 노드."""
+"""Node for mapping task types."""
 from __future__ import annotations
 
 import logging
@@ -17,49 +17,45 @@ from ..intent_config import get_diagnosis_task_type
 
 
 def map_to_diagnosis_task_type(task_type: SupervisorTaskType) -> DiagnosisTaskType:
-    """
-    Supervisor 전역 task_type -> Diagnosis Agent task_type 매핑
-    
-    INTENT_CONFIG 기반으로 매핑합니다.
-    """
+    """Maps the global Supervisor task_type to a Diagnosis Agent task_type based on INTENT_CONFIG."""
     return get_diagnosis_task_type(task_type)
 
 
 def map_to_security_task_type(task_type: SupervisorTaskType) -> SecurityTaskType:
     """
-    Supervisor 전역 task_type -> Security Agent task_type 매핑
+    Maps the global Supervisor task_type to a Security Agent task_type.
     
-    현재는 모든 경우에 'none'. 보안 기능 추가 시 갱신.
+    Currently returns 'none' for all cases. Update when security features are added.
     """
     return "none"
 
 
 def map_to_recommend_task_type(task_type: SupervisorTaskType) -> RecommendTaskType:
     """
-    Supervisor 전역 task_type -> Recommend Agent task_type 매핑
+    Maps the global Supervisor task_type to a Recommend Agent task_type.
     
-    현재는 모든 경우에 'none'. 추천 기능 추가 시 갱신.
+    Currently returns 'none' for all cases. Update when recommendation features are added.
     """
     return "none"
 
 
 def map_task_types_node(state: SupervisorState) -> SupervisorState:
     """
-    LangGraph 노드: Agent별 task_type 매핑
+    LangGraph Node: Maps task types for each agent.
     
-    state.task_type(Supervisor 전역)을 읽고
-    diagnosis_task_type / diagnosis_needs / security_task_type / recommend_task_type을 설정한다.
+    Reads state.task_type (global) and sets diagnosis_task_type,
+    diagnosis_needs, security_task_type, and recommend_task_type.
     """
-    # [Crash Fix] task_type이 없으면 intent/sub_intent로 생성
+    # [Crash Fix] If task_type is missing, generate it from intent/sub_intent.
     if "task_type" not in state or not state.get("task_type"):
         intent = state.get("intent", "general_qa")
         sub_intent = state.get("sub_intent", "chat")
-        # smalltalk/help/overview 등은 diagnosis 불필요
+        # Lightweight paths like smalltalk/help/overview don't need diagnosis.
         if intent in ("smalltalk", "help", "overview"):
-            task_type = "concept_qa_process"  # 가벼운 경로로
+            task_type = "concept_qa_process"  # Use a light path
         else:
             task_type = f"{intent}_{sub_intent}" if sub_intent else intent
-        logger.warning("[map_task_types_node] task_type 없음, 생성: %s", task_type)
+        logger.warning("[map_task_types_node] task_type missing, generated: %s", task_type)
     else:
         task_type = state["task_type"]
 

@@ -1,13 +1,8 @@
 """
-Supervisor 노드 모듈
+Node functions for the Supervisor's LangGraph workflow.
 
-LangGraph 워크플로우에서 사용하는 노드 함수들을 제공한다.
-
-## 노드 구성
-- **Intent Classification**: 사용자 의도 분류
-- **Task Mapping**: 의도 → Agent Task 매핑
-- **Diagnosis**: 진단 실행
-- **Summarize**: 응답 생성 및 설명
+This module provides the nodes used in the graph, such as intent classification,
+task mapping, diagnosis execution, and response summarization.
 """
 from .intent_classifier import classify_intent_node
 from .task_mapping import (
@@ -19,7 +14,7 @@ from .task_mapping import (
 from .run_diagnosis import run_diagnosis_node
 from .summarize_node import (
     summarize_node,
-    # Explain 관련 내부 함수 (테스트용 export)
+    # Internal functions for explainability (exported for testing)
     _ensure_metrics_exist,
     _extract_target_metrics,
     _format_diagnosis_for_explain,

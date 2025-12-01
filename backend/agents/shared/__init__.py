@@ -1,7 +1,7 @@
 """
 Shared module for cross-agent utilities and types.
 
-향후 Security Agent, Recommend Agent 통합 시 공통 코드 위치.
+This is the location for common code when integrating Security and Recommend Agents.
 """
 
 from .types import AgentResult, AgentError

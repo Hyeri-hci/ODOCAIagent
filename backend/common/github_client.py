@@ -13,7 +13,7 @@ GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 
 
 class GitHubClientError(Exception):
-    """GitHub API 호출 관련 예외 클래스"""
+    """Custom exception for GitHub API call errors."""
     pass
 
 
@@ -27,7 +27,7 @@ def _build_headers() -> Dict[str, str]:
 
 
 def _github_graphql(query: str, variables: Dict[str, Any]) -> Dict[str, Any]:
-    """GitHub GraphQL 호출 공통 헬퍼."""
+    """Common helper for making GitHub GraphQL calls."""
     logger.debug("GitHub GraphQL: variables=%s", variables)
     resp = requests.post(
         GITHUB_GRAPHQL_URL,
@@ -128,7 +128,7 @@ def fetch_repo_overview(owner: str, repo: str) -> Dict[str, Any]:
 
 @cached(ttl=300)
 def fetch_repo(owner: str, repo: str) -> Dict[str, Any]:
-    """repos/{owner}/{repo} 기본 정보 조회 (REST API, 하위 호환용)"""
+    """Fetches basic repo info from `repos/{owner}/{repo}` (REST API for legacy compatibility)."""
     logger.debug("GitHub API: fetch_repo %s/%s", owner, repo)
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}"
     resp = requests.get(url, headers=_build_headers(), timeout=10)
@@ -141,7 +141,7 @@ def fetch_repo(owner: str, repo: str) -> Dict[str, Any]:
 
 @cached(ttl=300)
 def fetch_readme(owner: str, repo: str) -> Optional[Dict[str, Any]]:
-    """README 정보 조회 (REST API, 하위 호환용)"""
+    """Fetches README info (REST API for legacy compatibility)."""
     logger.debug("GitHub API: fetch_readme %s/%s", owner, repo)
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/readme"
     resp = requests.get(url, headers=_build_headers(), timeout=10)
@@ -159,7 +159,7 @@ def fetch_recent_commits(
     days: int = DEFAULT_ACTIVITY_DAYS,
     per_page: int = 100,
 ) -> List[Dict[str, Any]]:
-    """최근 커밋 내역 조회 (REST API)."""
+    """Fetches recent commits (REST API)."""
     logger.debug("GitHub API: fetch_recent_commits %s/%s (days=%d)", owner, repo, days)
     since_dt = dt.datetime.now() - dt.timedelta(days=days)
     since_iso = since_dt.isoformat() + "Z"
@@ -185,9 +185,7 @@ def fetch_activity_summary(
     issues_limit: int = 100,
     prs_limit: int = 100,
 ) -> Dict[str, Any]:
-    """
-    GraphQL 한 번 호출로 commits + issues + PRs 조회.
-    """
+    """Fetches commits, issues, and PRs in a single GraphQL call."""
     logger.debug(
         "GitHub GraphQL: fetch_activity_summary %s/%s (days=%d)",
         owner, repo, days,
@@ -327,7 +325,7 @@ def fetch_recent_issues(
     days: int = DEFAULT_ACTIVITY_DAYS,
     per_page: int = 100,
 ) -> List[Dict[str, Any]]:
-    """GitHub GraphQL로 최근 N일 기준 이슈 목록 조회."""
+    """Fetches a list of recent issues for N days via GraphQL."""
     logger.debug(
         "GitHub GraphQL: fetch_recent_issues %s/%s (days=%d)",
         owner, repo, days,
@@ -399,7 +397,7 @@ def fetch_recent_pull_requests(
     days: int = DEFAULT_ACTIVITY_DAYS,
     per_page: int = 100,
 ) -> List[Dict[str, Any]]:
-    """GitHub GraphQL로 최근 N일 기준 PR 목록 조회."""
+    """Fetches a list of recent PRs for N days via GraphQL."""
     logger.debug(
         "GitHub GraphQL: fetch_recent_pull_requests %s/%s (days=%d)",
         owner, repo, days,
@@ -482,7 +480,7 @@ def fetch_recent_pull_requests(
 
 
 def clear_repo_cache(owner: str, repo: str) -> None:
-    """repo 캐시 무효화."""
+    """Invalidates the cache for a specific repository."""
     fetch_repo.invalidate(owner, repo)
     fetch_readme.invalidate(owner, repo)
     fetch_recent_commits.invalidate(owner, repo)
@@ -493,5 +491,5 @@ def clear_repo_cache(owner: str, repo: str) -> None:
 
 
 def clear_all_cache() -> None:
-    """GitHub 캐시 전체 삭제."""
+    """Clears the entire GitHub cache."""
     github_cache.clear()

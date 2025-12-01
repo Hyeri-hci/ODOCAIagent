@@ -1,4 +1,4 @@
-"""TTL 기반 인메모리 캐시."""
+"""A simple TTL-based in-memory cache."""
 from __future__ import annotations
 
 import time
@@ -23,7 +23,7 @@ class CacheEntry:
 
 
 class SimpleCache:
-    """인메모리 TTL 캐시."""
+    """A simple in-memory cache with Time-To-Live (TTL) support."""
     
     def __init__(self, ttl: int = DEFAULT_TTL_SECONDS):
         self._store: Dict[str, CacheEntry] = {}
@@ -67,28 +67,28 @@ github_cache = SimpleCache(ttl=DEFAULT_TTL_SECONDS)
 
 
 def cached(cache: SimpleCache = github_cache, ttl: Optional[int] = None):
-    """함수 결과 캐싱 데코레이터."""
+    """Decorator to cache the result of a function."""
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @wraps(func)
         def wrapper(*args, **kwargs) -> T:
-            # 캐시 키 생성
+            # Create a cache key from the function and its arguments.
             key = f"{func.__module__}.{func.__name__}:" + cache._make_key(*args, **kwargs)
             
-            # 캐시 히트 확인
+            # Check for a cache hit.
             cached_value = cache.get(key)
             if cached_value is not None:
                 logger.debug("Cache HIT: %s", key[:50])
                 return cached_value
             
-            # 캐시 미스: 실제 함수 호출
+            # On a cache miss, call the actual function.
             logger.debug("Cache MISS: %s", key[:50])
             result = func(*args, **kwargs)
             
-            # 결과 캐싱
+            # Store the result in the cache.
             cache.set(key, result, ttl)
             return result
         
-        # 캐시 무효화 헬퍼 추가
+        # Add a helper to invalidate the cache for a specific call.
         def invalidate(*args, **kwargs) -> None:
             key = f"{func.__module__}.{func.__name__}:" + cache._make_key(*args, **kwargs)
             cache.delete(key)

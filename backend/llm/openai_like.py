@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 
 class OpenAILikeClient(LLMClient):
     """
-      OpenAI / llama.cpp / 로컬 Kanana 프록시 등
-      'OpenAI Chat Completions' API 호환 End-point LLM 클라이언트
+    LLM client for endpoints compatible with the OpenAI Chat Completions API.
+    (e.g., OpenAI, llama.cpp, local Kanana proxy)
     """
 
     def __init__(
@@ -67,7 +67,7 @@ class OpenAILikeClient(LLMClient):
                 
                 data = resp.json()
 
-                # OpenAI 호환 응답 처리: choices[0].message.content 사용
+                # Handle OpenAI-compatible response: use choices[0].message.content
                 try:
                     content = data["choices"][0]["message"]["content"]
                 except (KeyError, IndexError) as e:
@@ -82,11 +82,11 @@ class OpenAILikeClient(LLMClient):
                 last_error = ConnectionError(f"LLM request failed: {e}")
                 logger.warning(f"[LLM] Connection error (attempt {attempt + 1}/{self.max_retries}): {e}")
             
-            # 마지막 시도가 아니면 대기 후 재시도
+            # If not the last attempt, wait and retry
             if attempt < self.max_retries - 1:
                 wait_time = self.retry_delay * (2 ** attempt)  # exponential backoff
                 logger.info(f"[LLM] Retrying in {wait_time:.1f}s...")
                 time.sleep(wait_time)
         
-        # 모든 재시도 실패
+        # All retries failed
         raise last_error or ConnectionError("LLM request failed after all retries")

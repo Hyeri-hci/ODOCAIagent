@@ -1,4 +1,4 @@
-"""Supervisor Agent 서비스: LangGraph 워크플로우 + 레거시 호환."""
+"""Supervisor Agent Service: LangGraph workflow and legacy compatibility."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -37,7 +37,7 @@ def call_diagnosis_agent(
     user_level: UserLevel,
     advanced_analysis: bool = False,
 ) -> dict[str, Any]:
-    """진단 에이전트 호출"""
+    """Calls the Diagnosis Agent."""
     payload = {
         "owner": owner,
         "repo": repo,
@@ -55,7 +55,7 @@ def summarize_with_llm(
     user_level: UserLevel,
     language: str = "ko",
 ) -> str:
-    """LLM을 사용하여 진단 결과를 사용자 친화적으로 요약"""
+    """Summarizes the diagnosis result into a user-friendly response using an LLM."""
     system_prompt = _build_system_prompt(language)
     user_prompt = _build_user_prompt(user_level, diagnosis_result)
 
@@ -70,7 +70,7 @@ def summarize_with_llm(
 
 
 def _build_system_prompt(language: str) -> str:
-    """언어별 시스템 프롬프트 생성"""
+    """Builds a system prompt for the given language."""
     if language == "ko":
         return (
             "당신은 오픈소스 온보딩을 돕는 AI 에이전트의 Supervisor입니다. "
@@ -85,19 +85,19 @@ def _build_system_prompt(language: str) -> str:
 
 
 def _build_user_prompt(user_level: UserLevel, diagnosis_result: dict[str, Any]) -> str:
-    """사용자 프롬프트 생성"""
+    """Builds the user prompt."""
     return (
-        f"사용자 수준: {user_level}\n\n"
-        "다음은 Diagnosis Agent가 생성한 진단 결과입니다.\n"
-        "이 결과를 바탕으로 최종 사용자에게 보여줄 답변을 작성해 주세요.\n\n"
+        f"User level: {user_level}\n\n"
+        "The following is the diagnosis result from the Diagnosis Agent.\n"
+        "Based on this result, please write a response for the end-user.\n\n"
         f"{diagnosis_result}"
     )
 
 
 def run_supervisor(input_data: SupervisorInput) -> SupervisorOutput:
-    """Supervisor 에이전트 실행"""
+    """Runs the Supervisor agent."""
     if not input_data.owner or not input_data.repo:
-        raise ValueError("owner 및 repo 정보를 입력해야 합니다.")
+        raise ValueError("owner and repo information must be provided.")
 
     diagnosis_result = call_diagnosis_agent(
         owner=input_data.owner,
@@ -126,12 +126,7 @@ def build_initial_state(
     repo: str,
     user_context: UserContext | None = None,
 ) -> SupervisorState:
-    """
-    SupervisorState 초기화
-    
-    LangGraph 워크플로우 시작 시 사용하는 헬퍼 함수.
-    task_type은 이후 LLM 라우팅 노드에서 추론된다.
-    """
+    """Initializes the SupervisorState for a LangGraph workflow."""
     state: SupervisorState = {
         "user_query": user_query,
         "repo": {

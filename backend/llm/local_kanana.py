@@ -31,7 +31,7 @@ def _ensure_loaded(model_id: str) -> tuple[AutoModelForCausalLM, AutoTokenizer]:
 
     print("[local_kanana] Loading model...")
     if torch.cuda.is_available():
-        dtype = torch.bfloat16  # GPU 사용 시 메모리 절감을 위해 bfloat16 선호
+        dtype = torch.bfloat16  # Prefer bfloat16 to save memory on GPU
         device_map: str | Dict[str, Any] = "auto"
     else:
         dtype = torch.float32
@@ -53,7 +53,7 @@ def _to_hf_message(message: List[ChatMessage]) -> List[Dict[str, str]]:
     return [{"role": m.role, "content": m.content} for m in message]
 
 class LocalKananaClient(LLMClient):
-    """로컬 Kanana LLM 클라이언트"""
+    """LLM client for a local Kanana model."""
 
     def __init__(self, model_id: str | None = None) -> None:
         self.model_id = model_id or DEFAULT_MODEL_ID

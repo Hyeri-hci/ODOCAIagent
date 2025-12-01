@@ -1,15 +1,15 @@
-"""듀얼 모드 프롬프트 템플릿: Fast Chat / Expert Tool."""
+"""Dual-mode prompt templates: Fast Chat / Expert Tool."""
 from __future__ import annotations
 
 from typing import Literal
 
-# 라우팅 모드
+# Routing mode
 RoutingMode = Literal["fast_chat", "expert_tool"]
 
-# Fast Chat 신뢰도 임계값 (이하면 Fast Chat)
+# Confidence threshold for Fast Chat (if lower, use Fast Chat)
 FAST_CHAT_THRESHOLD = 0.5
 
-# LLM 파라미터
+# LLM parameters
 LLM_PARAMS = {
     "fast_chat": {
         "temperature": 0.7,
@@ -24,7 +24,7 @@ LLM_PARAMS = {
 }
 
 
-# Fast Chat 시스템 프롬프트 (한국어)
+# System prompt for Fast Chat (Korean)
 FAST_CHAT_SYSTEM = """너는 공손하고 간결한 한국어 비서다.
 - 불필요한 장황함 없이 한두 문단으로 답한다
 - 지시가 모호하면 1문장으로 선택지를 제안한다
@@ -34,7 +34,7 @@ FAST_CHAT_SYSTEM = """너는 공손하고 간결한 한국어 비서다.
 - 같은 내용을 반복하지 않는다 (앵무새 금지)
 - 질문을 그대로 되묻지 않는다"""
 
-# 인사/잡담 템플릿
+# Templates for greetings and chitchat
 GREETING_TEMPLATE = """안녕하세요! ODOC입니다. 무엇을 도와드릴까요?
 
 다음 중 하나를 시도해보세요:
@@ -48,7 +48,7 @@ CHITCHAT_TEMPLATE = """네, 계속 도와드릴게요!
 - 레포 개요: 'vercel/next.js가 뭐야?'
 - 진단: 'tensorflow 분석해줘'"""
 
-# 도움말 템플릿
+# Template for help messages
 HELP_TEMPLATE = """제가 할 수 있는 일입니다:
 
 **레포 개요**
@@ -65,7 +65,7 @@ HELP_TEMPLATE = """제가 할 수 있는 일입니다:
 
 어떤 걸 해볼까요?"""
 
-# 개요 시스템 프롬프트
+# System prompt for repository overview
 OVERVIEW_SYSTEM = """아래 사실(레포 메타+README+주요 지표)만 근거로 구조화된 개요를 작성하라.
 
 ## 출력 형식
@@ -92,7 +92,7 @@ OVERVIEW_USER_TEMPLATE = """대상: {owner}/{repo}
 
 위 사실만 근거로 구조화된 개요를 작성하세요."""
 
-# Expert Tool 시스템 프롬프트 (출처 강제)
+# System prompt for Expert Tool (enforces sources)
 EXPERT_SYSTEM = """반드시 다음 JSON 스키마로만 답하라:
 {{
   "text": "마크다운 형식 응답",
@@ -117,22 +117,22 @@ EXPERT_USER_TEMPLATE = """목표: {goal}
 
 
 def get_fast_chat_params() -> dict:
-    """Fast Chat LLM 파라미터."""
+    """Returns LLM parameters for Fast Chat."""
     return LLM_PARAMS["fast_chat"].copy()
 
 
 def get_expert_params() -> dict:
-    """Expert Tool LLM 파라미터."""
+    """Returns LLM parameters for the Expert Tool."""
     return LLM_PARAMS["expert_tool"].copy()
 
 
 def build_overview_prompt(owner: str, repo: str, facts: str, readme: str) -> tuple[str, str]:
-    """개요 프롬프트 빌드. (system, user) 반환."""
+    """Builds the prompt for repository overview. Returns (system, user)."""
     user = OVERVIEW_USER_TEMPLATE.format(
         owner=owner,
         repo=repo,
-        repo_facts=facts or "(정보 없음)",
-        readme_head=readme[:500] if readme else "(README 없음)",
+        repo_facts=facts or "(No info)",
+        readme_head=readme[:500] if readme else "(No README)",
     )
     return OVERVIEW_SYSTEM, user
 
@@ -144,7 +144,7 @@ def build_expert_prompt(
     user_level: str,
     artifacts: str,
 ) -> tuple[str, str]:
-    """Expert Tool 프롬프트 빌드. (system, user) 반환."""
+    """Builds the prompt for the Expert Tool. Returns (system, user)."""
     user = EXPERT_USER_TEMPLATE.format(
         goal=goal,
         owner=owner,

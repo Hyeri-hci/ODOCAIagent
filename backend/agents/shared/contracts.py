@@ -1,8 +1,8 @@
 """
-Agentic Orchestrator 계약 정의.
+Contract definitions for the Agentic Orchestrator.
 
-Phase 1: AnswerContract - LLM 응답에 출처 강제
-Phase 2: PlanStep, SupervisorOutput - 계획 수립 및 추론 추적
+Phase 1: AnswerContract - Enforces sources for LLM responses.
+Phase 2: PlanStep, SupervisorOutput - For planning and reasoning traceability.
 """
 from __future__ import annotations
 
@@ -11,74 +11,74 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
-# Answer Contract (LLM 응답 출처 강제)
+# Answer Contract (Enforces sources for LLM responses)
 
 class AnswerContract(BaseModel):
-    """LLM 응답 계약: 모든 답변은 출처를 명시해야 함."""
-    text: str = Field(..., min_length=1, description="응답 텍스트")
+    """LLM Response Contract: All answers must specify their sources."""
+    text: str = Field(..., min_length=1, description="Response text for the user.")
     sources: List[str] = Field(
         default_factory=list, 
-        description="참조한 artifact ID 목록"
+        description="List of referenced artifact IDs."
     )
     source_kinds: List[str] = Field(
         default_factory=list,
-        description="참조한 artifact 종류 (diagnosis_raw, python_metrics 등)"
+        description="List of referenced artifact kinds (e.g., diagnosis_raw, python_metrics)."
     )
     
     @field_validator("sources", "source_kinds")
     @classmethod
     def validate_non_empty_lists(cls, v: List[str], info) -> List[str]:
-        # 빈 리스트 허용하되, sources와 source_kinds 길이는 동일해야 함
+        # Allows empty lists, but lengths of sources and source_kinds must match.
         return v
     
     def validate_sources_match(self) -> bool:
-        """sources와 source_kinds 길이가 일치하는지 검증."""
+        """Validates that the lengths of sources and source_kinds match."""
         return len(self.sources) == len(self.source_kinds)
 
 
 # Plan Step & Supervisor Output
 
 class AgentType(str, Enum):
-    """사용 가능한 Agent 타입."""
+    """Available Agent types."""
     DIAGNOSIS = "diagnosis"
     SECURITY = "security"
     RECOMMENDATION = "recommendation"
     COMPARE = "compare"
     ONEPAGER = "onepager"
-    SMALLTALK = "smalltalk"  # 인사/잡담 (경량)
-    HELP = "help"            # 도움말 (경량)
-    OVERVIEW = "overview"    # 레포 개요 (경량)
+    SMALLTALK = "smalltalk"  # Lightweight agent for greetings/chitchat
+    HELP = "help"            # Lightweight agent for help messages
+    OVERVIEW = "overview"    # Lightweight agent for repo overviews
 
 
 class ErrorAction(str, Enum):
-    """에러 발생 시 정책."""
-    RETRY = "retry"           # 재시도 (백오프/타임아웃 조정)
-    FALLBACK = "fallback"     # 대체 파라미터/경로로 재실행
-    ASK_USER = "ask_user"     # 사용자에게 확인 (disambiguation)
-    ABORT = "abort"           # 중단
+    """Policy for handling errors."""
+    RETRY = "retry"           # Retry with backoff/timeout adjustment
+    FALLBACK = "fallback"     # Rerun with fallback parameters/path
+    ASK_USER = "ask_user"     # Confirm with the user (for disambiguation)
+    ABORT = "abort"           # Abort execution
 
 
 class PlanStep(BaseModel):
-    """실행 계획의 단일 스텝."""
-    id: str = Field(..., description="스텝 고유 ID (예: fetch_diag, calc_metrics)")
-    agent: AgentType = Field(..., description="실행할 Agent 타입")
-    params: Dict[str, Any] = Field(default_factory=dict, description="Agent 파라미터")
-    needs: List[str] = Field(default_factory=list, description="선행 스텝 ID 목록")
+    """A single step in an execution plan."""
+    id: str = Field(..., description="Unique ID for the step (e.g., fetch_diag, calc_metrics).")
+    agent: AgentType = Field(..., description="The type of agent to execute.")
+    params: Dict[str, Any] = Field(default_factory=dict, description="Parameters for the agent.")
+    needs: List[str] = Field(default_factory=list, description="List of preceding step IDs.")
     on_error: ErrorAction = Field(
         default=ErrorAction.FALLBACK, 
-        description="에러 발생 시 정책"
+        description="Policy to apply on error."
     )
 
 
 class SupervisorPlanOutput(BaseModel):
     """
-    Supervisor의 계획 수립 결과.
+    The output of the supervisor's planning phase.
     
-    reasoning_trace는 내부 로그용으로만 사용 (사용자 응답에 포함 금지).
+    `reasoning_trace` is for internal logging only and should not be included in user responses.
     """
     reasoning_trace: str = Field(
         default="",
-        description="내부 추론 로그 (왜 이 계획/노드를 선택했는지)"
+        description="Internal reasoning log (why this plan/node was chosen)."
     )
     intent: Literal[
         "explain", 
@@ -86,59 +86,59 @@ class SupervisorPlanOutput(BaseModel):
         "compare", 
         "onepager", 
         "disambiguation"
-    ] = Field(..., description="최종 분류된 Intent")
+    ] = Field(..., description="The final classified intent.")
     plan: List[PlanStep] = Field(
         default_factory=list, 
-        description="실행할 스텝 목록"
+        description="The list of steps to execute."
     )
     artifacts_required: List[str] = Field(
         default_factory=list,
-        description="참조해야 할 artifact kind/id 힌트"
+        description="Hints for required artifact kinds/IDs."
     )
     confidence: float = Field(
         default=1.0, 
         ge=0.0, 
         le=1.0, 
-        description="Intent 분류 신뢰도"
+        description="Confidence score for the intent classification."
     )
 
 
 class AgenticSupervisorOutput(BaseModel):
-    """Agentic Supervisor 최종 출력."""
-    answer: AnswerContract = Field(..., description="사용자에게 보여줄 응답")
-    intent: str = Field(..., description="분류된 Intent")
+    """The final output of the Agentic Supervisor."""
+    answer: AnswerContract = Field(..., description="The response to show the user.")
+    intent: str = Field(..., description="The classified intent.")
     plan_executed: List[str] = Field(
         default_factory=list,
-        description="실행된 PlanStep ID 목록"
+        description="List of executed PlanStep IDs."
     )
     artifacts_used: List[str] = Field(
         default_factory=list,
-        description="참조한 Artifact ID 목록"
+        description="List of referenced Artifact IDs."
     )
-    session_id: str = Field(default="", description="세션 ID")
-    turn_id: str = Field(default="", description="턴 ID")
-    execution_time_ms: float = Field(default=0.0, description="총 실행 시간(ms)")
+    session_id: str = Field(default="", description="Session ID.")
+    turn_id: str = Field(default="", description="Turn ID.")
+    execution_time_ms: float = Field(default=0.0, description="Total execution time in ms.")
     status: Literal["success", "partial", "error", "disambiguation"] = Field(
         default="success",
-        description="실행 상태"
+        description="The execution status."
     )
-    error_message: Optional[str] = Field(default=None, description="에러 메시지")
+    error_message: Optional[str] = Field(default=None, description="Error message, if any.")
 
 
 # Error Policy & Inference Hints
 
 class ErrorKind(str, Enum):
-    """에러 종류."""
-    PERMISSION = "permission"       # 권한 오류 (private repo 등)
-    NOT_FOUND = "not_found"         # 저장소/리소스 없음
-    NO_DATA = "no_data"             # 데이터 부족 (커밋 0개 등)
-    TIMEOUT = "timeout"             # 네트워크 타임아웃
-    RATE_LIMIT = "rate_limit"       # API 호출 제한
-    INVALID_INPUT = "invalid_input" # 잘못된 입력
-    UNKNOWN = "unknown"             # 알 수 없는 오류
+    """Enumeration of error types."""
+    PERMISSION = "permission"       # Permission error (e.g., private repo)
+    NOT_FOUND = "not_found"         # Repository or resource not found
+    NO_DATA = "no_data"             # Insufficient data (e.g., 0 commits)
+    TIMEOUT = "timeout"             # Network timeout
+    RATE_LIMIT = "rate_limit"       # API rate limit exceeded
+    INVALID_INPUT = "invalid_input" # Invalid user input
+    UNKNOWN = "unknown"             # Unknown error
 
 
-# 에러 종류별 기본 정책
+# Default policy for each error kind
 ERROR_POLICY: Dict[ErrorKind, ErrorAction] = {
     ErrorKind.PERMISSION: ErrorAction.ASK_USER,
     ErrorKind.NOT_FOUND: ErrorAction.ASK_USER,
@@ -151,31 +151,31 @@ ERROR_POLICY: Dict[ErrorKind, ErrorAction] = {
 
 
 class InferenceHints(BaseModel):
-    """누락 옵션 추론 결과."""
+    """Output of the missing option inference step."""
     repo_guess: Optional[str] = Field(
         default=None, 
-        description="추론된 저장소 (owner/repo 형식)"
+        description="Inferred repository (owner/repo format)."
     )
     owner: Optional[str] = None
     name: Optional[str] = None
-    branch: str = Field(default="main", description="기본 브랜치")
-    window_days: int = Field(default=90, description="활동성 분석 기간")
+    branch: str = Field(default="main", description="Default branch.")
+    window_days: int = Field(default=90, description="Activity analysis window in days.")
     confidence: float = Field(
         default=0.0, 
         ge=0.0, 
         le=1.0, 
-        description="추론 신뢰도"
+        description="Inference confidence score."
     )
     inferred_fields: List[str] = Field(
         default_factory=list,
-        description="추론된 필드 목록"
+        description="List of fields that were inferred."
     )
 
 
-# Artifact 관련 타입
+# Artifact-related types
 
 class ArtifactKind(str, Enum):
-    """Artifact 종류."""
+    """Enumeration of artifact kinds."""
     DIAGNOSIS_RAW = "diagnosis_raw"
     PYTHON_METRICS = "python_metrics"
     README_ANALYSIS = "readme_analysis"
@@ -188,17 +188,17 @@ class ArtifactKind(str, Enum):
 
 
 class ArtifactRef(BaseModel):
-    """Artifact 참조."""
-    id: str = Field(..., description="Artifact 고유 ID (sha256 기반)")
-    kind: ArtifactKind = Field(..., description="Artifact 종류")
-    session_id: str = Field(..., description="세션 ID")
-    turn_id: Optional[str] = Field(default=None, description="턴 ID")
+    """A reference to an artifact."""
+    id: str = Field(..., description="Unique ID of the artifact (sha256 based).")
+    kind: ArtifactKind = Field(..., description="The kind of artifact.")
+    session_id: str = Field(..., description="Session ID.")
+    turn_id: Optional[str] = Field(default=None, description="Turn ID.")
 
 
 # Agent Error
 
 class AgentError(Exception):
-    """Agent 실행 중 발생한 에러."""
+    """Custom exception for errors during Agent execution."""
     
     def __init__(
         self, 
@@ -211,5 +211,5 @@ class AgentError(Exception):
         self._suggested_fallback = suggested_fallback or {}
     
     def suggested_fallback(self) -> Dict[str, Any]:
-        """대체 파라미터 제안."""
+        """Provides suggested fallback parameters."""
         return self._suggested_fallback

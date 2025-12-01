@@ -1,8 +1,8 @@
 """
-Event/Artifact 시스템 - Agentic Orchestrator 관측성 인프라.
+Event/Artifact System - Observability infrastructure for the Agentic Orchestrator.
 
-모든 노드 시작/종료, 라우팅 결정, 의도 감지, 최종 응답을 이벤트로 기록.
-OpenTelemetry 스팬과 호환되는 구조로 설계.
+Logs all node starts/ends, routing decisions, intent detections, and final responses as events.
+Designed to be compatible with OpenTelemetry span structures.
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional
 logger = logging.getLogger(__name__)
 
 
-# Context Variables (세션/스팬 추적용)
+# Context Variables for session/span tracking
 
 _current_session_id: ContextVar[Optional[str]] = ContextVar("session_id", default=None)
 _current_turn_id: ContextVar[Optional[str]] = ContextVar("turn_id", default=None)
@@ -60,29 +60,29 @@ def generate_span_id() -> str:
 # Event Types
 
 class EventType(str, Enum):
-    """이벤트 종류."""
-    # Supervisor 레벨
+    """Defines the types of events that can be emitted."""
+    # Supervisor Level
     SUPERVISOR_INTENT_DETECTED = "supervisor.intent_detected"
     SUPERVISOR_PLAN_BUILT = "supervisor.plan_built"
     SUPERVISOR_ROUTE_SELECTED = "supervisor.route_selected"
     
-    # Node 레벨
+    # Node Level
     NODE_STARTED = "node.started"
     NODE_FINISHED = "node.finished"
     
-    # Artifact 레벨
+    # Artifact Level
     ARTIFACT_CREATED = "artifact.created"
     ARTIFACT_REFERENCED = "artifact.referenced"
     
-    # LLM 레벨
+    # LLM Level
     LLM_CALL_STARTED = "llm.call_started"
     LLM_CALL_FINISHED = "llm.call_finished"
     
-    # Answer 레벨
+    # Answer Level
     ANSWER_GENERATED = "answer.generated"
     ANSWER_VALIDATED = "answer.validated"
     
-    # Error 레벨
+    # Error Level
     ERROR_OCCURRED = "error.occurred"
     ERROR_RECOVERED = "error.recovered"
 
@@ -91,26 +91,26 @@ class EventType(str, Enum):
 
 @dataclass
 class Event:
-    """단일 이벤트."""
+    """Represents a single event in the system."""
     type: EventType
     timestamp: float = field(default_factory=time.time)
     session_id: Optional[str] = None
     turn_id: Optional[str] = None
     span_id: Optional[str] = None
     parent_span_id: Optional[str] = None
-    actor: str = "supervisor"  # supervisor | node:<name> | llm
+    actor: str = "supervisor"  # e.g., supervisor | node:<name> | llm
     
-    # 이벤트 데이터
+    # Event data
     inputs: Dict[str, Any] = field(default_factory=dict)
     outputs: Dict[str, Any] = field(default_factory=dict)
     artifacts_in: List[str] = field(default_factory=list)
     artifacts_out: List[str] = field(default_factory=list)
     
-    # 성능 메트릭
+    # Performance metrics
     duration_ms: Optional[float] = None
     token_count: Optional[int] = None
     
-    # 추가 메타데이터
+    # Additional metadata
     metadata: Dict[str, Any] = field(default_factory=dict)
     
     def to_dict(self) -> Dict[str, Any]:
@@ -136,7 +136,7 @@ class Event:
 # Event Store (In-Memory)
 
 class EventStore:
-    """이벤트 저장소."""
+    """An in-memory store for events."""
     
     def __init__(self, max_events: int = 10000):
         self._events: List[Event] = []
@@ -144,13 +144,13 @@ class EventStore:
         self._listeners: List[Callable[[Event], None]] = []
     
     def append(self, event: Event) -> None:
-        # 최대 개수 초과 시 오래된 이벤트 제거
+        # Prune old events if max size is exceeded
         if len(self._events) >= self._max_events:
             self._events = self._events[-(self._max_events // 2):]
         
         self._events.append(event)
         
-        # 리스너들에게 알림
+        # Notify listeners
         for listener in self._listeners:
             try:
                 listener(event)
@@ -167,7 +167,7 @@ class EventStore:
         ]
     
     def get_span_tree(self, session_id: str, turn_id: str) -> Dict[str, List[Event]]:
-        """스팬 트리 구조로 이벤트 반환 (Jaeger 호환)."""
+        """Returns events in a span tree structure (Jaeger compatible)."""
         events = self.get_by_turn(session_id, turn_id)
         tree: Dict[str, List[Event]] = {}
         for e in events:
@@ -184,7 +184,7 @@ class EventStore:
         self._events.clear()
 
 
-# 글로벌 이벤트 스토어
+# Global event store instance
 _event_store = EventStore()
 
 
@@ -192,13 +192,13 @@ def get_event_store() -> EventStore:
     return _event_store
 
 
-# Artifact Store (내용주소화 저장)
+# Artifact Store (Content-addressable storage)
 
 @dataclass
 class Artifact:
-    """저장된 Artifact."""
-    id: str  # sha256 기반
-    kind: str  # diagnosis_raw, python_metrics, summary, etc.
+    """Represents a stored artifact."""
+    id: str  # sha256 based
+    kind: str  # e.g., diagnosis_raw, python_metrics, summary
     session_id: str
     turn_id: Optional[str]
     content: Any
@@ -207,14 +207,14 @@ class Artifact:
 
 
 class ArtifactStore:
-    """Artifact 저장소 (내용주소화)."""
+    """Content-addressable storage for artifacts."""
     
     def __init__(self):
         self._artifacts: Dict[str, Artifact] = {}
         self._by_session: Dict[str, List[str]] = {}  # session_id -> artifact_ids
     
     def _compute_hash(self, content: Any) -> str:
-        """내용 기반 해시 계산."""
+        """Computes a hash based on the content."""
         if isinstance(content, (dict, list)):
             serialized = json.dumps(content, sort_keys=True, default=str)
         else:
@@ -229,7 +229,7 @@ class ArtifactStore:
         turn_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> str:
-        """Artifact 저장, ID 반환."""
+        """Saves an artifact and returns its ID."""
         content_hash = self._compute_hash(content)
         artifact_id = f"{kind}_{content_hash}"
         
@@ -265,7 +265,7 @@ class ArtifactStore:
         return [a for a in self.get_by_session(session_id) if a.kind == kind]
 
 
-# 글로벌 Artifact 스토어
+# Global artifact store instance
 _artifact_store = ArtifactStore()
 
 
@@ -287,7 +287,7 @@ def emit_event(
     token_count: Optional[int] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> Event:
-    """이벤트 생성 및 저장."""
+    """Creates and stores an event."""
     event = Event(
         type=event_type,
         session_id=get_session_id(),
@@ -306,7 +306,7 @@ def emit_event(
     
     _event_store.append(event)
     
-    # 디버그 로깅 (환경변수로 제어)
+    # Debug logging (controlled by environment variable)
     if os.getenv("ODOC_EVENT_DEBUG", "").lower() in ("1", "true"):
         logger.debug(f"[EVENT] {event_type.value}: {json.dumps(event.to_dict(), default=str)}")
     
@@ -318,7 +318,7 @@ def persist_artifact(
     content: Any, 
     metadata: Optional[Dict[str, Any]] = None
 ) -> str:
-    """Artifact 저장 + 이벤트 발행."""
+    """Persists an artifact and emits a corresponding event."""
     session_id = get_session_id()
     if not session_id:
         session_id = generate_session_id()
@@ -341,7 +341,7 @@ def persist_artifact(
 
 
 def ensure_artifacts_exist(artifact_ids: List[str]) -> bool:
-    """모든 artifact가 존재하는지 확인."""
+    """Checks if all given artifact IDs exist in the store."""
     for aid in artifact_ids:
         if not _artifact_store.exists(aid):
             logger.warning(f"Artifact not found: {aid}")
@@ -352,7 +352,7 @@ def ensure_artifacts_exist(artifact_ids: List[str]) -> bool:
 # Span Context Manager
 
 class SpanContext:
-    """스팬 컨텍스트 매니저 (with문 사용)."""
+    """A context manager for a trace span (used with `with`)."""
     
     def __init__(self, name: str, actor: str = "supervisor"):
         self.name = name
@@ -404,14 +404,14 @@ class SpanContext:
 
 
 def span(name: str, actor: str = "supervisor") -> SpanContext:
-    """스팬 컨텍스트 매니저 생성."""
+    """Creates a new span context manager."""
     return SpanContext(name, actor)
 
 
 # Turn Context Manager
 
 class TurnContext:
-    """턴 컨텍스트 매니저."""
+    """A context manager for a conversation turn."""
     
     def __init__(self, session_id: Optional[str] = None):
         self.session_id = session_id or generate_session_id()
@@ -435,5 +435,5 @@ class TurnContext:
 
 
 def turn_context(session_id: Optional[str] = None) -> TurnContext:
-    """턴 컨텍스트 매니저 생성."""
+    """Creates a new turn context manager."""
     return TurnContext(session_id)
