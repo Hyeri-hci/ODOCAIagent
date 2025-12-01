@@ -1,14 +1,46 @@
 """Diagnosis Agent 호출 노드."""
 from __future__ import annotations
 
+import hashlib
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from backend.agents.diagnosis.service import run_diagnosis
 
 from ..models import SupervisorState, DEFAULT_INTENT
 
 logger = logging.getLogger(__name__)
+
+# 진단 결과 캐시 (repo+intent 기반 중복 실행 방지)
+_diagnosis_cache: dict[str, dict] = {}
+_CACHE_MAX_SIZE = 50
+
+
+def _make_cache_key(repo: dict, intent: str, sub_intent: str) -> str:
+    """repo+intent+sub_intent로 캐시 키 생성."""
+    key_str = f"{repo.get('owner')}/{repo.get('name')}:{intent}:{sub_intent}"
+    return hashlib.md5(key_str.encode()).hexdigest()
+
+
+def _get_cached_result(key: str) -> Optional[dict]:
+    """캐시된 진단 결과 조회."""
+    return _diagnosis_cache.get(key)
+
+
+def _set_cached_result(key: str, result: dict) -> None:
+    """진단 결과 캐시 저장 (최대 크기 제한)."""
+    if len(_diagnosis_cache) >= _CACHE_MAX_SIZE:
+        # 가장 오래된 항목 제거 (단순 FIFO)
+        oldest_key = next(iter(_diagnosis_cache))
+        del _diagnosis_cache[oldest_key]
+    _diagnosis_cache[key] = result
+
+
+def clear_diagnosis_cache() -> int:
+    """진단 캐시 초기화. 삭제된 항목 수 반환."""
+    count = len(_diagnosis_cache)
+    _diagnosis_cache.clear()
+    return count
 
 
 def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
@@ -62,6 +94,20 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
     
     # 진행 상황 콜백
     progress_cb = state.get("_progress_callback")
+    
+    # 중복 실행 방지: 캐시 체크
+    cache_key = _make_cache_key(repo, intent, sub_intent)
+    cached_result = _get_cached_result(cache_key)
+    
+    if cached_result:
+        logger.info(
+            "[run_diagnosis_node] 캐시 히트: %s/%s (%s.%s)",
+            repo.get("owner"), repo.get("name"), intent, sub_intent
+        )
+        new_state: SupervisorState = dict(state)  # type: ignore[assignment]
+        new_state["diagnosis_result"] = cached_result
+        new_state["_from_cache"] = True
+        return new_state
 
     # 첫 번째 저장소 진단
     if progress_cb:
@@ -82,6 +128,9 @@ def run_diagnosis_node(state: SupervisorState) -> SupervisorState:
         progress_cb("GitHub 데이터 수집 중", "커밋, 이슈, PR 활동 분석...")
     
     diagnosis_result = run_diagnosis(diagnosis_input)
+    
+    # 결과 캐시 저장
+    _set_cached_result(cache_key, diagnosis_result)
 
     # health_score는 scores 딕셔너리 안에 있음
     scores = diagnosis_result.get("scores", {}) if isinstance(diagnosis_result, dict) else {}

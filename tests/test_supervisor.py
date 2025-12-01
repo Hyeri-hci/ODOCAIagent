@@ -786,6 +786,142 @@ def test_compare_winner_computation():
     assert result2["overall_winner"] == "무승부"  # 모든 차이가 5점 미만
 
 
+# ============================================================================
+# Heuristic 분류 테스트 (계층 라우팅 1차)
+# ============================================================================
+
+def test_heuristic_greeting():
+    """Heuristic: 인사 패턴 감지"""
+    from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_heuristic
+    
+    test_cases = [
+        ("안녕", "smalltalk", "greeting"),
+        ("하이!", "smalltalk", "greeting"),
+        ("hello", "smalltalk", "greeting"),
+        ("안녕하세요", "smalltalk", "greeting"),
+    ]
+    
+    for query, expected_intent, expected_sub in test_cases:
+        result = _fast_classify_heuristic(query)
+        assert result is not None, f"'{query}' should match greeting"
+        intent, sub_intent, _, confidence = result
+        assert intent == expected_intent, f"'{query}': {intent} != {expected_intent}"
+        assert sub_intent == expected_sub, f"'{query}': {sub_intent} != {expected_sub}"
+        assert confidence >= 0.9
 
 
+def test_heuristic_help():
+    """Heuristic: 도움말 패턴 감지"""
+    from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_heuristic
+    
+    test_cases = [
+        "뭘 할 수 있어?",
+        "도와줘",
+        "help",
+        "무엇을 할 수 있나요",
+        "사용법 알려줘",
+    ]
+    
+    for query in test_cases:
+        result = _fast_classify_heuristic(query)
+        assert result is not None, f"'{query}' should match help"
+        intent, sub_intent, _, _ = result
+        assert intent == "help", f"'{query}': {intent} != help"
+        assert sub_intent == "getting_started"
 
+
+def test_heuristic_overview():
+    """Heuristic: Overview 패턴 감지 (owner/repo가 뭐야?)"""
+    from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_heuristic
+    
+    test_cases = [
+        ("facebook/react가 뭐야", "facebook", "react"),
+        ("langchain-ai/langchain이 뭔가요", "langchain-ai", "langchain"),
+        ("vercel/next.js 알려줘", "vercel", "next.js"),
+    ]
+    
+    for query, expected_owner, expected_name in test_cases:
+        result = _fast_classify_heuristic(query)
+        assert result is not None, f"'{query}' should match overview"
+        intent, sub_intent, repo_info, confidence = result
+        assert intent == "overview", f"'{query}': {intent} != overview"
+        assert sub_intent == "repo"
+        assert repo_info is not None
+        assert repo_info["owner"] == expected_owner
+        assert repo_info["name"] == expected_name
+
+
+def test_heuristic_followup():
+    """Heuristic: Follow-up 패턴 감지 (last_repo 있을 때)"""
+    from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_heuristic
+    
+    ctx = {"last_repo": {"owner": "facebook", "name": "react"}}
+    
+    # refine 패턴
+    result = _fast_classify_heuristic("더 쉬운 거 없어?", ctx)
+    assert result is not None
+    intent, sub_intent, _, _ = result
+    assert intent == "followup"
+    assert sub_intent == "refine"
+    
+    # explain 패턴
+    result = _fast_classify_heuristic("왜 그런거야?", ctx)
+    assert result is not None
+    intent, sub_intent, _, _ = result
+    assert intent == "followup"
+    assert sub_intent == "explain"
+
+
+def test_heuristic_no_match():
+    """Heuristic: LLM 필요한 경우 (None 반환)"""
+    from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_heuristic
+    
+    # 분석 키워드 + repo -> LLM 필요
+    result = _fast_classify_heuristic("facebook/react 분석해줘")
+    assert result is None, "Analysis request should go to LLM"
+    
+    # 복잡한 질문 (도움말 패턴 없음) -> LLM 필요
+    result = _fast_classify_heuristic("fastapi로 REST API 만드는 프로젝트 추천해줘")
+    assert result is None, "Complex query should go to LLM"
+
+
+def test_diagnosis_cache():
+    """중복 실행 방지: 캐시 동작 테스트"""
+    from backend.agents.supervisor.nodes.run_diagnosis import (
+        _make_cache_key,
+        _get_cached_result,
+        _set_cached_result,
+        clear_diagnosis_cache,
+    )
+    
+    # 캐시 초기화
+    clear_diagnosis_cache()
+    
+    # 캐시 키 생성 테스트
+    repo = {"owner": "facebook", "name": "react"}
+    key1 = _make_cache_key(repo, "analyze", "health")
+    key2 = _make_cache_key(repo, "analyze", "onboarding")
+    key3 = _make_cache_key({"owner": "vuejs", "name": "vue"}, "analyze", "health")
+    
+    # 같은 repo+intent+sub_intent -> 같은 키
+    assert key1 == _make_cache_key(repo, "analyze", "health")
+    # 다른 sub_intent -> 다른 키
+    assert key1 != key2
+    # 다른 repo -> 다른 키
+    assert key1 != key3
+    
+    # 캐시 저장/조회 테스트
+    mock_result = {"scores": {"health_score": 85}}
+    _set_cached_result(key1, mock_result)
+    
+    cached = _get_cached_result(key1)
+    assert cached is not None
+    assert cached["scores"]["health_score"] == 85
+    
+    # 없는 키 조회
+    assert _get_cached_result("nonexistent") is None
+    
+    # 캐시 클리어
+    count = clear_diagnosis_cache()
+    assert count == 1
+    assert _get_cached_result(key1) is None

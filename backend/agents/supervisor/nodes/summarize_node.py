@@ -538,7 +538,14 @@ def _run_metric_explain(
         return _postprocess_explain_response(response.content)
     except Exception as e:
         logger.error("[explain] LLM 호출 실패: %s", e)
-        return f"설명 생성 중 오류가 발생했습니다: {e}"
+        # 디그레이드 응답: 기본 정보라도 제공
+        return f"""설명 생성 중 일시적인 오류가 발생했습니다.
+
+기본 정보:
+- 저장소: {repo_id}
+- 질문: {user_query[:100]}
+
+잠시 후 다시 시도해 주세요."""
 
 
 TASK_EXPLAIN_PROMPT = """온보딩 Task 추천 이유를 설명합니다.

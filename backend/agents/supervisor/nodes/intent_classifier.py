@@ -1,4 +1,4 @@
-"""Intent 분류 노드. LLM으로 Intent/SubIntent 추론."""
+"""Intent 분류 노드: Heuristic 1차 -> LLM 2차 계층 라우팅."""
 from __future__ import annotations
 
 import json
@@ -26,7 +26,7 @@ from ..models import (
 from ..intent_config import validate_followup_type, validate_intent, validate_sub_intent
 
 
-# 경량 분류용 키워드 (LLM 호출 전 빠른 경로)
+# Heuristic 패턴 (우선순위순, 1차 분류)
 GREETING_KEYWORDS = {
     "안녕", "하이", "hi", "hello", "hey", "안뇽", "헬로", "반가워", "반갑",
 }
@@ -44,56 +44,84 @@ HELP_PATTERNS = [
     r"사용법",
     r"기능",
 ]
-# 개요 패턴: "facebook/react가 뭐야?", "react 알려줘"
 OVERVIEW_PATTERNS = [
     r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)(가|이|는|은)?\s*(뭐|뭔|무엇|what)",
     r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*알려",
     r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*(소개|개요)",
 ]
-# 분석/진단 관련 키워드 (있으면 Expert Tool 경로)
+
+# 설치/업데이트/설정 관련 -> help (general_qa/concept으로 빠지는 것 방지)
+TOOL_HELP_PATTERNS = [
+    r"(업데이트|설치|버전|설정|오류|에러|안돼|실행|update|install|version|error)",
+    r"(vscode|vs code|visual studio)",
+    r"(어떻게|how to)",
+]
+
+# 분석/진단 키워드 (Expert Tool 경로)
 ANALYSIS_KEYWORDS = {
-    "분석", "진단", "비교", "추천", "건강", "온보딩", "기여",
-    "analyze", "diagnose", "compare", "health", "onboarding",
+    "분석", "진단", "비교", "추천", "건강", "온보딩", "기여", "점수",
+    "analyze", "diagnose", "compare", "health", "onboarding", "score",
 }
 
-# Fast classify 결과 타입: (intent, sub_intent, repo_info | None)
-FastClassifyResult = Tuple[SupervisorIntent, SubIntent, Optional[dict]]
+# 후속 질문 패턴 (followup 감지)
+FOLLOWUP_PATTERNS = [
+    r"(그|저|이|아까)\s*(결과|점수|거|것|저장소)",
+    r"(왜|어떻게|무슨\s*뜻|자세히)",
+    r"(더\s*(쉬운|어려운|다른)|또\s*다른)",
+    r"(출처|근거|어디서)",
+    r"(그러면|그럼|근데)",
+]
+
+FastClassifyResult = Tuple[SupervisorIntent, SubIntent, Optional[dict], float]
 
 
-def _fast_classify_smalltalk(query: str) -> Optional[FastClassifyResult]:
+def _has_repo_entity(query: str) -> bool:
+    """쿼리에 owner/repo 패턴이 있는지 확인."""
+    return bool(re.search(r"[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+", query))
+
+
+def _is_followup_query(query: str) -> bool:
+    """후속 질문 패턴 감지."""
+    query_lower = query.lower()
+    for pattern in FOLLOWUP_PATTERNS:
+        if re.search(pattern, query_lower):
+            return True
+    return False
+
+
+def _fast_classify_heuristic(query: str, ctx: Optional[dict] = None) -> Optional[FastClassifyResult]:
     """
-    경량 분류: Fast Chat 경로 빠른 판별 (LLM 호출 없이).
-    
-    규칙 (우선순위 순):
-    1. 도움 요청 패턴 → help.getting_started
-    2. 분석/진단 키워드 → None (Expert Tool)
-    3. 개요 패턴 (owner/repo가 뭐야?) → overview.repo + repo 추출
-    4. 짧은 인사 (≤8 토큰) → smalltalk.greeting
-    5. 짧은 잡담 (≤8 토큰) → smalltalk.chitchat
+    계층 라우팅 1차: 규칙 기반 분류 (cheap, deterministic).
     
     Returns:
-        (intent, sub_intent, repo_info) 튜플 또는 None (LLM 분류 필요)
+        (intent, sub_intent, repo_info, confidence) 또는 None (LLM 필요)
     """
     query_lower = query.lower().strip()
     tokens = query_lower.split()
     token_count = len(tokens)
     
-    # 1) 도움말 패턴 먼저 체크 (최우선)
+    # 1) 도움말 패턴 (최우선)
     for pattern in HELP_PATTERNS:
         if re.search(pattern, query_lower):
-            logger.info("[fast_classify] help.getting_started: %s", query[:50])
-            return ("help", "getting_started", None)
+            return ("help", "getting_started", None, 1.0)
     
-    # 2) 분석/진단 관련 키워드가 있으면 Expert Tool 경로
-    for kw in ANALYSIS_KEYWORDS:
-        if kw in query_lower:
-            return None
+    # 2) 설치/업데이트/설정 관련 -> help (VSCode 업데이트 등)
+    for pattern in TOOL_HELP_PATTERNS:
+        if re.search(pattern, query_lower):
+            return ("help", "getting_started", None, 0.9)
     
-    # 3) 개요 패턴 체크 (owner/repo가 뭐야?) - repo도 추출
+    # 3) 분석/진단 키워드 + repo 있음 -> analyze
+    has_analysis_kw = any(kw in query_lower for kw in ANALYSIS_KEYWORDS)
+    has_repo = _has_repo_entity(query)
+    
+    if has_analysis_kw and has_repo:
+        return None  # LLM에서 상세 분류
+    
+    # 4) 개요 패턴 (owner/repo가 뭐야?)
     for pattern in OVERVIEW_PATTERNS:
         match = re.search(pattern, query_lower)
         if match:
-            repo_str = match.group(1)  # "owner/repo"
+            repo_str = match.group(1)
             parts = repo_str.split("/")
             if len(parts) == 2:
                 repo_info = {
@@ -101,24 +129,23 @@ def _fast_classify_smalltalk(query: str) -> Optional[FastClassifyResult]:
                     "name": parts[1],
                     "url": f"https://github.com/{parts[0]}/{parts[1]}",
                 }
-                logger.info("[fast_classify] overview.repo: %s -> %s", query[:50], repo_str)
-                return ("overview", "repo", repo_info)
+                return ("overview", "repo", repo_info, 1.0)
     
-    # 4) 짧은 쿼리 (≤ 8 토큰)에서만 인사/잡담 체크
+    # 5) 후속 질문 패턴 + 이전 컨텍스트 있음 -> followup
+    if ctx and ctx.get("last_repo") and _is_followup_query(query):
+        if re.search(r"(더\s*(쉬운|어려운|다른))", query_lower):
+            return ("followup", "refine", None, 0.9)
+        return ("followup", "explain", None, 0.8)
+    
+    # 6) 짧은 인사/잡담 (≤8 토큰)
     if token_count <= 8:
-        # 인사 키워드 체크
         for kw in GREETING_KEYWORDS:
             if kw in query_lower:
-                logger.info("[fast_classify] smalltalk.greeting: %s", query[:50])
-                return ("smalltalk", "greeting", None)
-        
-        # 잡담 키워드 체크
+                return ("smalltalk", "greeting", None, 1.0)
         for kw in CHITCHAT_KEYWORDS:
             if kw in query_lower:
-                logger.info("[fast_classify] smalltalk.chitchat: %s", query[:50])
-                return ("smalltalk", "chitchat", None)
+                return ("smalltalk", "chitchat", None, 1.0)
     
-    # 5) 경량 분류 불가 → LLM 분류 필요
     return None
 
 
@@ -356,19 +383,25 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
 
     new_state: SupervisorState = dict(state)  # type: ignore[assignment]
     
-    # 1) 경량 분류 먼저 시도 (LLM 호출 없이 빠른 경로)
-    fast_result = _fast_classify_smalltalk(user_query)
+    # 1) Heuristic 1차 분류 (LLM 호출 없이 빠른 경로)
+    last_repo = state.get("last_repo")
+    ctx = {"last_repo": last_repo} if last_repo else None
+    fast_result = _fast_classify_heuristic(user_query, ctx)
+    
     if fast_result:
-        intent, sub_intent, repo_info = fast_result
-        new_state["intent"] = intent
-        new_state["sub_intent"] = sub_intent
-        new_state["task_type"] = f"{intent}_{sub_intent}"
-        new_state["is_followup"] = False
-        new_state["followup_type"] = None
-        new_state["repo"] = repo_info  # overview의 경우 repo 정보 포함
-        new_state["_fast_classified"] = True  # 경량 분류 플래그
-        logger.info("[classify_intent_node] Fast classified: %s.%s, repo=%s", intent, sub_intent, repo_info)
-        return new_state
+        intent, sub_intent, repo_info, confidence = fast_result
+        if confidence >= 0.7:
+            # 높은 신뢰도면 LLM 호출 없이 바로 반환
+            new_state["intent"] = intent  # type: ignore[typeddict-item]
+            new_state["sub_intent"] = sub_intent  # type: ignore[typeddict-item]
+            new_state["is_followup"] = intent == "followup"
+            new_state["followup_type"] = None
+            new_state["repo"] = repo_info  # type: ignore[typeddict-item]
+            logger.info(
+                "[classify_intent_node] Heuristic classified (confidence=%.2f): %s.%s, repo=%s",
+                confidence, intent, sub_intent, repo_info
+            )
+            return new_state
 
     # 2) 일반 분류 (LLM 호출)
     # 먼저 쿼리에서 직접 repo 추출 (LLM 파싱 오류 대비 fallback)
@@ -402,7 +435,7 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     new_state["sub_intent"] = sub_intent
     
     # 레거시 호환: task_type도 설정 (기존 코드 호환)
-    new_state["task_type"] = _convert_to_legacy_task_type(intent, sub_intent)
+    new_state["task_type"] = _convert_to_legacy_task_type(intent, sub_intent)  # type: ignore[typeddict-item]
     
     # Follow-up 판단 (intent가 followup이면 True)
     is_followup = (intent == "followup")
@@ -410,7 +443,7 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     
     # followup_type 설정 (refine → refine_easier/harder 등으로 매핑)
     followup_type = _infer_followup_type(sub_intent, user_query) if is_followup else None
-    new_state["followup_type"] = followup_type
+    new_state["followup_type"] = followup_type  # type: ignore[typeddict-item]
 
     # LLM이 파싱한 repo 정보
     repo_info = _parse_repo_url(parsed.get("repo_url"))
@@ -440,27 +473,18 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
             new_state["is_followup"] = True
         
         repo_info = last_repo
+        logger.info(
+            "[classify_intent_node] Follow-up: last_repo 사용 (%s/%s)",
+            last_repo.get("owner"),
+            last_repo.get("name"),
+        )
     
     # followup인데 repo_info도 없고 last_repo도 없는 경우 → 에러 메시지 설정
-    # (graph.py에서 처리하지만, 여기서 더 명확한 안내 가능)
-    if is_followup and not repo_info and not last_repo:
+    if is_followup and not repo_info:
         logger.warning(
             "[classify_intent_node] followup 요청이지만 분석할 저장소가 없습니다"
         )
         # 에러 메시지는 graph.py의 route_after_mapping에서 설정되므로 여기선 로깅만
-        logger.info(
-            "[classify_intent_node] Follow-up: last_repo 사용 (%s/%s)",
-            last_repo.get("owner"),
-            last_repo.get("name"),
-        )
-    elif is_followup and not repo_info and last_repo:
-        # 기존 로직 유지
-        repo_info = last_repo
-        logger.info(
-            "[classify_intent_node] Follow-up: last_repo 사용 (%s/%s)",
-            last_repo.get("owner"),
-            last_repo.get("name"),
-        )
 
     if repo_info:
         new_state["repo"] = repo_info
