@@ -241,8 +241,12 @@ def infer_missing(
     return hints
 
 
-def needs_disambiguation(hints: InferenceHints, threshold: float = 0.6) -> bool:
-    """disambiguation이 필요한지 판단."""
+def needs_disambiguation(hints: InferenceHints, threshold: float = 0.4) -> bool:
+    """
+    disambiguation이 필요한지 판단.
+    
+    임계값 0.4로 하향하여 "요약으로 도망" 비율 감소.
+    """
     # 저장소 추론 실패
     if not hints.repo_guess and not hints.owner:
         return True
