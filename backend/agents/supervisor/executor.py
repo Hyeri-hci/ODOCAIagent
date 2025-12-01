@@ -318,9 +318,140 @@ def execute_plan(
         }
 
 
+def collect_artifacts_for_recommendation(
+    state: Dict[str, Any],
+    results: Dict[str, Dict],
+    required_kinds: List[str],
+) -> List[Dict[str, str]]:
+    """
+    Recommendation용 Artifact 수집.
+    
+    state/results에서 required_kinds에 해당하는 artifact를 찾아서 반환.
+    """
+    from backend.common.events import get_artifact_store
+    
+    store = get_artifact_store()
+    session_id = state.get("_session_id", "")
+    collected = []
+    
+    # 1. ArtifactStore에서 kind로 조회
+    if session_id:
+        for kind in required_kinds:
+            artifacts = store.get_by_kind(session_id, kind)
+            for artifact in artifacts:
+                collected.append({
+                    "id": artifact.id,
+                    "kind": artifact.kind,
+                    "content": artifact.content,
+                })
+    
+    # 2. results에서 step 결과로 저장된 artifact 조회
+    for step_id, step_result in results.items():
+        artifact_ids = step_result.get("artifacts", [])
+        for aid in artifact_ids:
+            artifact = store.get(aid)
+            if artifact and artifact.kind in required_kinds:
+                collected.append({
+                    "id": artifact.id,
+                    "kind": artifact.kind,
+                    "content": artifact.content,
+                })
+    
+    # 3. diagnosis_result에서 직접 추출 (fallback)
+    diagnosis_result = state.get("diagnosis_result")
+    if diagnosis_result and "diagnosis_raw" in required_kinds:
+        collected.append({
+            "id": "diagnosis_raw_inline",
+            "kind": "diagnosis_raw",
+            "content": diagnosis_result,
+        })
+    
+    return collected
+
+
+def build_recommendation_prompt(
+    style: str,
+    state: Dict[str, Any],
+    artifacts: List[Dict],
+) -> str:
+    """Recommendation 프롬프트 빌드."""
+    repo = state.get("repo") or {}
+    repo_id = f"{repo.get('owner', '')}/{repo.get('name', '')}"
+    user_context = state.get("user_context") or {}
+    user_level = user_context.get("level", "beginner")
+    user_query = state.get("user_query", "")
+    
+    # Artifact 내용 정리
+    artifact_context = []
+    for art in artifacts:
+        content = art.get("content", {})
+        if isinstance(content, dict):
+            # 핵심 정보만 추출
+            if art["kind"] == "diagnosis_raw":
+                scores = content.get("scores", {})
+                labels = content.get("labels", {})
+                artifact_context.append(f"[진단 점수]\n{scores}\n[라벨]\n{labels}")
+            elif art["kind"] == "onboarding_tasks":
+                tasks = content.get("beginner", [])[:3]
+                artifact_context.append(f"[온보딩 Task]\n{tasks}")
+            else:
+                artifact_context.append(f"[{art['kind']}]\n{content}")
+    
+    context_str = "\n\n".join(artifact_context) if artifact_context else "(수집된 데이터 없음)"
+    
+    level_kr = {"beginner": "초보자", "intermediate": "중급자", "advanced": "고급자"}.get(user_level, "초보자")
+    
+    style_prompts = {
+        "explain": f"""당신은 수석 오픈소스 컨설턴트입니다.
+저장소 {repo_id}에 대해 {level_kr} 수준으로 분석 결과를 해설해주세요.
+
+[사용자 질문]
+{user_query}
+
+[수집된 데이터]
+{context_str}
+
+[지시사항]
+1. 마크다운 리포트 형식으로 작성
+2. 수치를 근거로 들 때 반드시 출처 명시
+3. 어조는 전문적이지만 친절하게
+4. 이모지 사용 금지""",
+        
+        "refine": f"""사용자가 요청한 조건에 맞게 Task를 재추천합니다.
+저장소: {repo_id}
+사용자 레벨: {level_kr}
+
+[사용자 요청]
+{user_query}
+
+[수집된 Task 데이터]
+{context_str}
+
+[지시사항]
+1. 조건에 맞는 Task 3-5개 선별
+2. 각 Task에 선택 이유 한 줄 추가
+3. 이모지 사용 금지""",
+        
+        "onepager": f"""저장소 {repo_id}에 대한 1페이지 요약을 생성합니다.
+
+[수집된 데이터]
+{context_str}
+
+[지시사항]
+1. 프로젝트 소개 (2-3문장)
+2. 핵심 지표 (표 형식)
+3. 기여 시작점 (bullet 3개)
+4. 이모지 사용 금지""",
+    }
+    
+    return style_prompts.get(style, style_prompts["explain"])
+
+
 def create_default_agent_runners() -> Dict[AgentType, Callable]:
     """기본 Agent runner 생성."""
     from backend.agents.diagnosis.service import run_diagnosis
+    from backend.agents.shared.contracts import ArtifactRef, ArtifactKind
+    from backend.llm.contract_wrapper import generate_answer_with_contract
     
     def diagnosis_runner(params: Dict, state: Dict, dependencies: Dict) -> Dict:
         """Diagnosis Agent runner."""
@@ -331,17 +462,98 @@ def create_default_agent_runners() -> Dict[AgentType, Callable]:
             "task_type": params.get("task_type", "full"),
             "user_context": state.get("user_context", {}),
         }
-        return run_diagnosis(payload)
+        result = run_diagnosis(payload)
+        
+        # Artifact 저장
+        persist_artifact(kind="diagnosis_raw", content=result)
+        
+        return result
     
     def recommendation_runner(params: Dict, state: Dict, dependencies: Dict) -> Dict:
-        """Recommendation Agent runner (placeholder)."""
-        # TODO: 실제 구현
-        return {"style": params.get("style", "explain")}
+        """Recommendation Agent runner - AnswerContract 기반 실구현."""
+        style = params.get("style", "explain")
+        
+        # Plan에서 지정한 artifacts_required 또는 기본값
+        required_kinds = params.get("artifacts_required", [
+            "diagnosis_raw", "onboarding_tasks", "activity_metrics"
+        ])
+        
+        # dependencies에서 이전 step 결과 수집
+        results = {}
+        for dep_id, dep_result in dependencies.items():
+            if isinstance(dep_result, dict) and "result" in dep_result:
+                results[dep_id] = dep_result
+        
+        # Artifact 수집
+        artifacts = collect_artifacts_for_recommendation(state, results, required_kinds)
+        
+        if not artifacts:
+            logger.warning("No artifacts collected for recommendation")
+            return {
+                "style": style,
+                "answer_contract": None,
+                "error": "No artifacts available"
+            }
+        
+        # ArtifactRef 리스트 생성
+        artifact_refs = [
+            ArtifactRef(
+                id=art["id"],
+                kind=ArtifactKind(art["kind"]) if art["kind"] in [e.value for e in ArtifactKind] else ArtifactKind.SUMMARY,
+                session_id=state.get("_session_id", "unknown"),
+            )
+            for art in artifacts
+        ]
+        
+        # 프롬프트 생성
+        prompt = build_recommendation_prompt(style, state, artifacts)
+        
+        try:
+            # AnswerContract 강제 LLM 호출
+            answer = generate_answer_with_contract(
+                prompt=prompt,
+                context_artifacts=artifact_refs,
+                require_sources=True,
+                max_tokens=4096,
+                temperature=0.3,
+            )
+            
+            return {
+                "style": style,
+                "answer_contract": answer.model_dump(),
+                "sources": answer.sources,
+            }
+        except Exception as e:
+            logger.error(f"Recommendation runner failed: {e}")
+            return {
+                "style": style,
+                "answer_contract": None,
+                "error": str(e)
+            }
     
     def compare_runner(params: Dict, state: Dict, dependencies: Dict) -> Dict:
-        """Compare Agent runner (placeholder)."""
-        # TODO: 실제 구현
-        return {"comparison": "placeholder"}
+        """Compare Agent runner."""
+        repos = params.get("repos", [])
+        if len(repos) < 2:
+            return {"error": "Need at least 2 repos to compare"}
+        
+        # 각 repo에 대해 diagnosis 실행
+        results = []
+        for repo_info in repos[:2]:
+            payload = {
+                "owner": repo_info.get("owner", ""),
+                "repo": repo_info.get("name", ""),
+                "task_type": "full",
+            }
+            result = run_diagnosis(payload)
+            results.append(result)
+        
+        return {
+            "repo_a": repos[0],
+            "repo_b": repos[1],
+            "diagnosis_a": results[0] if len(results) > 0 else None,
+            "diagnosis_b": results[1] if len(results) > 1 else None,
+        }
     
     return {
         AgentType.DIAGNOSIS: diagnosis_runner,
