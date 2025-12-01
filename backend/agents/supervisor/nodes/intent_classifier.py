@@ -56,20 +56,23 @@ ANALYSIS_KEYWORDS = {
     "analyze", "diagnose", "compare", "health", "onboarding",
 }
 
+# Fast classify 결과 타입: (intent, sub_intent, repo_info | None)
+FastClassifyResult = Tuple[SupervisorIntent, SubIntent, Optional[dict]]
 
-def _fast_classify_smalltalk(query: str) -> Optional[Tuple[SupervisorIntent, SubIntent]]:
+
+def _fast_classify_smalltalk(query: str) -> Optional[FastClassifyResult]:
     """
     경량 분류: Fast Chat 경로 빠른 판별 (LLM 호출 없이).
     
     규칙 (우선순위 순):
     1. 도움 요청 패턴 → help.getting_started
     2. 분석/진단 키워드 → None (Expert Tool)
-    3. 개요 패턴 (owner/repo가 뭐야?) → overview.repo
+    3. 개요 패턴 (owner/repo가 뭐야?) → overview.repo + repo 추출
     4. 짧은 인사 (≤8 토큰) → smalltalk.greeting
     5. 짧은 잡담 (≤8 토큰) → smalltalk.chitchat
     
     Returns:
-        (intent, sub_intent) 튜플 또는 None (LLM 분류 필요)
+        (intent, sub_intent, repo_info) 튜플 또는 None (LLM 분류 필요)
     """
     query_lower = query.lower().strip()
     tokens = query_lower.split()
@@ -79,18 +82,27 @@ def _fast_classify_smalltalk(query: str) -> Optional[Tuple[SupervisorIntent, Sub
     for pattern in HELP_PATTERNS:
         if re.search(pattern, query_lower):
             logger.info("[fast_classify] help.getting_started: %s", query[:50])
-            return ("help", "getting_started")
+            return ("help", "getting_started", None)
     
     # 2) 분석/진단 관련 키워드가 있으면 Expert Tool 경로
     for kw in ANALYSIS_KEYWORDS:
         if kw in query_lower:
             return None
     
-    # 3) 개요 패턴 체크 (owner/repo가 뭐야?)
+    # 3) 개요 패턴 체크 (owner/repo가 뭐야?) - repo도 추출
     for pattern in OVERVIEW_PATTERNS:
-        if re.search(pattern, query_lower):
-            logger.info("[fast_classify] overview.repo: %s", query[:50])
-            return ("overview", "repo")
+        match = re.search(pattern, query_lower)
+        if match:
+            repo_str = match.group(1)  # "owner/repo"
+            parts = repo_str.split("/")
+            if len(parts) == 2:
+                repo_info = {
+                    "owner": parts[0],
+                    "name": parts[1],
+                    "url": f"https://github.com/{parts[0]}/{parts[1]}",
+                }
+                logger.info("[fast_classify] overview.repo: %s -> %s", query[:50], repo_str)
+                return ("overview", "repo", repo_info)
     
     # 4) 짧은 쿼리 (≤ 8 토큰)에서만 인사/잡담 체크
     if token_count <= 8:
@@ -98,13 +110,13 @@ def _fast_classify_smalltalk(query: str) -> Optional[Tuple[SupervisorIntent, Sub
         for kw in GREETING_KEYWORDS:
             if kw in query_lower:
                 logger.info("[fast_classify] smalltalk.greeting: %s", query[:50])
-                return ("smalltalk", "greeting")
+                return ("smalltalk", "greeting", None)
         
         # 잡담 키워드 체크
         for kw in CHITCHAT_KEYWORDS:
             if kw in query_lower:
                 logger.info("[fast_classify] smalltalk.chitchat: %s", query[:50])
-                return ("smalltalk", "chitchat")
+                return ("smalltalk", "chitchat", None)
     
     # 5) 경량 분류 불가 → LLM 분류 필요
     return None
@@ -347,15 +359,15 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     # 1) 경량 분류 먼저 시도 (LLM 호출 없이 빠른 경로)
     fast_result = _fast_classify_smalltalk(user_query)
     if fast_result:
-        intent, sub_intent = fast_result
+        intent, sub_intent, repo_info = fast_result
         new_state["intent"] = intent
         new_state["sub_intent"] = sub_intent
         new_state["task_type"] = f"{intent}_{sub_intent}"
         new_state["is_followup"] = False
         new_state["followup_type"] = None
-        new_state["repo"] = None
+        new_state["repo"] = repo_info  # overview의 경우 repo 정보 포함
         new_state["_fast_classified"] = True  # 경량 분류 플래그
-        logger.info("[classify_intent_node] Fast classified: %s.%s", intent, sub_intent)
+        logger.info("[classify_intent_node] Fast classified: %s.%s, repo=%s", intent, sub_intent, repo_info)
         return new_state
 
     # 2) 일반 분류 (LLM 호출)

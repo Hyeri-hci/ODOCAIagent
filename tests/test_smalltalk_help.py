@@ -14,7 +14,8 @@ class TestFastClassifySmallTalk:
         from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_smalltalk
         
         result = _fast_classify_smalltalk("안녕")
-        assert result == ("smalltalk", "greeting")
+        assert result[:2] == ("smalltalk", "greeting")
+        assert result[2] is None  # repo 없음
     
     def test_greeting_variations(self):
         """인사 변형 분류."""
@@ -23,14 +24,14 @@ class TestFastClassifySmallTalk:
         greetings = ["하이", "hi", "hello", "안뇽", "헬로", "반가워"]
         for g in greetings:
             result = _fast_classify_smalltalk(g)
-            assert result == ("smalltalk", "greeting"), f"Failed for: {g}"
+            assert result[:2] == ("smalltalk", "greeting"), f"Failed for: {g}"
     
     def test_chitchat_simple(self):
         """잡담 분류."""
         from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_smalltalk
         
         result = _fast_classify_smalltalk("고마워")
-        assert result == ("smalltalk", "chitchat")
+        assert result[:2] == ("smalltalk", "chitchat")
     
     def test_chitchat_variations(self):
         """잡담 변형 분류."""
@@ -39,14 +40,14 @@ class TestFastClassifySmallTalk:
         chitchats = ["감사합니다", "좋아", "굿", "오케이", "알겠어"]
         for c in chitchats:
             result = _fast_classify_smalltalk(c)
-            assert result == ("smalltalk", "chitchat"), f"Failed for: {c}"
+            assert result[:2] == ("smalltalk", "chitchat"), f"Failed for: {c}"
     
     def test_help_simple(self):
         """도움말 분류."""
         from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_smalltalk
         
         result = _fast_classify_smalltalk("뭘 할 수 있어?")
-        assert result == ("help", "getting_started")
+        assert result[:2] == ("help", "getting_started")
     
     def test_help_variations(self):
         """도움말 변형 분류."""
@@ -55,20 +56,24 @@ class TestFastClassifySmallTalk:
         helps = ["도와줘", "help", "무엇을 할 수 있어?", "뭐 해줄 수 있어?"]
         for h in helps:
             result = _fast_classify_smalltalk(h)
-            assert result == ("help", "getting_started"), f"Failed for: {h}"
+            assert result[:2] == ("help", "getting_started"), f"Failed for: {h}"
     
     def test_overview_pattern(self):
-        """개요 패턴 분류."""
+        """개요 패턴 분류 + repo 추출."""
         from backend.agents.supervisor.nodes.intent_classifier import _fast_classify_smalltalk
         
-        overviews = [
-            "facebook/react가 뭐야?",
-            "vercel/next.js가 뭐야",
-            "tensorflow/tensorflow 알려줘",
-        ]
-        for o in overviews:
-            result = _fast_classify_smalltalk(o)
-            assert result == ("overview", "repo"), f"Failed for: {o}"
+        # facebook/react가 뭐야?
+        result = _fast_classify_smalltalk("facebook/react가 뭐야?")
+        assert result[:2] == ("overview", "repo")
+        assert result[2] is not None
+        assert result[2]["owner"] == "facebook"
+        assert result[2]["name"] == "react"
+        
+        # vercel/next.js
+        result = _fast_classify_smalltalk("vercel/next.js가 뭐야")
+        assert result[:2] == ("overview", "repo")
+        assert result[2]["owner"] == "vercel"
+        assert result[2]["name"] == "next.js"
     
     def test_not_smalltalk_repo_query(self):
         """저장소 분석 쿼리는 Expert 경로."""

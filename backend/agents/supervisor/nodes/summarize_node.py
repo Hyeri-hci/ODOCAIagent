@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Optional, Union
+from typing import Any, Dict, Optional, Union
 
 from backend.llm.base import ChatMessage, ChatRequest
 from backend.llm.factory import fetch_llm_client
@@ -41,6 +41,76 @@ from ..intent_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _handle_fast_chat_direct(intent: str, sub_intent: str, state: Dict[str, Any]) -> str:
+    """
+    Fast Chat 경로 직접 처리 (기본 그래프 v1용).
+    
+    - smalltalk: 템플릿 응답 (LLM 미사용)
+    - help: 도움말 템플릿 (LLM 미사용)
+    - overview: GitHub API + 경량 LLM
+    """
+    from backend.agents.supervisor.prompts import (
+        GREETING_TEMPLATE,
+        CHITCHAT_TEMPLATE,
+        HELP_TEMPLATE,
+        build_overview_prompt,
+        get_fast_chat_params,
+    )
+    
+    if intent == "smalltalk":
+        if sub_intent == "greeting":
+            return GREETING_TEMPLATE
+        return CHITCHAT_TEMPLATE
+    
+    if intent == "help":
+        return HELP_TEMPLATE
+    
+    if intent == "overview":
+        repo = state.get("repo") or {}
+        owner = repo.get("owner", "")
+        name = repo.get("name", "")
+        
+        if not owner or not name:
+            return "저장소 정보를 찾을 수 없습니다. 'owner/repo' 형식으로 입력해주세요."
+        
+        try:
+            from backend.common.github_client import fetch_repo_overview
+            
+            overview = fetch_repo_overview(owner, name)
+            
+            facts = (
+                f"이름: {overview.get('full_name', f'{owner}/{name}')}\n"
+                f"설명: {overview.get('description', '(없음)')}\n"
+                f"언어: {overview.get('primaryLanguage', '(없음)')}\n"
+                f"스타: {overview.get('stargazers_count', 0):,}개\n"
+                f"포크: {overview.get('forks_count', 0):,}개\n"
+                f"라이선스: {overview.get('license', {}).get('spdx_id', '(없음)')}"
+            )
+            readme = overview.get("readme_content", "")[:500]
+            
+            system_prompt, user_prompt = build_overview_prompt(owner, name, facts, readme)
+            
+            client = fetch_llm_client()
+            llm_params = get_fast_chat_params()
+            
+            request = ChatRequest(
+                messages=[
+                    ChatMessage(role="system", content=system_prompt),
+                    ChatMessage(role="user", content=user_prompt),
+                ],
+                temperature=llm_params["temperature"],
+                max_tokens=llm_params["max_tokens"],
+            )
+            response = client.chat(request)
+            return response.content
+            
+        except Exception as e:
+            logger.error(f"Overview failed: {e}")
+            return f"저장소 정보를 가져오는 중 오류가 발생했습니다: {e}\n\n다시 시도하시거나 '진단해줘'로 상세 분석을 요청해주세요."
+    
+    return "알 수 없는 요청입니다."
 
 
 def _safe_round(value: Optional[Union[int, float]], digits: int = 1) -> str:
@@ -850,8 +920,8 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     모든 Agent 결과를 종합하여 사용자에게 최종 응답을 생성합니다.
     
     새로운 3 Intent + SubIntent 구조:
-    - intent: analyze | followup | general_qa
-    - sub_intent: health | onboarding | compare | explain | refine | concept | chat
+    - intent: analyze | followup | general_qa | smalltalk | help | overview
+    - sub_intent: health | onboarding | compare | explain | refine | concept | chat | greeting | chitchat | usage | faq | repo
     
     error_message가 있으면 LLM 호출 없이 바로 반환합니다.
     """
@@ -868,9 +938,41 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
         new_state["llm_summary"] = error_message
         return new_state
     
-    # ========================================
+    # 0.5 Fast Chat 결과 체크 (smalltalk/help/overview - Agentic 모드)
+    fast_chat_result = state.get("_fast_chat_result")
+    if fast_chat_result and "answer_contract" in fast_chat_result:
+        answer_contract = fast_chat_result["answer_contract"]
+        summary = answer_contract.get("text", "")
+        
+        history = state.get("history", [])
+        new_state: SupervisorState = dict(state)  # type: ignore[assignment]
+        new_history = list(history)
+        new_history.append({"role": "assistant", "content": summary})
+        new_state["history"] = new_history
+        new_state["llm_summary"] = summary
+        new_state["answer_kind"] = get_answer_kind(
+            state.get("intent", DEFAULT_INTENT),
+            state.get("sub_intent") or DEFAULT_SUB_INTENT
+        )
+        return new_state
+    
+    # 0.6 Fast Chat 직접 처리 (기본 그래프 v1용)
+    intent = state.get("intent", DEFAULT_INTENT)
+    sub_intent = state.get("sub_intent") or DEFAULT_SUB_INTENT
+    
+    if intent in ("smalltalk", "help", "overview"):
+        summary = _handle_fast_chat_direct(intent, sub_intent, state)
+        
+        history = state.get("history", [])
+        new_state: SupervisorState = dict(state)  # type: ignore[assignment]
+        new_history = list(history)
+        new_history.append({"role": "assistant", "content": summary})
+        new_state["history"] = new_history
+        new_state["llm_summary"] = summary
+        new_state["answer_kind"] = get_answer_kind(intent, sub_intent)
+        return new_state
+    
     # 1. 상태 추출
-    # ========================================
     diagnosis_result = state.get("diagnosis_result")
     security_result = state.get("security_result")
     recommend_result = state.get("recommend_result")
@@ -881,11 +983,8 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if progress_cb:
         progress_cb("응답 생성 중", "분석 결과를 요약하고 있습니다...")
     
-    # Intent/SubIntent 추출 (새로운 구조)
-    intent = state.get("intent", DEFAULT_INTENT)
-    sub_intent = state.get("sub_intent") or DEFAULT_SUB_INTENT
-    
-    # 레거시 task_type (호환용)
+    # Intent/SubIntent 추출은 위에서 이미 했으므로 재사용
+    # (레거시 task_type 호환용)
     task_type = state.get("task_type", "diagnose_repo_health")
     
     user_context = state.get("user_context", {})
@@ -914,9 +1013,7 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if not user_query:
         user_query = state.get("user_query", "")
 
-    # ========================================
     # 2. 결과 조합
-    # ========================================
     context_parts = []
     
     # Refine Tasks 결과 처리 (sub_intent == "refine")
@@ -946,10 +1043,7 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     if recommend_result:
         context_parts.append(f"## 추천 정보\n{_format_result(recommend_result)}")
 
-    # ========================================
     # 3. LLM 응답 생성
-    # ========================================
-    
     repo = state.get("repo", {})
     repo_id = f"{repo.get('owner', '')}/{repo.get('name', '')}" if repo else "unknown"
     

@@ -116,17 +116,27 @@ def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
         
         result = execute_plan(plan_output.plan, ctx)
         
-        # 결과에서 diagnosis_result 추출
+        # 결과 추출 (타입별)
         diagnosis_result = None
+        fast_chat_result = None  # smalltalk/help/overview
+        
         for step_id, step_result in result.get("results", {}).items():
-            if "diagnosis" in step_id and step_result.get("result"):
-                diagnosis_result = step_result["result"]
-                break
+            step_data = step_result.get("result", {})
+            if not step_data:
+                continue
+                
+            # diagnosis 결과
+            if "diagnosis" in step_id:
+                diagnosis_result = step_data
+            # Fast Chat 결과 (smalltalk, help, overview)
+            elif "answer_contract" in step_data:
+                fast_chat_result = step_data
         
         return {
             "_plan_execution_result": result,
             "_plan_status": result.get("status"),
             "diagnosis_result": diagnosis_result,
+            "_fast_chat_result": fast_chat_result,
         }
 
 
