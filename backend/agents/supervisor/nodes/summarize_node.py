@@ -209,6 +209,33 @@ def _ensure_metrics_exist(
     return valid, None
 
 
+def _generate_recommendation_prompt() -> str:
+    """Generates an Active Inference prompt for recommendation requests."""
+    return """프로젝트 추천을 위해 몇 가지 정보가 필요합니다.
+
+### 알려주시면 좋은 정보
+1. **기술 스택**: 어떤 언어나 프레임워크에 관심이 있으신가요? (예: Python, JavaScript, React)
+2. **경험 수준**: 오픈소스 기여 경험이 있으신가요? (초보자/중급자/고급자)
+3. **관심 분야**: 어떤 종류의 프로젝트에 관심이 있으신가요? (예: 웹 프론트엔드, 백엔드, CLI 도구, 머신러닝)
+
+### 예시 질문
+- "Python 초보자가 기여할 만한 프로젝트 추천해줘"
+- "React 관련 프로젝트 중에서 문서화가 잘 되어있는 곳 알려줘"
+- "facebook/react 분석해줘" (특정 저장소를 직접 지정)
+
+원하시는 정보를 알려주시면, 맞춤형 프로젝트를 찾아드리겠습니다."""
+
+
+# Common anti-parrot rule (prevent answering with unrelated content)
+ANTI_PARROT_RULE = """
+## [CRITICAL] Answer Coherence Rule
+- You MUST answer the user's ACTUAL question
+- If user asks for "recommendation", DO NOT explain metric definitions
+- If user asks about "projects to contribute", suggest specific repositories or ask about their preferences
+- If no analysis data is available, ask the user for more information (Active Inference)
+- NEVER repeat the same template answer regardless of the question
+"""
+
 SUMMARIZE_SYSTEM_PROMPT = """
 당신은 오픈소스 프로젝트 분석 결과를 요약하는 전문가입니다.
 진단 결과를 사용자가 이해하기 쉽게 한국어로 요약해 주세요.
@@ -218,6 +245,7 @@ SUMMARIZE_SYSTEM_PROMPT = """
 2. 핵심 정보를 간결하게 전달
 3. 마크다운 형식 사용
 4. **이모지 절대 사용 금지**
+5. **사용자의 질문에 맞는 답변만 제공** - 추천을 물었으면 추천을, 분석을 물었으면 분석을
 
 ## 점수 해석 가이드 (100점 만점)
 - 90-100점: 매우 우수
@@ -1023,6 +1051,26 @@ def summarize_node(state: SupervisorState) -> SupervisorState:
     # On the first turn, history is empty, so use user_query from state
     if not user_query:
         user_query = state.get("user_query", "")
+    
+    # Check for recommendation intent without repo (Active Inference)
+    user_query_lower = user_query.lower()
+    is_recommendation_request = any(kw in user_query_lower for kw in [
+        "추천", "제안", "가이드", "프로젝트", "저장소", "suggest", "recommend"
+    ])
+    
+    repo = state.get("repo")
+    if is_recommendation_request and not repo and not diagnosis_result:
+        # Active Inference: ask user for preferences
+        summary = _generate_recommendation_prompt()
+        
+        history = state.get("history", [])
+        new_state: SupervisorState = dict(state)  # type: ignore[assignment]
+        new_history = list(history)
+        new_history.append({"role": "assistant", "content": summary})
+        new_state["history"] = new_history
+        new_state["llm_summary"] = summary
+        new_state["answer_kind"] = "chat"
+        return new_state
 
     # 2. Combine results
     context_parts = []

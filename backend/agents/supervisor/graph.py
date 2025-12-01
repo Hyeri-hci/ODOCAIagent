@@ -16,6 +16,7 @@ from backend.agents.supervisor.nodes.task_mapping import map_task_types_node
 from backend.agents.supervisor.nodes.run_diagnosis import run_diagnosis_node
 from backend.agents.supervisor.nodes.summarize_node import summarize_node
 from backend.agents.supervisor.nodes.refine_tasks import refine_tasks_node
+from backend.agents.supervisor.nodes.profile_updater import update_profile_node
 from backend.agents.supervisor.intent_config import (
     get_intent_meta,
     should_run_diagnosis,
@@ -30,19 +31,52 @@ from backend.common.events import (
     turn_context,
     span,
     generate_session_id,
+    generate_turn_id,
     set_session_id,
+    set_turn_id,
     get_session_id,
+    get_turn_id,
 )
 
 logger = logging.getLogger(__name__)
 
-# Agentic 모드 활성화 여부 (기본값: true)
+
+def init_session_node(state: SupervisorState) -> Dict[str, Any]:
+    """Initializes session context from LangGraph config (thread_id)."""
+    # Set session_id from state or generate a new one
+    existing_session_id = state.get("_session_id")
+    if existing_session_id:
+        set_session_id(existing_session_id)
+    else:
+        session_id = generate_session_id()
+        set_session_id(session_id)
+    
+    # Generate new turn_id for each turn
+    turn_id = generate_turn_id()
+    set_turn_id(turn_id)
+    
+    emit_event(
+        EventType.NODE_STARTED,
+        actor="supervisor",
+        inputs={"node_name": "init_session"},
+        outputs={
+            "session_id": get_session_id(),
+            "turn_id": get_turn_id(),
+        }
+    )
+    
+    return {
+        "_session_id": get_session_id(),
+        "_turn_id": turn_id,
+    }
+
+# Whether to enable Agentic mode (default: true)
 AGENTIC_MODE = os.getenv("ODOC_AGENTIC_MODE", "true").lower() in ("1", "true")
 
 
-# Agentic 노드들 (AGENTIC_MODE=true일 때 사용)
+# Agentic nodes (used when AGENTIC_MODE=true)
 def infer_missing_node(state: SupervisorState) -> Dict[str, Any]:
-    """Active Inference 노드 - 누락 정보 추론."""
+    """Active Inference: infers missing information from the query."""
     from backend.agents.supervisor.inference import (
         infer_missing,
         needs_disambiguation,
@@ -53,7 +87,7 @@ def infer_missing_node(state: SupervisorState) -> Dict[str, Any]:
         user_query = state.get("user_query", "")
         hints = infer_missing(user_query, state)
         
-        # 저장소 정보 업데이트
+        # Update repo info
         if hints.owner and hints.name and not state.get("repo"):
             repo_info = {
                 "owner": hints.owner,
@@ -75,7 +109,7 @@ def infer_missing_node(state: SupervisorState) -> Dict[str, Any]:
                 "_inference_confidence": hints.confidence,
             }
         
-        # disambiguation 필요 여부 체크
+        # Check if disambiguation is needed
         if needs_disambiguation(hints):
             msg = build_disambiguation_message(hints)
             return {
@@ -87,13 +121,13 @@ def infer_missing_node(state: SupervisorState) -> Dict[str, Any]:
 
 
 def build_plan_node(state: SupervisorState) -> Dict[str, Any]:
-    """Plan 수립 노드."""
+    """Builds a plan for the supervisor to execute."""
     from backend.agents.supervisor.nodes.planner import planner_node
     return planner_node(state)
 
 
 def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
-    """Plan 실행 노드."""
+    """Executes the supervisor's plan."""
     from backend.agents.supervisor.executor import (
         execute_plan,
         create_default_agent_runners,
@@ -104,7 +138,7 @@ def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
     with span("execute_plan", actor="supervisor"):
         plan_output = state.get("plan_output")
         if not plan_output or not plan_output.plan:
-            # Plan이 없으면 기존 방식으로 진행
+            # Fallback to legacy mode if no plan exists
             return {}
         
         session_id = get_session_id() or generate_session_id()
@@ -116,19 +150,17 @@ def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
         
         result = execute_plan(plan_output.plan, ctx)
         
-        # 결과 추출 (타입별)
+        # Extract results by type
         diagnosis_result = None
-        fast_chat_result = None  # smalltalk/help/overview
-        
+        fast_chat_result = None  # for smalltalk/help/overview
+
         for step_id, step_result in result.get("results", {}).items():
             step_data = step_result.get("result", {})
             if not step_data:
                 continue
-                
-            # diagnosis 결과
+            
             if "diagnosis" in step_id:
                 diagnosis_result = step_data
-            # Fast Chat 결과 (smalltalk, help, overview)
             elif "answer_contract" in step_data:
                 fast_chat_result = step_data
         
@@ -140,9 +172,9 @@ def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
         }
 
 
-# 라우팅 함수들
+# Routing functions
 def route_after_mapping(state: SupervisorState) -> str:
-    """INTENT_META 기반 라우팅 분기."""
+    """Routes after the task mapping node based on INTENT_META."""
     intent = state.get("intent", DEFAULT_INTENT)
     sub_intent = state.get("sub_intent") or DEFAULT_SUB_INTENT
     
@@ -153,30 +185,25 @@ def route_after_mapping(state: SupervisorState) -> str:
         outputs={"intent": intent, "sub_intent": sub_intent, "meta": dict(meta)}
     )
     
-    # 1. 이미 error_message가 있으면 바로 summarize로
     if state.get("error_message"):
         return "summarize"
     
-    # 2. repo 필수인데 없는 경우
     if meta["requires_repo"] and not state.get("repo"):
         state["error_message"] = "어떤 저장소를 기준으로 분석할지 알려주세요. 예: facebook/react 또는 GitHub URL"
         return "summarize"
     
-    # 3. runs_diagnosis=True이면 run_diagnosis로
     if meta["runs_diagnosis"]:
         return "run_diagnosis"
     
-    # 4. 그 외 (concept, chat 등) → summarize
+    # Fallback for concept, chat, etc.
     return "summarize"
 
 
 def route_after_inference(state: SupervisorState) -> str:
-    """Inference 후 라우팅 (Agentic 모드)."""
-    # disambiguation 필요
+    """Routes after the inference node (Agentic mode)."""
     if state.get("_needs_disambiguation"):
         return "summarize"
     
-    # 에러 있음
     if state.get("error_message"):
         return "summarize"
     
@@ -184,14 +211,12 @@ def route_after_inference(state: SupervisorState) -> str:
 
 
 def route_after_plan(state: SupervisorState) -> str:
-    """Plan 수립 후 라우팅."""
+    """Routes after the planning node."""
     plan_output = state.get("plan_output")
     
-    # Plan이 비어있으면 바로 요약
     if not plan_output or not plan_output.plan:
         return "summarize"
     
-    # disambiguation 필요
     if plan_output.intent == "disambiguation":
         return "summarize"
     
@@ -200,23 +225,22 @@ def route_after_plan(state: SupervisorState) -> str:
 
 # Graph Builders
 def build_supervisor_graph():
-    """기존 Supervisor Graph (하위 호환)."""
+    """Builds the standard Supervisor Graph (v1)."""
     graph = StateGraph(SupervisorState)
 
-    # 노드 등록
+    graph.add_node("init_session", init_session_node)
     graph.add_node("classify_intent", classify_intent_node)
     graph.add_node("map_task_types", map_task_types_node)
     graph.add_node("run_diagnosis", run_diagnosis_node)
     graph.add_node("refine_tasks", refine_tasks_node)
+    graph.add_node("update_profile", update_profile_node)
     graph.add_node("summarize", summarize_node)
 
-    # 시작 노드
-    graph.set_entry_point("classify_intent")
+    graph.set_entry_point("init_session")
 
-    # 1) Intent/전역 task_type 분류 후 → 매핑 노드로 고정
+    graph.add_edge("init_session", "classify_intent")
     graph.add_edge("classify_intent", "map_task_types")
 
-    # 2) 매핑 노드 이후에는 조건 분기
     graph.add_conditional_edges(
         "map_task_types",
         route_after_mapping,
@@ -227,47 +251,32 @@ def build_supervisor_graph():
         },
     )
 
-    # 3) Diagnosis → 요약
-    graph.add_edge("run_diagnosis", "summarize")
-    
-    # 4) Refine Tasks → 요약
+    graph.add_edge("run_diagnosis", "update_profile")
+    graph.add_edge("update_profile", "summarize")
     graph.add_edge("refine_tasks", "summarize")
-
-    # 5) 요약 → 종료
     graph.add_edge("summarize", END)
 
+    # Session state is managed externally (e.g., Streamlit session_state)
     return graph.compile()
 
 
 def build_agentic_supervisor_graph():
-    """
-    Agentic Supervisor Graph (v2).
-    
-    확장된 파이프라인:
-    1. classify_intent: Intent/SubIntent 분류
-    2. infer_missing: Active Inference (누락 정보 추론)
-    3. build_plan: Plan 수립 (reasoning_trace 포함)
-    4. execute_plan: Plan 실행 (에러 정책 기반)
-    5. summarize: 최종 요약 (AnswerContract 검증)
-    
-    환경변수 ODOC_AGENTIC_MODE=true로 활성화
-    """
+    """Builds the Agentic Supervisor Graph (v2)."""
     graph = StateGraph(SupervisorState)
 
-    # 노드 등록
+    graph.add_node("init_session", init_session_node)
     graph.add_node("classify_intent", classify_intent_node)
     graph.add_node("infer_missing", infer_missing_node)
     graph.add_node("build_plan", build_plan_node)
     graph.add_node("execute_plan", execute_plan_node)
+    graph.add_node("update_profile", update_profile_node)
     graph.add_node("summarize", summarize_node)
 
-    # 시작 노드
-    graph.set_entry_point("classify_intent")
+    graph.set_entry_point("init_session")
 
-    # 1) Intent 분류 → Active Inference
+    graph.add_edge("init_session", "classify_intent")
     graph.add_edge("classify_intent", "infer_missing")
 
-    # 2) Inference 후 조건 분기
     graph.add_conditional_edges(
         "infer_missing",
         route_after_inference,
@@ -277,7 +286,6 @@ def build_agentic_supervisor_graph():
         },
     )
 
-    # 3) Plan 수립 후 조건 분기
     graph.add_conditional_edges(
         "build_plan",
         route_after_plan,
@@ -287,23 +295,19 @@ def build_agentic_supervisor_graph():
         },
     )
 
-    # 4) Plan 실행 → 요약
-    graph.add_edge("execute_plan", "summarize")
-
-    # 5) 요약 → 종료
+    graph.add_edge("execute_plan", "update_profile")
+    graph.add_edge("update_profile", "summarize")
     graph.add_edge("summarize", END)
 
+    # Session state is managed externally (e.g., Streamlit session_state)
     return graph.compile()
 
 
 def get_supervisor_graph():
-    """환경에 따라 적절한 Graph 반환."""
+    """Gets the appropriate supervisor graph based on the environment."""
     if AGENTIC_MODE:
         logger.info("Using Agentic Supervisor Graph (v2)")
         return build_agentic_supervisor_graph()
     else:
         logger.info("Using Standard Supervisor Graph (v1)")
-        return build_supervisor_graph()    # 5) 요약 → 종료
-    graph.add_edge("summarize", END)
-
-    return graph.compile()
+        return build_supervisor_graph()

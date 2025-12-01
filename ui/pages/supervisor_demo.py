@@ -309,6 +309,8 @@ if prompt:
                         {"role": m["role"], "content": m["content"]} 
                         for m in st.session_state.messages[:-1]
                     ],
+                    # 세션 ID 전달 (세션 연속성 보장)
+                    "_session_id": st.session_state.session_id,
                 }
                 
                 # 이전 결과가 있으면 컨텍스트 전달
@@ -342,7 +344,7 @@ if prompt:
                 
                 initial_state["_progress_callback"] = progress_callback
                 
-                # 그래프 실행
+                # 그래프 실행 (thread_id로 세션 상태 유지)
                 result = graph.invoke(
                     initial_state,
                     config={

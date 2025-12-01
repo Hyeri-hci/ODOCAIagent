@@ -34,7 +34,7 @@ CHITCHAT_KEYWORDS = {
     "고마워", "감사", "thanks", "thank you", "ㅋㅋ", "ㅎㅎ", "좋아", "굿", "good",
     "오케이", "okay", "ok", "알겠어", "네", "응", "ㅇㅇ",
 }
-# 정체성/역할 질문 패턴 ("너 누구야?" 등)
+# Identity/role questions ("Who are you?" etc.)
 IDENTITY_PATTERNS = [
     r"(누구|뭐하는|정체|역할|소개)",
     r"(who are you|what do you do|what is this)",
@@ -56,21 +56,30 @@ OVERVIEW_PATTERNS = [
     r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*(소개|개요)",
 ]
 
-# 설치/업데이트/설정 관련 -> help (general_qa/concept으로 빠지는 것 방지)
+# Tool help patterns (prevent routing to general_qa/concept)
 TOOL_HELP_PATTERNS = [
     r"(업데이트|설치|버전|설정|오류|에러|안돼|실행|update|install|version|error)",
     r"(vscode|vs code|visual studio)",
-    r"(어떻게|how to)",
 ]
 
-# 분석/진단 키워드 (Expert Tool 경로) - 저장소 없어도 analyze로 보내서 되묻기
+# [HIGH PRIORITY] Recommendation keywords - must be checked BEFORE general analysis
+RECOMMEND_PATTERNS = [
+    r"(추천|가이드|제안|suggest|recommend)",
+    r"(어떤|무슨|뭐).*프로젝트",
+    r"(어떤|무슨|뭐).*(저장소|레포)",
+    r"(할\s*만한|적합한|맞는|좋은).*(프로젝트|저장소|레포)",
+    r"(입문|시작|첫|처음).*(프로젝트|저장소|기여)",
+    r"(나한테|내\s*수준|초보|입문자).*(맞는|적합|추천)",
+]
+
+# Analysis/diagnosis keywords (Expert Tool path)
 ANALYSIS_KEYWORDS = {
-    "분석", "진단", "비교", "추천", "건강", "온보딩", "기여", "점수",
-    "품질", "상태", "평가", "어때",  # 추가: 분석 의도 강화
+    "분석", "진단", "비교", "건강", "온보딩", "기여", "점수",
+    "품질", "상태", "평가", "어때",
     "analyze", "diagnose", "compare", "health", "onboarding", "score", "quality", "check",
 }
 
-# 후속 질문 패턴 (followup 감지)
+# Followup question patterns
 FOLLOWUP_PATTERNS = [
     r"(그|저|이|아까)\s*(결과|점수|거|것|저장소)",
     r"(왜|어떻게|무슨\s*뜻|자세히)",
@@ -98,37 +107,52 @@ def _is_followup_query(query: str) -> bool:
 
 def _fast_classify_heuristic(query: str, ctx: Optional[dict] = None) -> Optional[FastClassifyResult]:
     """
-    계층 라우팅 1차: 규칙 기반 분류 (cheap, deterministic).
+    Tier-1 routing: rule-based classification (cheap, deterministic).
+    
+    Priority order (specific -> general):
+    1. Identity questions
+    2. Recommendation requests (HIGH PRIORITY - before general analysis)
+    3. Analysis/diagnosis with repo
+    4. Help patterns
+    5. Overview patterns
+    6. Followup patterns
+    7. Greetings/chitchat
     
     Returns:
-        (intent, sub_intent, repo_info, confidence) 또는 None (LLM 필요)
+        (intent, sub_intent, repo_info, confidence) or None (needs LLM)
     """
     query_lower = query.lower().strip()
     tokens = query_lower.split()
     token_count = len(tokens)
     
-    # 0) 정체성/역할 질문 ("너 누구야?") -> smalltalk
+    # 0) Identity/role questions ("Who are you?") -> smalltalk
     for pattern in IDENTITY_PATTERNS:
         if re.search(pattern, query_lower):
             return ("smalltalk", "greeting", None, 1.0)
     
-    # 1) 분석/진단 키워드 -> analyze (저장소 없어도! 나중에 되묻기)
+    # 1) [HIGH PRIORITY] Recommendation patterns - check BEFORE general analysis
+    #    "추천해줘", "어떤 프로젝트", "나한테 맞는" etc.
+    for pattern in RECOMMEND_PATTERNS:
+        if re.search(pattern, query_lower):
+            # Route to recommend agent (or Active Inference to ask for user preferences)
+            return ("analyze", "onboarding", None, 0.9)
+    
+    # 2) Analysis/diagnosis keywords -> analyze
     has_analysis_kw = any(kw in query_lower for kw in ANALYSIS_KEYWORDS)
     has_repo = _has_repo_entity(query)
     
     if has_analysis_kw:
-        # repo가 있으면 LLM에서 상세 분류, 없으면 analyze로 보내서 되묻기
         if has_repo:
-            return None  # LLM에서 상세 분류
+            return None  # Let LLM classify detailed sub_intent
         else:
-            return ("analyze", "health", None, 0.8)  # 저장소 되묻기 유도
+            return ("analyze", "health", None, 0.8)  # Will ask for repo
     
-    # 2) 도움말 패턴
+    # 3) Help patterns
     for pattern in HELP_PATTERNS:
         if re.search(pattern, query_lower):
             return ("help", "getting_started", None, 1.0)
     
-    # 3) 설치/업데이트/설정 관련 -> help (VSCode 업데이트 등)
+    # 4) Tool help patterns (VSCode, installation etc.)
     for pattern in TOOL_HELP_PATTERNS:
         if re.search(pattern, query_lower):
             return ("help", "getting_started", None, 0.9)
