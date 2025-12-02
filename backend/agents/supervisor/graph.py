@@ -77,6 +77,8 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
         MISSING_REPO_TEMPLATE,
         DISAMBIGUATION_CANDIDATES_TEMPLATE,
         DISAMBIGUATION_SOURCE_ID,
+        AUTO_SELECT_REPO_TEMPLATE,
+        AUTO_SELECT_SOURCE_ID,
         ACCESS_ERROR_NOT_FOUND_TEMPLATE,
         ACCESS_ERROR_PRIVATE_TEMPLATE,
         ACCESS_ERROR_RATE_LIMIT_TEMPLATE,
@@ -101,40 +103,67 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
     # Entity Guard: analyze/* intent requires repo - ALWAYS check
     meta = get_intent_meta(intent, sub_intent)
     if meta["requires_repo"] and not result.get("repo"):
-        # CRITICAL: Block expert/diagnosis path - force disambiguation
-        result["_needs_disambiguation"] = True
-        
         # Extract keyword candidates from query
         user_query = state.get("user_query", "")
         keyword, candidates = _extract_keyword_candidates(user_query)
         
         if keyword and candidates:
-            # Build candidates list with sources
-            candidate_lines = []
-            candidate_sources = []
-            for c in candidates[:3]:
-                candidate_lines.append(f"- `{c['owner']}/{c['name']}` - {c['desc']}")
-                candidate_sources.append(f"CANDIDATE:{c['owner']}/{c['name']}")
-            candidates_text = "\n".join(candidate_lines)
-            
-            result["_disambiguation_template"] = DISAMBIGUATION_CANDIDATES_TEMPLATE.format(
-                keyword=keyword,
-                candidates=candidates_text,
-            )
-            result["_disambiguation_source"] = DISAMBIGUATION_SOURCE_ID
-            result["_disambiguation_candidates"] = candidates
-            result["_disambiguation_candidate_sources"] = candidate_sources
+            if len(candidates) == 1:
+                # Single candidate: auto-select with notice (no disambiguation)
+                c = candidates[0]
+                result["repo"] = {
+                    "owner": c["owner"],
+                    "name": c["name"],
+                    "url": f"https://github.com/{c['owner']}/{c['name']}",
+                }
+                result["_auto_selected_repo"] = True
+                result["_auto_select_notice"] = AUTO_SELECT_REPO_TEMPLATE.format(
+                    keyword=keyword,
+                    owner=c["owner"],
+                    repo=c["name"],
+                    desc=c.get("desc", ""),
+                )
+                result["_auto_select_source"] = AUTO_SELECT_SOURCE_ID
+                
+                logger.info(
+                    "[entity_guard] analyze/%s: auto-selected %s/%s (single candidate for '%s')",
+                    sub_intent, c["owner"], c["name"], keyword
+                )
+            else:
+                # Multiple candidates: force disambiguation
+                result["_needs_disambiguation"] = True
+                
+                candidate_lines = []
+                candidate_sources = []
+                for c in candidates[:3]:
+                    candidate_lines.append(f"- `{c['owner']}/{c['name']}` - {c['desc']}")
+                    candidate_sources.append(f"CANDIDATE:{c['owner']}/{c['name']}")
+                candidates_text = "\n".join(candidate_lines)
+                
+                result["_disambiguation_template"] = DISAMBIGUATION_CANDIDATES_TEMPLATE.format(
+                    keyword=keyword,
+                    candidates=candidates_text,
+                )
+                result["_disambiguation_source"] = DISAMBIGUATION_SOURCE_ID
+                result["_disambiguation_candidates"] = candidates
+                result["_disambiguation_candidate_sources"] = candidate_sources
+                result["answer_kind"] = "disambiguation"
+                
+                logger.info(
+                    "[entity_guard] analyze/%s blocked: disambiguation forced (keyword=%s, candidates=%d)",
+                    sub_intent, keyword, len(candidates)
+                )
         else:
+            # No candidates: force disambiguation with generic message
+            result["_needs_disambiguation"] = True
             result["_disambiguation_template"] = MISSING_REPO_TEMPLATE
             result["_disambiguation_source"] = "SYS:TEMPLATES:MISSING_REPO"
-        
-        # Override answer_kind for disambiguation
-        result["answer_kind"] = "disambiguation"
-        
-        logger.info(
-            "[entity_guard] analyze/%s blocked: no repo, disambiguation forced (keyword=%s, candidates=%d)",
-            sub_intent, keyword, len(candidates) if candidates else 0
-        )
+            result["answer_kind"] = "disambiguation"
+            
+            logger.info(
+                "[entity_guard] analyze/%s blocked: no repo, no candidates",
+                sub_intent
+            )
     
     # Access Guard: Pre-flight check for repo accessibility (BEFORE diagnosis)
     repo = result.get("repo")

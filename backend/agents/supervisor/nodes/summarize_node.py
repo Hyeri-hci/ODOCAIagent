@@ -238,9 +238,19 @@ def _build_response(
     name = safe_get(repo, "name", "") if repo else ""
     repo_id = f"{owner}/{name}" if owner or name else ""
     
+    # Auto-select notice: prepend to summary if single candidate was auto-selected
+    auto_select_notice = safe_get(state, "_auto_select_notice", "")
+    if auto_select_notice and summary:
+        summary = f"{auto_select_notice}\n\n---\n\n{summary}"
+    
     # AnswerContract enforcement (sources == [] 방지)
     source_kinds = SOURCE_KIND_MAP.get(answer_kind, ["system_template"])
     sources: List[str] = []
+    
+    # Add auto-select source if applicable
+    auto_select_source = safe_get(state, "_auto_select_source", "")
+    if auto_select_source:
+        sources.append(auto_select_source)
     
     if diagnosis_result and not degraded:
         # 정상 경로: 진단 결과 참조

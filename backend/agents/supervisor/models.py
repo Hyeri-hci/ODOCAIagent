@@ -157,11 +157,14 @@ class SupervisorState(TypedDict, total=False):
     _turn_id: str
     
     # === Guards (Entity/Access) ===
-    _needs_disambiguation: bool  # Entity guard: repo required but missing
+    _needs_disambiguation: bool  # Entity guard: repo required but missing (multiple candidates)
     _disambiguation_template: str
     _disambiguation_source: str
     _disambiguation_candidates: List[Dict[str, str]]
     _disambiguation_candidate_sources: List[str]
+    _auto_selected_repo: bool  # Entity guard: single candidate auto-selected
+    _auto_select_notice: str
+    _auto_select_source: str
     _needs_ask_user: bool  # Access guard: repo inaccessible
     _ask_user_template: str
     _ask_user_source: str

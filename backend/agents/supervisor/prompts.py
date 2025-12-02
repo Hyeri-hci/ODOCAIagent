@@ -269,7 +269,7 @@ MISSING_REPO_TEMPLATE = """어떤 저장소를 분석할까요?
 
 MISSING_REPO_SOURCE_ID = "SYS:TEMPLATES:MISSING_REPO"
 
-# Disambiguation with Candidates Template (후보 제시)
+# Disambiguation with Candidates Template (후보 제시 - 2개 이상)
 DISAMBIGUATION_CANDIDATES_TEMPLATE = """**{keyword}**로 검색된 저장소가 여러 개 있습니다.
 
 어떤 저장소를 분석할까요?
@@ -279,6 +279,15 @@ DISAMBIGUATION_CANDIDATES_TEMPLATE = """**{keyword}**로 검색된 저장소가 
 원하는 저장소를 선택하거나, 정확한 이름을 입력해 주세요."""
 
 DISAMBIGUATION_SOURCE_ID = "SYS:DISAMBIGUATION:CANDIDATES"
+
+# Auto-select Template (후보 1개 - 자동 선택 안내)
+AUTO_SELECT_REPO_TEMPLATE = """**{keyword}** → `{owner}/{repo}` 저장소를 분석합니다.
+
+> {desc}
+
+다른 저장소를 원하시면 `owner/repo` 형식으로 정확히 입력해 주세요."""
+
+AUTO_SELECT_SOURCE_ID = "SYS:AUTO_SELECT:REPO"
 
 # Access Error Templates (접근 오류 시 ask_user 플로우)
 ACCESS_ERROR_NOT_FOUND_TEMPLATE = """**{owner}/{repo}** 저장소를 찾을 수 없습니다.
