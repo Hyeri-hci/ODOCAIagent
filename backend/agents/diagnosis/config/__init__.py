@@ -15,6 +15,19 @@ from .settings import (
     TaskIntent,
 )
 from .metrics import DiagnosisMetrics, LLMTimer, diagnosis_metrics
+from .config_loader import (
+    load_diagnosis_config,
+    get_config_hash,
+    reload_config,
+    get_marketing_config,
+    get_consilience_config,
+    get_freshness_config,
+    get_docs_config,
+    get_gate_config,
+    get_tech_patterns,
+    get_marketing_keywords,
+    get_readme_preference,
+)
 
 __all__ = [
     "DIAGNOSIS_CONFIG",
@@ -29,4 +42,16 @@ __all__ = [
     "Difficulty",
     "TaskKind",
     "TaskIntent",
+    # v2 config loader
+    "load_diagnosis_config",
+    "get_config_hash",
+    "reload_config",
+    "get_marketing_config",
+    "get_consilience_config",
+    "get_freshness_config",
+    "get_docs_config",
+    "get_gate_config",
+    "get_tech_patterns",
+    "get_marketing_keywords",
+    "get_readme_preference",
 ]

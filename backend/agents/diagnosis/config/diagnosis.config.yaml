@@ -1,0 +1,116 @@
+# Diagnosis Configuration v2
+# 모든 임계값과 가중치를 한 곳에서 관리
+# 주간 ±0.02~0.05 범위에서 조정, 변경 이력 남길 것
+
+# README 우선순위
+readme:
+  prefer:
+    - "README.md"
+    - "README_ko.md"
+    - "README_en.md"
+
+# 마케팅 편향 설정
+marketing:
+  threshold: 0.6        # tech_ratio 임계값 (이하면 페널티)
+  penalty_cap: 0.4      # 페널티 상한
+  template_bonus: 0.05  # 템플릿 유사도 > 0.9 시 추가 페널티
+
+# 템플릿 유사도
+templates:
+  similarity_threshold: 0.9  # 이 이상이면 템플릿 의심
+  allowlist: []              # 합법 템플릿 제외 목록 (sha256 해시)
+
+# 교차검증(consilience) 가중치
+consilience:
+  weights:
+    path: 0.4       # 파일 경로 검증
+    workflow: 0.35  # 워크플로/배지 검증
+    link: 0.25      # 외부 링크 검증
+  timeout_seconds: 2.0
+  link_timeout_seconds: 1.5
+  cache_ttl_hours: 24
+
+# 문서 최신성
+freshness:
+  tau: 60  # 감쇠 상수 (일)
+
+# 유효 문서 점수
+docs:
+  floor: 35  # 바닥값
+  weights:
+    raw: 0.55
+    consilience: 0.25
+    freshness: 0.20
+
+# 지속성 게이트 (Sustainability Gate)
+gate:
+  # 최근성
+  recency_days: 90
+  
+  # 활동량
+  commit_rate_per_week_90d: 0.5
+  issue_or_pr_rate_per_week_90d: 0.3
+  
+  # 반응성
+  median_first_response_days: 14
+  
+  # 릴리스
+  last_release_days: 180
+  
+  # 커뮤니티 (절대값 대신 상대적 지표)
+  unique_contributors_90d: 1
+  stars_delta_180d: 0
+  
+  # 특수 케이스
+  early_stage_days: 60
+  archived_fail: true
+
+# 기술 신호 패턴 (정규식)
+tech_patterns:
+  commands:
+    - "pip install"
+    - "npm install"
+    - "yarn add"
+    - "pnpm add"
+    - "docker (build|run|compose)"
+    - "make\\s+\\w+"
+    - "pytest"
+    - "python -m"
+    - "uvicorn"
+    - "poetry (install|add)"
+    - "cargo (build|run)"
+    - "go (build|run|get)"
+  
+  paths:
+    - "src/"
+    - "app/"
+    - "lib/"
+    - "examples/"
+    - "tests/"
+    - "docs/"
+    - "\\.github/workflows/"
+    - "scripts/"
+
+# 마케팅 키워드 (기본, 상세는 별도 yaml)
+marketing_keywords:
+  en:
+    - "revolutionary"
+    - "game-changer"
+    - "cutting-edge"
+    - "next-generation"
+    - "one-click"
+    - "seamless"
+    - "blazing fast"
+    - "enterprise-grade"
+    - "world-class"
+    - "best-in-class"
+  ko:
+    - "혁신적"
+    - "차세대"
+    - "원클릭"
+    - "손쉽게"
+    - "획기적"
+    - "완벽한"
+    - "최고의"
+    - "강력한"
+    - "놀라운"
