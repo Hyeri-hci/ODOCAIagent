@@ -155,6 +155,25 @@ class SupervisorState(TypedDict, total=False):
     # === Internal (not exposed to user) ===
     _session_id: str
     _turn_id: str
+    
+    # === Guards (Entity/Access) ===
+    _needs_disambiguation: bool  # Entity guard: repo required but missing
+    _disambiguation_template: str
+    _disambiguation_source: str
+    _disambiguation_candidates: List[Dict[str, str]]
+    _disambiguation_candidate_sources: List[str]
+    _needs_ask_user: bool  # Access guard: repo inaccessible
+    _ask_user_template: str
+    _ask_user_source: str
+    _access_error: str
+    _repo_context: RepoContext  # Pre-flight access check result
+    
+    # === Classification Meta ===
+    _classification_confidence: float
+    _classification_method: str
+    
+    # === History ===
+    history: List[Dict[str, Any]]
 
 
 def decide_explain_target(state: SupervisorState) -> ExplainTarget:
