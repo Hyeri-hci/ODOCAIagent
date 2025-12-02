@@ -26,14 +26,15 @@ SubIntent = Literal[
 
 # V1 Answer kinds for UI badges
 AnswerKind = Literal[
-    "report",    # analyze → health/onboarding
-    "compare",   # analyze → compare
-    "onepager",  # analyze → onepager
-    "explain",   # followup → explain/evidence
-    "refine",    # followup → refine tasks
-    "chat",      # general_qa → chat
-    "concept",   # general_qa → concept
-    "greeting",  # smalltalk → greeting
+    "report",         # analyze → health/onboarding
+    "compare",        # analyze → compare
+    "onepager",       # analyze → onepager
+    "explain",        # followup → explain/evidence
+    "refine",         # followup → refine tasks
+    "chat",           # general_qa → chat
+    "concept",        # general_qa → concept
+    "greeting",       # smalltalk → greeting
+    "disambiguation", # entity guard → repo selection
 ]
 
 # V1 Explain target types

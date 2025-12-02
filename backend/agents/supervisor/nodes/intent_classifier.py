@@ -103,6 +103,7 @@ KNOWN_REPO_CANDIDATES = {
     "react": [
         {"owner": "facebook", "name": "react", "desc": "UI 라이브러리"},
         {"owner": "reactjs", "name": "react.dev", "desc": "React 공식 문서"},
+        {"owner": "reactjs", "name": "reactjs.org", "desc": "React 웹사이트"},
     ],
     "vue": [
         {"owner": "vuejs", "name": "core", "desc": "Vue 3 코어"},
@@ -110,8 +111,12 @@ KNOWN_REPO_CANDIDATES = {
     ],
     "angular": [
         {"owner": "angular", "name": "angular", "desc": "Angular 프레임워크"},
+        {"owner": "angular", "name": "components", "desc": "Angular 컴포넌트"},
     ],
     "next": [
+        {"owner": "vercel", "name": "next.js", "desc": "Next.js 프레임워크"},
+    ],
+    "nextjs": [
         {"owner": "vercel", "name": "next.js", "desc": "Next.js 프레임워크"},
     ],
     "vscode": [
@@ -122,6 +127,45 @@ KNOWN_REPO_CANDIDATES = {
     ],
     "python": [
         {"owner": "python", "name": "cpython", "desc": "Python 인터프리터"},
+    ],
+    "django": [
+        {"owner": "django", "name": "django", "desc": "Django 웹 프레임워크"},
+    ],
+    "flask": [
+        {"owner": "pallets", "name": "flask", "desc": "Flask 웹 프레임워크"},
+    ],
+    "fastapi": [
+        {"owner": "tiangolo", "name": "fastapi", "desc": "FastAPI 프레임워크"},
+    ],
+    "pytorch": [
+        {"owner": "pytorch", "name": "pytorch", "desc": "PyTorch 딥러닝"},
+    ],
+    "tensorflow": [
+        {"owner": "tensorflow", "name": "tensorflow", "desc": "TensorFlow ML"},
+    ],
+    "node": [
+        {"owner": "nodejs", "name": "node", "desc": "Node.js 런타임"},
+    ],
+    "express": [
+        {"owner": "expressjs", "name": "express", "desc": "Express 웹 프레임워크"},
+    ],
+    "svelte": [
+        {"owner": "sveltejs", "name": "svelte", "desc": "Svelte 프레임워크"},
+    ],
+    "langchain": [
+        {"owner": "langchain-ai", "name": "langchain", "desc": "LangChain LLM 프레임워크"},
+    ],
+    "rust": [
+        {"owner": "rust-lang", "name": "rust", "desc": "Rust 프로그래밍 언어"},
+    ],
+    "go": [
+        {"owner": "golang", "name": "go", "desc": "Go 프로그래밍 언어"},
+    ],
+    "kubernetes": [
+        {"owner": "kubernetes", "name": "kubernetes", "desc": "Kubernetes 컨테이너 오케스트레이션"},
+    ],
+    "docker": [
+        {"owner": "moby", "name": "moby", "desc": "Docker/Moby 컨테이너"},
     ],
 }
 

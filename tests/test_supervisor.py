@@ -2390,7 +2390,7 @@ class TestDisambiguation:
         assert result.get("_needs_disambiguation") is True
     
     def test_disambiguation_shows_guidance(self):
-        """disambiguation 시 안내 메시지 표시."""
+        """disambiguation 시 안내 메시지 표시 + answer_kind=disambiguation."""
         from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
         
         state = {
@@ -2405,7 +2405,11 @@ class TestDisambiguation:
         # 안내 메시지 포함
         summary = result.get("llm_summary", "")
         assert "owner/repo" in summary or "저장소" in summary
-        assert result.get("answer_kind") == "chat"
+        # disambiguation 전용 answer_kind
+        assert result.get("answer_kind") == "disambiguation"
+        # sources에 disambiguation 소스 포함
+        contract = result.get("answer_contract", {})
+        assert len(contract.get("sources", [])) >= 1
     
     def test_with_repo_no_disambiguation(self):
         """repo 지정 시 disambiguation 없음."""
@@ -2507,6 +2511,48 @@ class TestKeywordCandidates:
         
         route = should_run_diagnosis(state)
         assert route == "summarize"
+    
+    def test_disambiguation_answer_kind(self):
+        """disambiguation 시 answer_kind=disambiguation."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "react 분석해줘"}
+        result = classify_node(state)
+        
+        assert result.get("_needs_disambiguation") is True
+        assert result.get("answer_kind") == "disambiguation"
+    
+    def test_disambiguation_candidate_sources(self):
+        """disambiguation 시 candidate sources 포함."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "react 분석해줘"}
+        result = classify_node(state)
+        
+        candidate_sources = result.get("_disambiguation_candidate_sources", [])
+        assert len(candidate_sources) >= 1
+        assert any("facebook/react" in src for src in candidate_sources)
+    
+    def test_disambiguation_summarize_response(self):
+        """disambiguation summarize 응답 검증."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        state = {
+            "user_query": "react 분석해줘",
+            "intent": "analyze",
+            "sub_intent": "health",
+            "_needs_disambiguation": True,
+            "_disambiguation_template": "react로 검색된 저장소가 여러 개 있습니다.",
+            "_disambiguation_source": "SYS:DISAMBIGUATION:CANDIDATES",
+            "_disambiguation_candidate_sources": ["CANDIDATE:facebook/react"],
+        }
+        
+        result = summarize_node_v1(state)
+        
+        assert result.get("answer_kind") == "disambiguation"
+        contract = result.get("answer_contract", {})
+        assert len(contract.get("sources", [])) >= 1
+        assert "disambiguation" in contract.get("source_kinds", [])
 
 
 class TestRefineMode:

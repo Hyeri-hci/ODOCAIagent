@@ -93,20 +93,23 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
     answer_kind = _get_default_answer_kind(intent, sub_intent)
     result["answer_kind"] = answer_kind
     
-    # Check if repo is required but missing (disambiguation)
+    # Entity Guard: analyze/* intent requires repo - ALWAYS check
     meta = get_intent_meta(intent, sub_intent)
     if meta["requires_repo"] and not result.get("repo"):
+        # CRITICAL: Block expert/diagnosis path - force disambiguation
         result["_needs_disambiguation"] = True
         
-        # Extract keyword candidates
+        # Extract keyword candidates from query
         user_query = state.get("user_query", "")
         keyword, candidates = _extract_keyword_candidates(user_query)
         
         if keyword and candidates:
-            # Build candidates list
+            # Build candidates list with sources
             candidate_lines = []
+            candidate_sources = []
             for c in candidates[:3]:
                 candidate_lines.append(f"- `{c['owner']}/{c['name']}` - {c['desc']}")
+                candidate_sources.append(f"CANDIDATE:{c['owner']}/{c['name']}")
             candidates_text = "\n".join(candidate_lines)
             
             result["_disambiguation_template"] = DISAMBIGUATION_CANDIDATES_TEMPLATE.format(
@@ -115,10 +118,20 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
             )
             result["_disambiguation_source"] = DISAMBIGUATION_SOURCE_ID
             result["_disambiguation_candidates"] = candidates
+            result["_disambiguation_candidate_sources"] = candidate_sources
         else:
             result["_disambiguation_template"] = MISSING_REPO_TEMPLATE
+            result["_disambiguation_source"] = "SYS:TEMPLATES:MISSING_REPO"
+        
+        # Override answer_kind for disambiguation
+        result["answer_kind"] = "disambiguation"
+        
+        logger.info(
+            "[entity_guard] analyze/%s blocked: no repo, disambiguation forced (keyword=%s, candidates=%d)",
+            sub_intent, keyword, len(candidates) if candidates else 0
+        )
     
-    # Emit disambiguation event if needed
+    # Emit route selection event
     if result.get("_needs_disambiguation"):
         emit_event(
             EventType.SUPERVISOR_ROUTE_SELECTED,
@@ -128,6 +141,7 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
                 "intent": intent,
                 "sub_intent": sub_intent,
                 "has_candidates": bool(result.get("_disambiguation_candidates")),
+                "candidate_count": len(result.get("_disambiguation_candidates", [])),
             },
         )
     

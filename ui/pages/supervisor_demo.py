@@ -85,8 +85,8 @@ def render_graph_visualization(result: dict | None):
     has_diagnosis = bool(result.get("diagnosis_result"))
     needs_disambiguation = result.get("_needs_disambiguation", False)
     
-    # 실행된 경로 결정
-    if needs_disambiguation:
+    # 실행된 경로 결정 (answer_kind가 disambiguation이면 우선)
+    if needs_disambiguation or answer_kind == "disambiguation":
         path = "disambiguation"
     elif intent == "smalltalk" or intent == "help":
         path = "fast"
@@ -384,11 +384,15 @@ with st.sidebar:
 
 # 응답 유형 배지 표시
 ANSWER_KIND_BADGES = {
-    "report": ("📊 진단 리포트", "blue"),
-    "explain": ("💡 점수 해설", "green"),
-    "refine": ("🔍 Task 필터링", "orange"),
-    "concept": ("📚 개념 설명", "violet"),
-    "chat": ("💬 일반 대화", "gray"),
+    "report": ("진단 리포트", "blue"),
+    "explain": ("점수 해설", "green"),
+    "refine": ("Task 필터링", "orange"),
+    "concept": ("개념 설명", "violet"),
+    "chat": ("일반 대화", "gray"),
+    "greeting": ("인사", "gray"),
+    "disambiguation": ("저장소 선택", "red"),
+    "compare": ("비교 분석", "blue"),
+    "onepager": ("원페이저", "blue"),
 }
 
 

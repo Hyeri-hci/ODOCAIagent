@@ -814,13 +814,44 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
             "last_answer_kind": safe_get(state, "answer_kind", "chat"),
         }
     
-    # 0.5. Disambiguation: repo required but missing
+    # 0.5. Disambiguation: repo required but missing - BLOCK expert path
     if safe_get(state, "_needs_disambiguation"):
         template = safe_get(state, "_disambiguation_template", MISSING_REPO_TEMPLATE)
         source_id = safe_get(state, "_disambiguation_source", DISAMBIGUATION_SOURCE_ID)
-        return _build_lightweight_response(
-            state, template, "chat", source_id
+        candidate_sources = safe_get(state, "_disambiguation_candidate_sources", [])
+        
+        # Build sources list with candidates
+        sources = [source_id]
+        if candidate_sources:
+            sources.extend(candidate_sources[:3])
+        
+        # Build AnswerContract with repo_candidates
+        answer_contract = AnswerContract(
+            text=template,
+            sources=sources,
+            source_kinds=["disambiguation"] + ["repo_candidate"] * len(candidate_sources[:3]),
         )
+        
+        emit_event(
+            event_type=EventType.ANSWER_GENERATED,
+            actor="summarize_node",
+            inputs={"answer_kind": "disambiguation", "route": "entity_guard"},
+            outputs={
+                "text_length": len(template),
+                "source_id": source_id,
+                "candidate_count": len(candidate_sources),
+                "latency_category": "instant",
+            },
+        )
+        
+        return {
+            "llm_summary": answer_contract.text,
+            "answer_kind": "disambiguation",
+            "answer_contract": answer_contract.model_dump(),
+            "last_brief": "disambiguation 응답 완료",
+            "last_answer_kind": "disambiguation",
+            "_needs_disambiguation": True,
+        }
     
     # 1. Check V1 support
     if not is_v1_supported(intent, sub_intent):
