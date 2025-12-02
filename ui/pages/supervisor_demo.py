@@ -393,6 +393,7 @@ ANSWER_KIND_BADGES = {
     "disambiguation": ("저장소 선택", "red"),
     "compare": ("비교 분석", "blue"),
     "onepager": ("원페이저", "blue"),
+    "ask_user": ("권한 확인 필요", "red"),
 }
 
 

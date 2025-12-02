@@ -3150,5 +3150,236 @@ class TestCompareIntegration:
         assert result["answer_kind"] == "compare"
 
 
+class TestAccessGuard:
+    """Access Guard (접근 권한) 테스트."""
+    
+    def test_check_repo_access_result_dataclass(self):
+        """RepoAccessResult dataclass 구조 검증."""
+        from backend.common.github_client import RepoAccessResult
+        
+        result = RepoAccessResult(
+            accessible=False,
+            owner="test",
+            repo="repo",
+            repo_id="test/repo",
+            status_code=404,
+            reason="not_found"
+        )
+        
+        assert result.accessible is False
+        assert result.status_code == 404
+        assert result.reason == "not_found"
+        assert result.default_branch is None
+        assert result.owner == "test"
+        assert result.repo == "repo"
+        assert result.repo_id == "test/repo"
+    
+    def test_access_error_templates_exist(self):
+        """접근 오류 템플릿 존재 검증."""
+        from backend.agents.supervisor.prompts import (
+            ACCESS_ERROR_NOT_FOUND_TEMPLATE,
+            ACCESS_ERROR_PRIVATE_TEMPLATE,
+            ACCESS_ERROR_RATE_LIMIT_TEMPLATE,
+            ACCESS_ERROR_SOURCE_ID,
+        )
+        
+        # 템플릿에 필수 placeholder 존재
+        assert "{owner}" in ACCESS_ERROR_NOT_FOUND_TEMPLATE
+        assert "{repo}" in ACCESS_ERROR_NOT_FOUND_TEMPLATE
+        assert "{owner}" in ACCESS_ERROR_PRIVATE_TEMPLATE
+        assert "{repo}" in ACCESS_ERROR_PRIVATE_TEMPLATE
+        assert "API" in ACCESS_ERROR_RATE_LIMIT_TEMPLATE or "rate" in ACCESS_ERROR_RATE_LIMIT_TEMPLATE.lower()
+        
+        # source ID 형식
+        assert ACCESS_ERROR_SOURCE_ID.startswith("SYS:")
+    
+    def test_ask_user_answer_kind_registered(self):
+        """ask_user가 AnswerKind에 등록됨."""
+        from backend.agents.supervisor.models import AnswerKind
+        from typing import get_args
+        
+        valid_kinds = get_args(AnswerKind)
+        assert "ask_user" in valid_kinds
+    
+    def test_repo_context_typedef(self):
+        """RepoContext TypedDict 구조 검증."""
+        from backend.agents.supervisor.models import RepoContext
+        
+        # RepoContext 타입 힌트 존재 확인
+        annotations = RepoContext.__annotations__
+        assert "owner" in annotations
+        assert "repo" in annotations
+        assert "repo_id" in annotations
+        assert "accessible" in annotations
+    
+    def test_access_guard_not_found_sets_ask_user(self):
+        """404 응답 시 _needs_ask_user 설정."""
+        from backend.agents.supervisor.graph import classify_node
+        from unittest.mock import patch
+        from backend.common.github_client import RepoAccessResult
+        
+        state = {"user_query": "nonexistent/repo 분석해줘"}
+        
+        with patch("backend.agents.supervisor.graph.check_repo_access") as mock_check:
+            mock_check.return_value = RepoAccessResult(
+                accessible=False,
+                owner="nonexistent",
+                repo="repo",
+                repo_id="nonexistent/repo",
+                status_code=404,
+                reason="not_found"
+            )
+            result = classify_node(state)
+        
+        assert result.get("_needs_ask_user") is True
+        assert result.get("_access_error") == "not_found"
+        assert result.get("answer_kind") == "ask_user"
+        assert result.get("_ask_user_template") is not None
+    
+    def test_access_guard_private_sets_ask_user(self):
+        """403 응답 시 _needs_ask_user 설정."""
+        from backend.agents.supervisor.graph import classify_node
+        from unittest.mock import patch
+        from backend.common.github_client import RepoAccessResult
+        
+        state = {"user_query": "private-org/private-repo 분석해줘"}
+        
+        with patch("backend.agents.supervisor.graph.check_repo_access") as mock_check:
+            mock_check.return_value = RepoAccessResult(
+                accessible=False,
+                owner="private-org",
+                repo="private-repo",
+                repo_id="private-org/private-repo",
+                status_code=403,
+                reason="private_no_access"
+            )
+            result = classify_node(state)
+        
+        assert result.get("_needs_ask_user") is True
+        assert result.get("_access_error") == "private_no_access"
+        assert result.get("answer_kind") == "ask_user"
+    
+    def test_access_guard_rate_limit_sets_ask_user(self):
+        """rate_limit 시 _needs_ask_user 설정."""
+        from backend.agents.supervisor.graph import classify_node
+        from unittest.mock import patch
+        from backend.common.github_client import RepoAccessResult
+        
+        state = {"user_query": "facebook/react 분석해줘"}
+        
+        with patch("backend.agents.supervisor.graph.check_repo_access") as mock_check:
+            mock_check.return_value = RepoAccessResult(
+                accessible=False,
+                owner="facebook",
+                repo="react",
+                repo_id="facebook/react",
+                status_code=429,
+                reason="rate_limit"
+            )
+            result = classify_node(state)
+        
+        assert result.get("_needs_ask_user") is True
+        assert result.get("_access_error") == "rate_limit"
+    
+    def test_ask_user_blocks_expert_node(self):
+        """_needs_ask_user=True 시 expert_node 호출 차단."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "health",
+            "repo": {"owner": "test", "name": "repo", "url": ""},
+            "_needs_ask_user": True,
+        }
+        
+        # ask_user 설정 시 summarize로 분기
+        assert should_run_diagnosis(state) == "summarize"
+    
+    def test_ask_user_summarize_response(self):
+        """ask_user 상태에서 summarize_node 응답 생성."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        state = {
+            "user_query": "private-org/private-repo 분석해줘",
+            "intent": "analyze",
+            "sub_intent": "health",
+            "repo": {"owner": "private-org", "name": "private-repo", "url": ""},
+            "_needs_ask_user": True,
+            "_access_error": "not_found",
+            "_ask_user_template": "**private-org/private-repo** 저장소를 찾을 수 없습니다.",
+            "_ask_user_source": "SYS:ACCESS_GUARD:ERROR",
+            "_repo_context": {"owner": "private-org", "repo": "private-repo", "repo_id": "private-org/private-repo"},
+            "answer_kind": "ask_user",
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # ask_user 응답
+        assert result.get("answer_kind") == "ask_user"
+        contract = result.get("answer_contract", {})
+        assert len(contract.get("sources", [])) >= 1
+        # diagnosis_result는 None (오염 방지)
+        assert result.get("diagnosis_result") is None
+    
+    def test_ask_user_no_diagnosis_result_leakage(self):
+        """ask_user 시 이전 diagnosis_result 누출 방지."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        # 이전 세션의 diagnosis_result가 state에 남아있는 경우
+        state = {
+            "user_query": "my-org/private-repo 분석해줘",
+            "intent": "analyze",
+            "sub_intent": "health",
+            "repo": {"owner": "my-org", "name": "private-repo", "url": ""},
+            "_needs_ask_user": True,
+            "_access_error": "private_no_access",
+            "_ask_user_template": "**my-org/private-repo** 저장소에 접근할 수 없습니다. 비공개 저장소이거나 권한이 필요합니다.",
+            "_ask_user_source": "SYS:ACCESS_GUARD:ERROR",
+            "_repo_context": {"owner": "my-org", "repo": "private-repo", "repo_id": "my-org/private-repo"},
+            "answer_kind": "ask_user",
+            # 이전 세션 잔여 데이터 (오염 시뮬레이션)
+            "diagnosis_result": {"scores": {"health_score": 85}, "details": {"repo_info": {"full_name": "facebook/react"}}},
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # ask_user 응답 시 diagnosis_result는 None으로 덮어씀
+        assert result.get("diagnosis_result") is None
+        # answer_contract에 이전 레포 정보 포함되지 않음
+        contract = result.get("answer_contract", {})
+        text = contract.get("text", "")
+        assert "facebook/react" not in text
+    
+    def test_access_guard_success_proceeds_to_diagnosis(self):
+        """접근 성공 시 정상적으로 diagnosis 진행."""
+        from backend.agents.supervisor.graph import classify_node, should_run_diagnosis
+        from unittest.mock import patch
+        from backend.common.github_client import RepoAccessResult
+        
+        state = {"user_query": "facebook/react 분석해줘"}
+        
+        with patch("backend.agents.supervisor.graph.check_repo_access") as mock_check:
+            mock_check.return_value = RepoAccessResult(
+                accessible=True,
+                owner="facebook",
+                repo="react",
+                repo_id="facebook/react",
+                status_code=200,
+                reason="ok",
+                default_branch="main"
+            )
+            result = classify_node(state)
+        
+        # ask_user 미설정
+        assert result.get("_needs_ask_user") is not True
+        assert result.get("answer_kind") != "ask_user"
+        
+        # diagnosis 진행 가능 (expert 또는 diagnosis 노드로 라우팅)
+        result["intent"] = "analyze"
+        result["sub_intent"] = "health"
+        route = should_run_diagnosis(result)
+        assert route in ("expert", "diagnosis")  # 둘 다 diagnosis 실행을 의미
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -271,6 +271,37 @@ DISAMBIGUATION_CANDIDATES_TEMPLATE = """**{keyword}**로 검색된 저장소가 
 
 DISAMBIGUATION_SOURCE_ID = "SYS:DISAMBIGUATION:CANDIDATES"
 
+# Access Error Templates (접근 오류 시 ask_user 플로우)
+ACCESS_ERROR_NOT_FOUND_TEMPLATE = """**{owner}/{repo}** 저장소를 찾을 수 없습니다.
+
+**확인해 주세요:**
+1. 저장소 이름이 정확한가요? (대소문자 구분)
+2. 저장소가 삭제되었거나 이름이 변경되었나요?
+
+**대안:**
+- 정확한 저장소 이름을 다시 입력해 주세요
+- 공개 저장소로 테스트: `facebook/react 분석해줘`"""
+
+ACCESS_ERROR_PRIVATE_TEMPLATE = """**{owner}/{repo}** 저장소에 접근할 수 없습니다.
+
+**Private 저장소인 경우:**
+1. GitHub 토큰에 해당 조직/저장소 접근 권한이 필요합니다
+2. Fine-grained PAT의 경우 `Repository access`에서 해당 저장소를 추가해 주세요
+3. 조직 저장소라면 조직 관리자에게 OAuth 앱 승인을 요청해 주세요
+
+**대안:**
+- 공개 저장소로 테스트: `facebook/react 분석해줘`
+- 토큰 권한 확인 후 다시 시도해 주세요"""
+
+ACCESS_ERROR_RATE_LIMIT_TEMPLATE = """GitHub API 호출 한도에 도달했습니다.
+
+**잠시 후 다시 시도해 주세요.**
+
+- 일반적으로 1시간 후 한도가 초기화됩니다
+- 더 높은 한도가 필요하면 GitHub 토큰을 설정해 주세요"""
+
+ACCESS_ERROR_SOURCE_ID = "SYS:ACCESS_GUARD:ERROR"
+
 
 # Overview LLM Prompt (아티팩트 기반 3-6문장 개요)
 SYSTEM_OVERVIEW = """당신은 GitHub 저장소를 간결하게 소개하는 전문가입니다.

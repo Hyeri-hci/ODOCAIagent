@@ -853,6 +853,44 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
             "_needs_disambiguation": True,
         }
     
+    # 0.6. Access Guard: repo inaccessible - BLOCK expert path, ask_user
+    if safe_get(state, "_needs_ask_user"):
+        template = safe_get(state, "_ask_user_template", "")
+        source_id = safe_get(state, "_ask_user_source", "SYS:ACCESS_GUARD:ERROR")
+        access_error = safe_get(state, "_access_error", "unknown")
+        repo_ctx = safe_get(state, "_repo_context", {})
+        repo_id = safe_get(repo_ctx, "repo_id", "")
+        
+        answer_contract = AnswerContract(
+            text=template,
+            sources=[source_id],
+            source_kinds=["access_guard"],
+        )
+        
+        emit_event(
+            event_type=EventType.ANSWER_GENERATED,
+            actor="summarize_node",
+            inputs={"answer_kind": "ask_user", "route": "access_guard"},
+            outputs={
+                "text_length": len(template),
+                "source_id": source_id,
+                "access_error": access_error,
+                "repo_id": repo_id,
+                "latency_category": "instant",
+            },
+        )
+        
+        return {
+            "llm_summary": answer_contract.text,
+            "answer_kind": "ask_user",
+            "answer_contract": answer_contract.model_dump(),
+            "last_brief": f"접근 오류: {repo_id}",
+            "last_answer_kind": "ask_user",
+            "_needs_ask_user": True,
+            # Clear any previous diagnosis_result to prevent contamination
+            "diagnosis_result": None,
+        }
+    
     # 1. Check V1 support
     if not is_v1_supported(intent, sub_intent):
         return _build_response(state, NOT_READY_TEMPLATE, "chat")

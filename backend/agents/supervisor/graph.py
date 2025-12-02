@@ -32,6 +32,7 @@ from backend.agents.shared.contracts import (
     RunnerStatus,
 )
 from backend.common.cache import idempotency_store
+from backend.common.github_client import check_repo_access, RepoAccessResult
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,10 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
         MISSING_REPO_TEMPLATE,
         DISAMBIGUATION_CANDIDATES_TEMPLATE,
         DISAMBIGUATION_SOURCE_ID,
+        ACCESS_ERROR_NOT_FOUND_TEMPLATE,
+        ACCESS_ERROR_PRIVATE_TEMPLATE,
+        ACCESS_ERROR_RATE_LIMIT_TEMPLATE,
+        ACCESS_ERROR_SOURCE_ID,
     )
     
     emit_event(
@@ -131,7 +136,66 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
             sub_intent, keyword, len(candidates) if candidates else 0
         )
     
-    # Emit route selection event
+    # Access Guard: Pre-flight check for repo accessibility (BEFORE diagnosis)
+    repo = result.get("repo")
+    if repo and meta["requires_repo"] and not result.get("_needs_disambiguation"):
+        owner = safe_get(repo, "owner", "")
+        name = safe_get(repo, "name", "")
+        
+        if owner and name:
+            access_result = check_repo_access(owner, name)
+            
+            # Store repo context for artifact validation
+            result["_repo_context"] = {
+                "owner": owner,
+                "repo": name,
+                "repo_id": access_result.repo_id,
+                "default_branch": access_result.default_branch,
+                "accessible": access_result.accessible,
+            }
+            
+            if not access_result.accessible:
+                # CRITICAL: Block diagnosis path - force ask_user
+                result["_needs_ask_user"] = True
+                result["_access_error"] = access_result.reason
+                result["answer_kind"] = "ask_user"
+                
+                # Select appropriate error template
+                if access_result.reason == "not_found":
+                    result["_ask_user_template"] = ACCESS_ERROR_NOT_FOUND_TEMPLATE.format(
+                        owner=owner, repo=name
+                    )
+                elif access_result.reason == "private_no_access":
+                    result["_ask_user_template"] = ACCESS_ERROR_PRIVATE_TEMPLATE.format(
+                        owner=owner, repo=name
+                    )
+                elif access_result.reason == "rate_limit":
+                    result["_ask_user_template"] = ACCESS_ERROR_RATE_LIMIT_TEMPLATE
+                else:
+                    result["_ask_user_template"] = ACCESS_ERROR_NOT_FOUND_TEMPLATE.format(
+                        owner=owner, repo=name
+                    )
+                result["_ask_user_source"] = ACCESS_ERROR_SOURCE_ID
+                
+                logger.info(
+                    "[access_guard] %s/%s blocked: %s (status=%d)",
+                    owner, name, access_result.reason, access_result.status_code
+                )
+                
+                emit_event(
+                    EventType.SUPERVISOR_ROUTE_SELECTED,
+                    actor="supervisor",
+                    outputs={
+                        "selected_route": "ask_user",
+                        "intent": intent,
+                        "sub_intent": sub_intent,
+                        "repo": f"{owner}/{name}",
+                        "access_error": access_result.reason,
+                        "status_code": access_result.status_code,
+                    },
+                )
+    
+    # Emit route selection event for disambiguation
     if result.get("_needs_disambiguation"):
         emit_event(
             EventType.SUPERVISOR_ROUTE_SELECTED,
@@ -151,8 +215,9 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
         outputs={
             "intent": intent,
             "sub_intent": sub_intent,
-            "answer_kind": answer_kind,
+            "answer_kind": result.get("answer_kind", answer_kind),
             "needs_disambiguation": result.get("_needs_disambiguation", False),
+            "needs_ask_user": result.get("_needs_ask_user", False),
         },
     )
     
@@ -180,22 +245,38 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     if not repo:
         return {"error_message": "저장소 정보가 없습니다."}
     
-    # Skip if diagnosis_result already exists (followup case)
-    if state.get("diagnosis_result"):
-        return {}
-    
     user_context = safe_get(state, "user_context", {})
-    repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
+    current_repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
+    
+    # CRITICAL: Check for repo context mismatch (prevent cross-repo contamination)
+    existing_diagnosis = state.get("diagnosis_result")
+    if existing_diagnosis:
+        existing_repo_id = ""
+        if isinstance(existing_diagnosis, dict):
+            input_data = existing_diagnosis.get("input", {})
+            existing_owner = input_data.get("owner", "")
+            existing_repo = input_data.get("repo", "")
+            existing_repo_id = f"{existing_owner}/{existing_repo}"
+        
+        if existing_repo_id and existing_repo_id != current_repo_id:
+            # Different repo - invalidate old diagnosis_result
+            logger.info(
+                "[diagnosis_node] Repo context changed: %s → %s, invalidating old result",
+                existing_repo_id, current_repo_id
+            )
+        elif existing_repo_id == current_repo_id:
+            # Same repo - skip re-diagnosis (followup case)
+            return {}
     
     emit_event(
         EventType.NODE_STARTED,
         actor="diagnosis_node",
-        inputs={"repo": repo_id},
+        inputs={"repo": current_repo_id},
     )
     
     # Run diagnosis using ExpertRunner
     runner = DiagnosisRunner(
-        repo_id=repo_id,
+        repo_id=current_repo_id,
         user_context=user_context,
     )
     result = runner.run()
@@ -389,6 +470,11 @@ def should_run_diagnosis(state: SupervisorState) -> str:
     
     # Check for errors first
     if state.get("error_message"):
+        return "summarize"
+    
+    # Access Guard: repo inaccessible → ask_user (BLOCK diagnosis)
+    if state.get("_needs_ask_user"):
+        logger.debug(f"[route] Access guard: {intent}.{sub_intent} → summarize (ask_user)")
         return "summarize"
     
     # Disambiguation: repo 필요하지만 없음 → 전문가 노드 진입 금지

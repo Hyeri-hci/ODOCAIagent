@@ -35,7 +35,17 @@ AnswerKind = Literal[
     "concept",        # general_qa → concept
     "greeting",       # smalltalk → greeting
     "disambiguation", # entity guard → repo selection
+    "ask_user",       # access guard → permission/token request
 ]
+
+
+class RepoContext(TypedDict, total=False):
+    """Repo context for artifact validation (prevents cross-repo contamination)."""
+    owner: str
+    repo: str
+    repo_id: str  # "owner/repo"
+    default_branch: str
+    accessible: bool
 
 # V1 Explain target types
 ExplainTarget = Literal[
