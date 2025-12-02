@@ -1316,5 +1316,232 @@ class TestPlanningErrorRecovery:
         assert len(result.execution_order) == 2
 
 
+class TestIntentThresholds:
+    """Step 8: 의도별 임계/정책 분리 테스트."""
+    
+    def test_confidence_thresholds_by_cost(self):
+        """비용에 따른 임계값 검증: 고비용=높은임계, 저비용=낮은임계."""
+        from backend.agents.supervisor.intent_config import (
+            get_confidence_threshold,
+            get_disambiguation_threshold,
+        )
+        
+        # 고비용 (analyze, compare): 높은 임계
+        assert get_confidence_threshold("analyze") == 0.6
+        assert get_confidence_threshold("compare") == 0.6
+        
+        # 중비용 (followup, recommendation): 중간 임계
+        assert get_confidence_threshold("followup") == 0.5
+        assert get_confidence_threshold("recommendation") == 0.5
+        
+        # 저비용 (overview, general_qa): 낮은 임계
+        assert get_confidence_threshold("overview") == 0.4
+        assert get_confidence_threshold("general_qa") == 0.5
+        
+        # 경량 (smalltalk, help): 가장 낮은 임계
+        assert get_confidence_threshold("smalltalk") == 0.3
+        assert get_confidence_threshold("help") == 0.4
+    
+    def test_disambiguation_thresholds(self):
+        """Disambiguation 임계값 검증."""
+        from backend.agents.supervisor.intent_config import (
+            get_disambiguation_threshold,
+            should_disambiguate,
+        )
+        
+        # 고비용은 높은 disambiguation 임계
+        assert get_disambiguation_threshold("analyze") == 0.4
+        assert get_disambiguation_threshold("compare") == 0.4
+        
+        # 경량은 낮은 disambiguation 임계
+        assert get_disambiguation_threshold("smalltalk") == 0.15
+        assert get_disambiguation_threshold("help") == 0.2
+        
+        # should_disambiguate 로직
+        assert should_disambiguate("analyze", 0.35) is True
+        assert should_disambiguate("analyze", 0.45) is False
+        assert should_disambiguate("smalltalk", 0.10) is True
+        assert should_disambiguate("smalltalk", 0.20) is False
+    
+    def test_calibration_store(self):
+        """CalibrationStore 기본 동작 검증."""
+        from backend.agents.supervisor.calibration import CalibrationStore
+        
+        store = CalibrationStore()
+        
+        # 쿼리 기록
+        store.record_query("analyze", 0.7, {"analyze": 0.7, "followup": 0.2})
+        store.record_query("analyze", 0.55, {"analyze": 0.55, "followup": 0.3}, was_disambiguation=True)
+        
+        # 메트릭 조회
+        metrics = store.get_metrics("analyze")
+        assert metrics is not None
+        assert metrics["total_queries"] == 2
+        assert metrics["disambiguation_rate"] == 0.5
+    
+    def test_calibration_weekly_adjustment(self):
+        """주간 임계값 조정 검증."""
+        from backend.agents.supervisor.calibration import CalibrationStore
+        
+        store = CalibrationStore()
+        
+        # 충분한 데이터 기록 (disambiguation이 너무 적음 → 임계 올림)
+        for _ in range(20):
+            store.record_query("analyze", 0.8, {"analyze": 0.8})
+        
+        adjustment = store.compute_weekly_adjustment("analyze")
+        # Disambiguation이 0%라 임계값 올려야 함
+        assert adjustment > 0
+    
+    def test_check_disambiguation(self):
+        """Disambiguation 체크 로직 검증."""
+        from backend.agents.supervisor.calibration import check_disambiguation
+        
+        # 낮은 confidence → disambiguation
+        result = check_disambiguation("analyze", 0.3, has_repo=True)
+        assert result.should_disambiguate is True
+        
+        # repo 없으면 → disambiguation
+        result = check_disambiguation("analyze", 0.8, has_repo=False)
+        assert result.should_disambiguate is True
+        assert "저장소" in result.reason
+        
+        # 충분한 confidence + repo → 통과
+        result = check_disambiguation("analyze", 0.7, has_repo=True)
+        assert result.should_disambiguate is False
+    
+    def test_temperature_scaling(self):
+        """Temperature scaling 함수 검증."""
+        from backend.agents.supervisor.calibration import temperature_scale
+        
+        logits = {"analyze": 2.0, "followup": 1.0, "general_qa": 0.5}
+        
+        # temp=1.0: 원래 softmax
+        probs_1 = temperature_scale(logits, temperature=1.0)
+        assert probs_1["analyze"] > probs_1["followup"] > probs_1["general_qa"]
+        
+        # temp=2.0: 더 부드러운 분포
+        probs_2 = temperature_scale(logits, temperature=2.0)
+        # 높은 temp → 확률 차이 줄어듦
+        assert (probs_2["analyze"] - probs_2["followup"]) < (probs_1["analyze"] - probs_1["followup"])
+
+
+class TestToneGuide:
+    """Step 9: 한국어 프롬프트/톤 가이드 테스트."""
+    
+    def test_mode_mapping(self):
+        """Intent → Mode 매핑 검증."""
+        from backend.agents.supervisor.tone_guide import (
+            get_mode_for_intent,
+            PromptMode,
+        )
+        
+        # Fast mode
+        assert get_mode_for_intent("smalltalk") == PromptMode.FAST
+        assert get_mode_for_intent("help") == PromptMode.FAST
+        assert get_mode_for_intent("general_qa") == PromptMode.FAST
+        
+        # Expert mode
+        assert get_mode_for_intent("analyze") == PromptMode.EXPERT
+        assert get_mode_for_intent("compare") == PromptMode.EXPERT
+        assert get_mode_for_intent("followup") == PromptMode.EXPERT
+    
+    def test_tone_config_params(self):
+        """톤 설정 파라미터 검증."""
+        from backend.agents.supervisor.tone_guide import (
+            get_tone_config,
+            PromptMode,
+        )
+        
+        fast = get_tone_config(PromptMode.FAST)
+        expert = get_tone_config(PromptMode.EXPERT)
+        
+        # Fast: 높은 temperature, 적은 불릿
+        assert fast.temperature == 0.7
+        assert fast.max_bullets == 3
+        assert fast.max_sentences == 5
+        assert fast.allow_chitchat is True
+        
+        # Expert: 낮은 temperature, 많은 불릿
+        assert expert.temperature == 0.25
+        assert expert.max_bullets == 7
+        assert expert.max_sentences == 15
+        assert expert.allow_chitchat is False
+    
+    def test_llm_params_for_intent(self):
+        """Intent별 LLM 파라미터 검증."""
+        from backend.agents.supervisor.tone_guide import get_llm_params_for_intent
+        
+        # Fast mode intents
+        chat_params = get_llm_params_for_intent("general_qa")
+        assert chat_params["temperature"] == 0.7
+        
+        # Expert mode intents
+        analyze_params = get_llm_params_for_intent("analyze")
+        assert analyze_params["temperature"] == 0.25
+    
+    def test_tone_compliance_check(self):
+        """톤 준수 체크 검증."""
+        from backend.agents.supervisor.tone_guide import (
+            check_tone_compliance,
+            is_tone_compliant,
+            PromptMode,
+        )
+        
+        # 좋은 Expert 응답
+        good_expert = """### 분석 결과
+
+| 지표 | 점수 |
+|------|------|
+| 건강 점수 | 78점 |
+
+활동성이 85점으로 우수합니다.
+
+**다음 행동**
+- 점수 자세히 설명해줘"""
+        
+        results = check_tone_compliance(good_expert, PromptMode.EXPERT)
+        assert results["존댓말 사용"] is True
+        assert results["이모지 없음"] is True
+        assert results["데이터 인용"] is True
+        
+        # 나쁜 응답 (추측 표현)
+        bad_expert = "아마 이것은 좋은 것 같습니다."
+        results = check_tone_compliance(bad_expert, PromptMode.EXPERT)
+        assert results["추측 표현 없음"] is False
+    
+    def test_response_length_validation(self):
+        """응답 길이 검증."""
+        from backend.agents.supervisor.tone_guide import (
+            validate_response_length,
+            truncate_response,
+            PromptMode,
+        )
+        
+        short_text = "짧은 응답입니다. 좋아요."
+        is_valid, warning = validate_response_length(short_text, PromptMode.FAST)
+        assert is_valid is True
+        assert warning is None
+        
+        # 긴 텍스트 자르기
+        long_text = "테스트 " * 500
+        truncated = truncate_response(long_text, PromptMode.FAST)
+        assert len(truncated) < len(long_text)
+        assert "생략" in truncated
+    
+    def test_prompts_llm_params_updated(self):
+        """prompts.py LLM_PARAMS가 Step 9 기준으로 업데이트됨."""
+        from backend.agents.supervisor.prompts import LLM_PARAMS
+        
+        # Expert mode: 낮은 temperature
+        assert LLM_PARAMS["health_report"]["temperature"] == 0.25
+        assert LLM_PARAMS["score_explain"]["temperature"] == 0.2
+        assert LLM_PARAMS["followup_evidence"]["temperature"] == 0.2
+        
+        # Fast mode: 높은 temperature
+        assert LLM_PARAMS["chat"]["temperature"] == 0.7
+        assert LLM_PARAMS["greeting"]["temperature"] == 0.7
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -450,15 +450,18 @@ def _format_explain_context(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# LLM Parameters
+# LLM Parameters (Step 9: Fast vs Expert 모드별 파라미터)
+# Fast mode: temp=0.7, Expert mode: temp=0.2-0.3, 공통 top_p=0.9
+
 LLM_PARAMS = {
+    # Expert Mode (건조·정확, 데이터 기반)
     "health_report": {
-        "temperature": 0.3,
+        "temperature": 0.25,
         "max_tokens": 1024,
         "top_p": 0.9,
     },
     "score_explain": {
-        "temperature": 0.25,
+        "temperature": 0.2,
         "max_tokens": 512,
         "top_p": 0.9,
     },
@@ -467,14 +470,26 @@ LLM_PARAMS = {
         "max_tokens": 400,
         "top_p": 0.9,
     },
+    "compare": {
+        "temperature": 0.25,
+        "max_tokens": 1200,
+        "top_p": 0.9,
+    },
+    
+    # Fast Mode (공손·간결)
     "overview": {
-        "temperature": 0.3,
+        "temperature": 0.5,
         "max_tokens": 400,
         "top_p": 0.9,
     },
     "chat": {
         "temperature": 0.7,
         "max_tokens": 300,
+        "top_p": 0.9,
+    },
+    "greeting": {
+        "temperature": 0.7,
+        "max_tokens": 200,
         "top_p": 0.9,
     },
 }

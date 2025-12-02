@@ -16,17 +16,33 @@ VALID_INTENTS: list[str] = ["analyze", "followup", "general_qa", "smalltalk", "h
 VALID_SUB_INTENTS: list[str] = ["health", "onboarding", "explain", "evidence", "chat", "greeting", "chitchat", "getting_started", "concept", "repo"]
 
 
-# Confidence thresholds for hierarchical routing
+# Confidence thresholds for hierarchical routing (Step 8: 의도별 임계)
+# 비용에 맞춘 전환 기준: 고비용 intent는 높은 임계, 저비용은 낮은 임계
 CONFIDENCE_THRESHOLDS: dict[str, float] = {
-    "smalltalk": 0.3,      # Low bar for greetings
-    "help": 0.4,           # Low bar for help requests
-    "overview": 0.4,       # Low bar for repo introductions
-    "general_qa": 0.5,     # Medium bar for general questions
-    "followup": 0.5,       # Medium bar for follow-ups
-    "analyze": 0.6,        # High bar for diagnosis (expensive operation)
+    "smalltalk": 0.3,      # 경량: 가장 낮은 임계
+    "help": 0.4,           # 경량: 낮은 임계
+    "overview": 0.4,       # 저비용: 낮은 임계
+    "general_qa": 0.5,     # 저비용: 중간 임계
+    "followup": 0.5,       # 중비용: 중간 임계
+    "recommendation": 0.5, # 중비용: 중간 임계
+    "analyze": 0.6,        # 고비용: 높은 임계
+    "compare": 0.6,        # 고비용: 높은 임계
+}
+
+# Disambiguation 임계 (이 미만이면 사용자에게 명확화 요청)
+DISAMBIGUATION_THRESHOLDS: dict[str, float] = {
+    "smalltalk": 0.15,
+    "help": 0.2,
+    "overview": 0.25,
+    "general_qa": 0.3,
+    "followup": 0.3,
+    "recommendation": 0.3,
+    "analyze": 0.4,
+    "compare": 0.4,
 }
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.5
+DEFAULT_DISAMBIGUATION_THRESHOLD = 0.3
 
 
 def get_confidence_threshold(intent: str) -> float:
@@ -34,9 +50,20 @@ def get_confidence_threshold(intent: str) -> float:
     return CONFIDENCE_THRESHOLDS.get(intent, DEFAULT_CONFIDENCE_THRESHOLD)
 
 
+def get_disambiguation_threshold(intent: str) -> float:
+    """Get disambiguation threshold for an intent."""
+    return DISAMBIGUATION_THRESHOLDS.get(intent, DEFAULT_DISAMBIGUATION_THRESHOLD)
+
+
 def should_degrade_to_help(intent: str, confidence: float) -> bool:
     """Check if low confidence should degrade to help.getting_started."""
     threshold = get_confidence_threshold(intent)
+    return confidence < threshold
+
+
+def should_disambiguate(intent: str, confidence: float) -> bool:
+    """Check if confidence is too low and requires disambiguation."""
+    threshold = get_disambiguation_threshold(intent)
     return confidence < threshold
 
 
