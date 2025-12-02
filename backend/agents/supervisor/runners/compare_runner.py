@@ -39,8 +39,8 @@ def _normalize_error_reason(error: Exception, http_status: Optional[int] = None)
     elif "429" in error_str:
         status = 429
     
-    # Map to standard reason codes
-    if status == 404 or "not found" in error_str:
+    # Map to standard reason codes (check various formats)
+    if status == 404 or "not found" in error_str or "not_found" in error_str:
         return "not_found", status or 404, detail
     elif status == 403 or "forbidden" in error_str or "access" in error_str:
         return "forbidden", status or 403, detail
@@ -174,6 +174,7 @@ class CompareRunner(ExpertRunner):
                 )
         except Exception as e:
             logger.warning(f"Diagnosis A failed: {e}")
+            self._diagnosis_a = None
         
         # Diagnosis B
         try:
@@ -194,8 +195,18 @@ class CompareRunner(ExpertRunner):
                 )
         except Exception as e:
             logger.warning(f"Diagnosis B failed: {e}")
+            self._diagnosis_b = None
         
-        # Build comparison text
+        # Check for partial failures - if one diagnosis failed, use fallback
+        overview_a = self.collector.get("repo_a_overview")
+        overview_b = self.collector.get("repo_b_overview")
+        
+        # If either repo has no overview (not just diagnosis failure), use fallback
+        if not overview_a or not overview_b:
+            logger.info(f"[compare] Partial failure detected: A={bool(overview_a)}, B={bool(overview_b)}")
+            return self._fallback_execute()
+        
+        # Both overviews available - build full comparison
         text = self._build_comparison_text()
         answer = self._build_answer(text)
         
