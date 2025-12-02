@@ -394,3 +394,23 @@ class ExpertRunner(ABC):
             sources=sources,
             source_kinds=kinds,
         )
+
+
+def validate_runner_output(output: Dict[str, Any]) -> tuple[bool, List[str]]:
+    """Validates runner output structure. Returns (is_valid, errors)."""
+    errors = []
+    
+    # Check sources field
+    sources = output.get("sources")
+    if sources is None:
+        errors.append("missing 'sources' field")
+    elif not isinstance(sources, list):
+        errors.append("'sources' must be a list")
+    elif len(sources) == 0:
+        errors.append("'sources' cannot be empty")
+    
+    # Check summary/text field
+    if not output.get("summary") and not output.get("text"):
+        errors.append("missing 'summary' or 'text' field")
+    
+    return (len(errors) == 0, errors)

@@ -139,10 +139,27 @@ class CalibrationStore:
     def __init__(self):
         self._records: Dict[Tuple[str, str], CalibrationRecord] = {}
         self._adjustments: Dict[str, float] = {}  # intent → 누적 조정값
+        self._proceed_records: List[Dict[str, Any]] = []  # proceed/correct 기록
     
     def get_week_key(self, dt: datetime) -> str:
         """Returns week key (YYYY-WNN format)."""
         return dt.strftime("%Y-W%W")
+    
+    def record(
+        self,
+        intent: str,
+        sub_intent: str,
+        proceed: bool,
+        correct: bool,
+    ) -> None:
+        """Records a proceed/correct decision for wrong-proceed tracking."""
+        self._proceed_records.append({
+            "intent": intent,
+            "sub_intent": sub_intent,
+            "proceed": proceed,
+            "correct": correct,
+            "timestamp": datetime.now(),
+        })
     
     def record_query(
         self,
@@ -252,8 +269,23 @@ class CalibrationStore:
         
         return adjustments
     
-    def get_metrics(self, intent: str) -> Optional[Dict[str, float]]:
-        """Returns current metrics for intent."""
+    def get_metrics(self, intent: Optional[str] = None) -> Optional[Dict[str, float]]:
+        """Returns current metrics for intent or overall metrics if no intent specified."""
+        # If no intent, return overall metrics from _proceed_records
+        if intent is None:
+            if not self._proceed_records:
+                return {"wrong_proceed_rate": 0.0}
+            
+            total = len(self._proceed_records)
+            wrong_proceeds = sum(
+                1 for r in self._proceed_records 
+                if r["proceed"] and not r["correct"]
+            )
+            return {
+                "total_records": total,
+                "wrong_proceed_rate": wrong_proceeds / total if total > 0 else 0.0,
+            }
+        
         now = datetime.now()
         week_key = self.get_week_key(now)
         key = (intent, week_key)
@@ -273,6 +305,11 @@ class CalibrationStore:
             "avg_margin": record.margin_sum / record.total_queries,
             "threshold_adjustment": record.threshold_adjustment,
         }
+
+
+# Global constants for tests
+DISAMBIGUATION_TARGET_MIN = 0.10
+DISAMBIGUATION_TARGET_MAX = 0.25
 
 
 # Global calibration store

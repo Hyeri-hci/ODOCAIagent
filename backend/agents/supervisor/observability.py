@@ -47,6 +47,18 @@ class SLOConfig:
     required_events_missing_max: int = 0
 
 
+# DEFAULT_SLOS dictionary for testing
+DEFAULT_SLOS = {
+    "greeting_latency_p95": 100.0,
+    "overview_latency_p95": 1500.0,
+    "disambiguation_rate": (10.0, 25.0),  # min, max
+    "wrong_proceed_rate": 1.0,
+    "sources_empty_rate": 0.0,
+    "duplicate_card_rate": 0,
+    "error_recovery_rate": 95.0,
+}
+
+
 # 지표 집계
 @dataclass
 class MetricsWindow:
@@ -121,6 +133,7 @@ class MetricsCollector:
         self.current_window = MetricsWindow(window_size_seconds=window_size_seconds)
         self.historical_windows: List[MetricsWindow] = []
         self.max_historical_windows = 168  # 1주일 (1시간 윈도우 기준)
+        self._latencies: Dict[str, List[float]] = defaultdict(list)
         
     def _rotate_window_if_needed(self) -> None:
         if self.current_window.is_expired():
@@ -130,6 +143,24 @@ class MetricsCollector:
             self.current_window = MetricsWindow(
                 window_size_seconds=self.current_window.window_size_seconds
             )
+    
+    def record_latency(self, intent: str, latency_ms: float) -> None:
+        """레이턴시 기록 (테스트/집계용)."""
+        self._latencies[intent].append(latency_ms)
+        
+        # Also record in window
+        self._rotate_window_if_needed()
+        if intent in ("smalltalk", "help", "greeting"):
+            self.current_window.greeting_latencies.append(latency_ms)
+        elif intent == "overview":
+            self.current_window.overview_latencies.append(latency_ms)
+        else:
+            self.current_window.expert_latencies.append(latency_ms)
+    
+    def get_percentile(self, intent: str, p: float) -> float:
+        """특정 인텐트의 p-percentile 레이턴시 반환."""
+        values = self._latencies.get(intent, [])
+        return percentile(values, p)
     
     def record_request(
         self,

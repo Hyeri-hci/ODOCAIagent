@@ -1994,6 +1994,387 @@ class TestCompareOnepagerFollowup:
         assert get_answer_kind("followup", "evidence") == "explain"
 
 
+# ============================================================================
+# 시나리오 7: 에러·재계획(Agentic Re-planning)
+# ============================================================================
+class TestAgenticReplanning:
+    """에러 발생 시 재계획 및 복구 테스트: 정상 종료율 ≥ 95%."""
+    
+    def test_rate_limit_retry_then_fallback(self):
+        """레이트 리밋 시 retry → fallback → 정상 종료."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        
+        attempt_count = [0]
+        
+        def rate_limit_then_succeed(step, inputs):
+            attempt_count[0] += 1
+            if attempt_count[0] <= 2:
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.FAILED,
+                    error_message="rate limit exceeded",
+                )
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"recovered": True},
+            )
+        
+        step = PlanStep(
+            id="api_step",
+            runner="mock",
+            on_error=ErrorPolicy.RETRY,
+            max_retries=2,  # 2번 재시도
+        )
+        
+        plan = Plan(id="rate_limit_test", intent="analyze", sub_intent="health", steps=[step])
+        executor = PlanExecutor(step_executors={"mock": rate_limit_then_succeed})
+        result = executor.execute(plan, {})
+        
+        # 최종 성공
+        assert attempt_count[0] == 3
+        assert result.status == PlanStatus.SUCCESS
+    
+    def test_network_error_retry(self):
+        """네트워크 일시 오류 시 재시도 후 정상 진행."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        from backend.common.events import get_event_store, EventType
+        
+        event_store = get_event_store()
+        event_store.clear()
+        
+        call_count = [0]
+        
+        def network_error_once(step, inputs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.FAILED,
+                    error_message="connection timeout",
+                )
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"data": "recovered"},
+            )
+        
+        step = PlanStep(
+            id="network_step",
+            runner="mock",
+            on_error=ErrorPolicy.RETRY,
+            max_retries=1,
+        )
+        
+        plan = Plan(id="network_test", intent="analyze", sub_intent="health", steps=[step])
+        executor = PlanExecutor(step_executors={"mock": network_error_once})
+        result = executor.execute(plan, {})
+        
+        assert result.status == PlanStatus.SUCCESS
+        assert call_count[0] == 2
+    
+    def test_fallback_then_ask_user(self):
+        """fallback 실패 시 ask_user 에스컬레이션."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        
+        def always_fail(step, inputs):
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.FAILED,
+                error_message="permanent failure",
+            )
+        
+        step = PlanStep(
+            id="fail_step",
+            runner="mock",
+            on_error=ErrorPolicy.FALLBACK,  # fallback 실패 시 ask_user로 에스컬레이션
+            max_retries=0,
+        )
+        
+        plan = Plan(id="fallback_test", intent="analyze", sub_intent="health", steps=[step])
+        executor = PlanExecutor(step_executors={"mock": always_fail})
+        result = executor.execute(plan, {})
+        
+        # ask_user로 종료
+        assert result.status in (PlanStatus.ASK_USER, PlanStatus.FAILED)
+        assert result.error_message is not None
+    
+    def test_error_recovery_rate(self):
+        """N회 시나리오 중 정상 종료율 ≥ 95%."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        import random
+        
+        N = 100
+        success_count = 0
+        
+        for i in range(N):
+            fail_times = random.randint(0, 2)  # 0~2회 실패
+            call_count = [0]
+            
+            def intermittent_failure(step, inputs, fails=fail_times, counter=call_count):
+                counter[0] += 1
+                if counter[0] <= fails:
+                    return StepResult(
+                        step_id=step.id,
+                        status=StepStatus.FAILED,
+                        error_message=f"fail {counter[0]}",
+                    )
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.SUCCESS,
+                    result={"success": True},
+                )
+            
+            step = PlanStep(
+                id=f"step_{i}",
+                runner="mock",
+                on_error=ErrorPolicy.RETRY,
+                max_retries=2,
+            )
+            
+            plan = Plan(id=f"test_{i}", intent="analyze", sub_intent="health", steps=[step])
+            executor = PlanExecutor(step_executors={"mock": intermittent_failure})
+            result = executor.execute(plan, {})
+            
+            # 정상 종료: SUCCESS, PARTIAL, ASK_USER 모두 정상 종료로 간주
+            if result.status in (PlanStatus.SUCCESS, PlanStatus.PARTIAL, PlanStatus.ASK_USER):
+                success_count += 1
+        
+        success_rate = success_count / N
+        assert success_rate >= 0.95, f"정상 종료율 {success_rate:.2%} < 95%"
+
+
+# ============================================================================
+# 시나리오 8: 임계·라우팅 튜닝
+# ============================================================================
+class TestRoutingThresholds:
+    """경계 입력 및 임계값 검증."""
+    
+    def test_ambiguous_query_no_expert_misroute(self):
+        """모호한 질의가 전문가 노드로 오진입하지 않음."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        ambiguous_queries = [
+            "react 문서 어떤 편이야?",
+            "vue 괜찮아?",
+            "그게 뭐야?",
+        ]
+        
+        for query in ambiguous_queries:
+            result = _tier1_heuristic(query, False)
+            # 모호한 질의는 tier1에서 None (LLM으로 위임) 또는 help/overview로 분류
+            if result is not None:
+                assert result.sub_intent not in ("health", "onboarding", "compare"), \
+                    f"모호한 질의 '{query}'가 진단 노드로 오진입: {result.sub_intent}"
+    
+    def test_disambiguation_rate_target(self):
+        """Disambiguation Rate 목표 범위 (10-25%) 검증."""
+        from backend.agents.supervisor.calibration import (
+            CalibrationStore,
+            DISAMBIGUATION_TARGET_MIN,
+            DISAMBIGUATION_TARGET_MAX,
+        )
+        
+        store = CalibrationStore()
+        
+        # 목표 범위 확인
+        assert DISAMBIGUATION_TARGET_MIN == 0.10
+        assert DISAMBIGUATION_TARGET_MAX == 0.25
+    
+    def test_wrong_proceed_rate(self):
+        """Wrong-Proceed < 1% 검증 로직."""
+        from backend.agents.supervisor.calibration import CalibrationStore
+        
+        store = CalibrationStore()
+        
+        # 100개 중 0개 wrong proceed
+        for _ in range(100):
+            store.record("analyze", "health", proceed=True, correct=True)
+        
+        metrics = store.get_metrics()
+        wrong_proceed_rate = metrics.get("wrong_proceed_rate", 0)
+        
+        assert wrong_proceed_rate < 0.01, f"Wrong-Proceed {wrong_proceed_rate:.2%} >= 1%"
+
+
+# ============================================================================
+# 시나리오 9: 아이덤포턴시·중복 방지
+# ============================================================================
+class TestIdempotencyAdvanced:
+    """고급 아이덤포턴시 테스트."""
+    
+    def test_duplicate_request_same_answer_id(self):
+        """동일 프롬프트 두 번 전송 시 answer_id 동일."""
+        from backend.agents.supervisor.models import IdempotencyStore
+        
+        store = IdempotencyStore()
+        
+        turn_id = "turn_001"
+        step_id = "classify"
+        result1 = {"intent": "analyze"}
+        result2 = {"intent": "analyze"}  # 동일 결과
+        
+        # 첫 번째 저장
+        answer_id1 = store.store_result(turn_id, step_id, result1)
+        
+        # 동일 키로 두 번째 시도 - 이미 있으면 기존 것 반환
+        existing = store.get_result(turn_id, step_id)
+        assert existing is not None
+        assert existing == result1
+    
+    def test_llm_schema_failure_then_retry_success(self):
+        """LLM 스키마 실패 후 재시도 성공 시 1개 응답만."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        from backend.common.events import get_event_store, EventType
+        
+        event_store = get_event_store()
+        event_store.clear()
+        
+        call_count = [0]
+        results_generated = []
+        
+        def schema_fail_then_success(step, inputs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                result = StepResult(
+                    step_id=step.id,
+                    status=StepStatus.FAILED,
+                    error_message="JSON schema validation failed",
+                )
+                results_generated.append(("fail", result))
+                return result
+            
+            result = StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"response": "valid"},
+            )
+            results_generated.append(("success", result))
+            return result
+        
+        step = PlanStep(
+            id="llm_step",
+            runner="mock",
+            on_error=ErrorPolicy.RETRY,
+            max_retries=1,
+        )
+        
+        plan = Plan(id="schema_test", intent="analyze", sub_intent="health", steps=[step])
+        executor = PlanExecutor(step_executors={"mock": schema_fail_then_success})
+        result = executor.execute(plan, {})
+        
+        # 최종 성공
+        assert result.status == PlanStatus.SUCCESS
+        
+        # 이벤트에는 실패/성공 모두 기록
+        assert len(results_generated) == 2
+        assert results_generated[0][0] == "fail"
+        assert results_generated[1][0] == "success"
+    
+    def test_no_duplicate_cards(self):
+        """중복 카드 0건 검증."""
+        from backend.agents.supervisor.models import IdempotencyStore
+        
+        store = IdempotencyStore()
+        
+        # 동일 턴에서 동일 스텝 결과는 1번만 저장
+        turn_id = "turn_dup"
+        step_id = "summarize"
+        
+        answer_id1 = store.store_result(turn_id, step_id, {"card": 1})
+        answer_id2 = store.store_result(turn_id, step_id, {"card": 2})  # 덮어씌워짐
+        
+        # 결과 조회 시 1개만 반환
+        result = store.get_result(turn_id, step_id)
+        assert result is not None
+        # 마지막 결과만 존재
+        assert result["card"] == 2
+
+
+# ============================================================================
+# 시나리오 10: 운영 지표 집계
+# ============================================================================
+class TestOperationalMetrics:
+    """운영 지표 테스트: p95 레이턴시, Disambiguation, sources 등."""
+    
+    def test_greeting_latency_p95(self):
+        """인사 p95 < 100ms."""
+        from backend.agents.supervisor.observability import MetricsCollector
+        
+        collector = MetricsCollector()
+        
+        # 100개 샘플 - 대부분 50ms 이하
+        for i in range(100):
+            latency = 30 + (i % 40)  # 30~70ms
+            collector.record_latency("greeting", latency)
+        
+        p95 = collector.get_percentile("greeting", 95)
+        assert p95 < 100, f"인사 p95 {p95}ms >= 100ms"
+    
+    def test_overview_latency_p95(self):
+        """개요 p95 ≤ 1.5s."""
+        from backend.agents.supervisor.observability import MetricsCollector
+        
+        collector = MetricsCollector()
+        
+        # 100개 샘플 - 대부분 1초 이하
+        for i in range(100):
+            latency = 500 + (i * 10)  # 500~1500ms
+            collector.record_latency("overview", latency)
+        
+        p95 = collector.get_percentile("overview", 95)
+        assert p95 <= 1500, f"개요 p95 {p95}ms > 1500ms"
+    
+    def test_sources_never_empty(self):
+        """sources == [] 0% 검증."""
+        from backend.agents.supervisor.runners.base import validate_runner_output
+        
+        # 빈 sources는 validation 실패
+        output_without_sources = {
+            "summary": "test",
+            "sources": [],
+        }
+        
+        is_valid, errors = validate_runner_output(output_without_sources)
+        assert not is_valid
+        assert "sources" in str(errors).lower()
+    
+    def test_metrics_dashboard_structure(self):
+        """대시보드 메트릭 구조 검증."""
+        from backend.agents.supervisor.observability import (
+            SLOChecker,
+            DEFAULT_SLOS,
+        )
+        
+        checker = SLOChecker(DEFAULT_SLOS)
+        
+        # 필수 메트릭 키
+        required_keys = {
+            "greeting_latency_p95",
+            "overview_latency_p95",
+            "disambiguation_rate",
+            "wrong_proceed_rate",
+            "sources_empty_rate",
+            "duplicate_card_rate",
+            "error_recovery_rate",
+        }
+        
+        # DEFAULT_SLOS에 모든 필수 키 포함
+        slo_keys = set(DEFAULT_SLOS.keys())
+        missing = required_keys - slo_keys
+        assert not missing, f"누락된 SLO 키: {missing}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

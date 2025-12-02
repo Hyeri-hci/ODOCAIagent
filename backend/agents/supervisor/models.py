@@ -133,3 +133,50 @@ def decide_explain_target(state: SupervisorState) -> ExplainTarget:
             return "task_recommendation"
     
     return "general"
+
+
+# Idempotency Store for duplicate prevention
+class IdempotencyStore:
+    """In-memory store for idempotent execution (turn_id + step_id → result)."""
+    
+    def __init__(self, enabled: bool = True):
+        self._enabled = enabled
+        self._store: Dict[str, Any] = {}  # key = f"{turn_id}:{step_id}"
+        self._answer_ids: Dict[str, str] = {}  # key → answer_id
+    
+    def _make_key(self, turn_id: str, step_id: str) -> str:
+        return f"{turn_id}:{step_id}"
+    
+    def store_result(self, turn_id: str, step_id: str, result: Any) -> str:
+        """Stores result and returns answer_id."""
+        if not self._enabled:
+            import uuid
+            return f"ans_{uuid.uuid4().hex[:12]}"
+        
+        key = self._make_key(turn_id, step_id)
+        self._store[key] = result
+        
+        # Generate or reuse answer_id
+        if key not in self._answer_ids:
+            import uuid
+            self._answer_ids[key] = f"ans_{uuid.uuid4().hex[:12]}"
+        
+        return self._answer_ids[key]
+    
+    def get_result(self, turn_id: str, step_id: str) -> Optional[Any]:
+        """Gets cached result if exists."""
+        if not self._enabled:
+            return None
+        
+        key = self._make_key(turn_id, step_id)
+        return self._store.get(key)
+    
+    def get_answer_id(self, turn_id: str, step_id: str) -> Optional[str]:
+        """Gets answer_id if exists."""
+        key = self._make_key(turn_id, step_id)
+        return self._answer_ids.get(key)
+    
+    def clear(self) -> None:
+        """Clears all stored results."""
+        self._store.clear()
+        self._answer_ids.clear()

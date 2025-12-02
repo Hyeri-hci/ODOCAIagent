@@ -87,6 +87,10 @@ if "example_query" not in st.session_state:
     st.session_state.example_query = None
 if "session_id" not in st.session_state:
     st.session_state.session_id = uuid.uuid4().hex
+if "debug_events" not in st.session_state:
+    st.session_state.debug_events = []  # 디버그 이벤트 저장
+if "turn_metrics" not in st.session_state:
+    st.session_state.turn_metrics = []  # 턴별 메트릭 저장
 
 
 # ============================================================================
@@ -102,8 +106,9 @@ with st.sidebar:
     show_log = st.checkbox("실행 로그 표시", value=True)
     show_scores = st.checkbox("점수 상세 표시", value=False)
     show_tasks = st.checkbox("온보딩 Task 표시", value=False)
-    debug_mode = st.checkbox("디버그 모드", value=False)
+    debug_mode = st.checkbox("디버그 모드", value=False, help="이벤트, 에러, 재계획 정보 표시")
     developer_mode = st.checkbox("개발자 모드", value=False, help="answer_kind, last_brief 등 내부 정보 표시")
+    show_metrics = st.checkbox("운영 지표 대시보드", value=False, help="SLO, 레이턴시, 에러율 표시")
     
     st.divider()
     
@@ -164,6 +169,55 @@ with st.sidebar:
         st.markdown("**분석된 저장소**")
         for repo_key in st.session_state.analysis_history.keys():
             st.caption(f"- {repo_key}")
+    
+    # 운영 지표 대시보드
+    if show_metrics:
+        st.divider()
+        st.markdown("**운영 지표**")
+        
+        turn_metrics = st.session_state.get("turn_metrics", [])
+        if turn_metrics:
+            # 최근 10개 턴의 평균 메트릭
+            latencies = [m.get("latency_ms", 0) for m in turn_metrics[-10:]]
+            avg_latency = sum(latencies) / len(latencies) if latencies else 0
+            
+            col_m1, col_m2 = st.columns(2)
+            with col_m1:
+                st.metric("평균 레이턴시", f"{avg_latency:.0f}ms")
+            with col_m2:
+                success_count = sum(1 for m in turn_metrics if m.get("success", False))
+                st.metric("성공률", f"{success_count}/{len(turn_metrics)}")
+            
+            # SLO 상태
+            errors = [m for m in turn_metrics if m.get("error")]
+            if errors:
+                st.caption(f":red[에러 {len(errors)}건]")
+            else:
+                st.caption(":green[SLO 정상]")
+        else:
+            st.caption("데이터 없음")
+    
+    # 디버그 이벤트 뷰어
+    if debug_mode:
+        st.divider()
+        st.markdown("**디버그 이벤트**")
+        
+        debug_events = st.session_state.get("debug_events", [])
+        if debug_events:
+            for event in debug_events[-5:]:
+                event_type = event.get("type", "unknown")
+                if "error" in event_type.lower():
+                    st.caption(f":red[{event_type}]")
+                elif "retry" in event_type.lower() or "replan" in event_type.lower():
+                    st.caption(f":orange[{event_type}]")
+                else:
+                    st.caption(f":gray[{event_type}]")
+            
+            if st.button("이벤트 초기화", key="clear_events"):
+                st.session_state.debug_events = []
+                st.rerun()
+        else:
+            st.caption("이벤트 없음")
 
 
 # ============================================================================
@@ -471,6 +525,58 @@ if prompt:
                                     if isinstance(task, dict):
                                         st.markdown(f"- {task.get('title', 'N/A')}")
                 
+                # 디버그 모드: 추가 정보 표시
+                if debug_mode:
+                    with st.expander("디버그 정보"):
+                        # Plan/Step 정보
+                        plan_info = result.get("_plan_info", {})
+                        if plan_info:
+                            st.markdown("**Plan 실행 정보**")
+                            st.json(plan_info)
+                        
+                        # 에러/재시도 정보
+                        errors = result.get("_errors", [])
+                        retries = result.get("_retries", [])
+                        
+                        if errors:
+                            st.markdown("**에러 발생**")
+                            for err in errors:
+                                st.error(f"{err.get('type', 'unknown')}: {err.get('message', '')}")
+                        
+                        if retries:
+                            st.markdown("**재시도 이력**")
+                            for retry in retries:
+                                st.warning(f"Step {retry.get('step_id')}: {retry.get('count')}회 재시도")
+                        
+                        # answer_id (아이덤포턴시)
+                        answer_id = result.get("answer_id")
+                        if answer_id:
+                            st.caption(f"Answer ID: `{answer_id}`")
+                        
+                        # sources 검증
+                        sources = result.get("answer_contract", {}).get("sources", [])
+                        if sources:
+                            st.caption(f"Sources: {len(sources)}개")
+                        else:
+                            st.caption(":red[Sources: 없음 (검증 실패)]")
+                    
+                    # 디버그 이벤트 저장
+                    st.session_state.debug_events.append({
+                        "type": f"turn_complete:{metadata['intent']}/{metadata['sub_intent']}",
+                        "timestamp": time.time(),
+                        "latency_ms": elapsed * 1000,
+                    })
+                
+                # 턴 메트릭 저장
+                st.session_state.turn_metrics.append({
+                    "timestamp": time.time(),
+                    "latency_ms": elapsed * 1000,
+                    "intent": metadata["intent"],
+                    "sub_intent": metadata["sub_intent"],
+                    "success": True,
+                    "error": None,
+                })
+                
                 # 메시지 저장
                 st.session_state.messages.append({
                     "role": "assistant",
@@ -481,6 +587,7 @@ if prompt:
             except Exception as e:
                 status_placeholder.empty()
                 error_str = str(e)
+                elapsed_error = time.time() - start_time
                 
                 # GitHub NOT_FOUND 오류 처리
                 if "NOT_FOUND" in error_str or "Could not resolve" in error_str:
@@ -491,18 +598,49 @@ if prompt:
                     
                     error_msg = f"저장소를 찾을 수 없습니다: `{repo_name}`\n\n정확한 저장소 이름을 확인해주세요. 예: `facebook/react`, `microsoft/vscode`"
                     st.warning(error_msg)
+                    error_type = "not_found"
+                elif "rate limit" in error_str.lower():
+                    error_msg = "GitHub API 요청 한도에 도달했습니다. 잠시 후 다시 시도해 주세요."
+                    st.warning(error_msg)
+                    error_type = "rate_limit"
+                elif "timeout" in error_str.lower():
+                    error_msg = "요청 시간이 초과되었습니다. 네트워크 상태를 확인하고 다시 시도해 주세요."
+                    st.warning(error_msg)
+                    error_type = "timeout"
                 else:
                     error_msg = f"오류 발생: {e}"
                     st.error(error_msg)
+                    error_type = "unknown"
                 
+                # 디버그 모드: 상세 에러 정보
                 if debug_mode:
                     import traceback
-                    st.code(traceback.format_exc())
+                    with st.expander("에러 상세 (디버그)"):
+                        st.code(traceback.format_exc())
+                        st.caption(f"에러 유형: `{error_type}`")
+                        st.caption(f"소요 시간: `{elapsed_error:.2f}초`")
+                    
+                    # 디버그 이벤트 저장
+                    st.session_state.debug_events.append({
+                        "type": f"error:{error_type}",
+                        "timestamp": time.time(),
+                        "message": error_str[:100],
+                    })
+                
+                # 턴 메트릭 저장 (에러 포함)
+                st.session_state.turn_metrics.append({
+                    "timestamp": time.time(),
+                    "latency_ms": elapsed_error * 1000,
+                    "intent": "unknown",
+                    "sub_intent": "unknown",
+                    "success": False,
+                    "error": error_type,
+                })
                 
                 st.session_state.messages.append({
                     "role": "assistant",
                     "content": error_msg,
-                    "metadata": {}
+                    "metadata": {"error": error_type}
                 })
     
     st.rerun()
