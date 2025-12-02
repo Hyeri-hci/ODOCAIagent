@@ -20,6 +20,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 import streamlit as st
+from streamlit_mermaid import st_mermaid
 
 st.set_page_config(
     page_title="Supervisor Agent Demo",
@@ -301,10 +302,8 @@ def render_graph_visualization(result: dict | None):
         "current": "fill:#2196F3,stroke:#333,stroke-width:3px,color:#fff",
     }
     
-    # Mermaid 다이어그램 생성
-    mermaid_code = f'''
-```mermaid
-flowchart TD
+    # Mermaid 다이어그램 생성 (streamlit-mermaid용 - 마크다운 코드블록 없이)
+    mermaid_code = f'''flowchart TD
     subgraph Input
         START((Query))
     end
@@ -368,16 +367,15 @@ flowchart TD
 '''
     
     # 공통 스타일
-    mermaid_code += f'''
+    mermaid_code += '''
     style START fill:#9C27B0,stroke:#333,stroke-width:2px,color:#fff
     style INIT fill:#2196F3,stroke:#333,stroke-width:2px,color:#fff
     style CLASSIFY fill:#2196F3,stroke:#333,stroke-width:2px,color:#fff
     style SUMMARIZE fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
     style ANSWER fill:#E91E63,stroke:#333,stroke-width:2px,color:#fff
-```
 '''
     
-    st.markdown(mermaid_code)
+    st_mermaid(mermaid_code, height=400)
     
     # 실행 경로 텍스트 설명
     path_desc = {
