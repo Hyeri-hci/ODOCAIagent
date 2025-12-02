@@ -12,6 +12,7 @@ SubIntent = Literal[
     "health",          # analyze: repo health diagnosis
     "onboarding",      # analyze: onboarding-focused diagnosis
     "explain",         # followup: explain scores/metrics
+    "evidence",        # followup: explain evidence/reasoning
     "chat",            # general_qa: general conversation
     "greeting",        # smalltalk: greeting response
     "chitchat",        # smalltalk: casual chat
@@ -37,6 +38,16 @@ ExplainTarget = Literal[
 # Default values
 DEFAULT_INTENT: SupervisorIntent = "analyze"
 DEFAULT_SUB_INTENT: SubIntent = "health"
+
+
+class PrevTurnContext(TypedDict, total=False):
+    """Context from previous turn for follow-up handling."""
+    intent: SupervisorIntent
+    sub_intent: SubIntent
+    answer_kind: AnswerKind
+    repo_id: str
+    artifacts: Dict[str, Any]  # scores, labels, tasks 등
+    sources: List[str]
 
 
 class RepoInfo(TypedDict):

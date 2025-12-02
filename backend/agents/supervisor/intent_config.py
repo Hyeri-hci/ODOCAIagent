@@ -13,7 +13,7 @@ from .models import (
 
 
 VALID_INTENTS: list[str] = ["analyze", "followup", "general_qa", "smalltalk", "help", "overview"]
-VALID_SUB_INTENTS: list[str] = ["health", "onboarding", "explain", "chat", "greeting", "chitchat", "getting_started", "concept", "repo"]
+VALID_SUB_INTENTS: list[str] = ["health", "onboarding", "explain", "evidence", "chat", "greeting", "chitchat", "getting_started", "concept", "repo"]
 
 
 # Confidence thresholds for hierarchical routing
@@ -45,6 +45,7 @@ V1_SUPPORTED_INTENTS: Set[Tuple[str, str]] = {
     ("analyze", "health"),
     ("analyze", "onboarding"),
     ("followup", "explain"),
+    ("followup", "evidence"),
     ("general_qa", "chat"),
     ("general_qa", "concept"),
     ("smalltalk", "greeting"),
@@ -69,6 +70,7 @@ INTENT_META: dict[Tuple[str, str], IntentMeta] = {
     ("analyze", "health"): {"requires_repo": True, "runs_diagnosis": True},
     ("analyze", "onboarding"): {"requires_repo": True, "runs_diagnosis": True},
     ("followup", "explain"): {"requires_repo": True, "runs_diagnosis": True},
+    ("followup", "evidence"): {"requires_repo": False, "runs_diagnosis": False},
     ("general_qa", "concept"): {"requires_repo": False, "runs_diagnosis": False},
     ("general_qa", "chat"): {"requires_repo": False, "runs_diagnosis": False},
     ("smalltalk", "greeting"): {"requires_repo": False, "runs_diagnosis": False},
@@ -84,6 +86,7 @@ ANSWER_KIND_MAP: dict[tuple[str, str], AnswerKind] = {
     ("analyze", "health"): "report",
     ("analyze", "onboarding"): "report",
     ("followup", "explain"): "explain",
+    ("followup", "evidence"): "explain",
     ("general_qa", "concept"): "chat",
     ("general_qa", "chat"): "chat",
     ("smalltalk", "greeting"): "greeting",

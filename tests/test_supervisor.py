@@ -717,5 +717,106 @@ class TestOverviewPath:
         assert "100" in fallback  # stars
 
 
+class TestFollowupPlanner:
+    """Follow-up Planner 테스트: 직전 턴 아티팩트 기반 근거 설명."""
+    
+    def test_detect_followup_patterns(self):
+        """후속 패턴 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_followup
+        
+        # 직전 아티팩트 있을 때
+        assert _detect_followup("그 결과 왜 그래?", has_prev_artifacts=True)
+        assert _detect_followup("근거가 뭐야?", has_prev_artifacts=True)
+        assert _detect_followup("왜?", has_prev_artifacts=True)
+        assert _detect_followup("어디서 나왔어?", has_prev_artifacts=True)
+        assert _detect_followup("좀더 자세히 설명해줘", has_prev_artifacts=True)
+        
+        # 직전 아티팩트 없을 때 → False
+        assert not _detect_followup("그 결과 왜 그래?", has_prev_artifacts=False)
+        assert not _detect_followup("왜?", has_prev_artifacts=False)
+    
+    def test_followup_intent_classification(self):
+        """follow-up intent 분류."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # has_prev_artifacts=True일 때만 followup.evidence로 분류
+        result = _tier1_heuristic("근거가 뭐야?", has_prev_artifacts=True)
+        assert result is not None
+        assert result.intent == "followup"
+        assert result.sub_intent == "evidence"
+        
+        # has_prev_artifacts=False일 때는 None (LLM으로 넘어감)
+        result = _tier1_heuristic("근거가 뭐야?", has_prev_artifacts=False)
+        assert result is None
+    
+    def test_followup_no_artifacts_fallback(self):
+        """직전 아티팩트 없으면 안내 + 선택지."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_followup_evidence_mode
+        
+        state = {"user_query": "왜 그래?"}
+        result = _handle_followup_evidence_mode(state, "왜 그래?", None)
+        
+        assert "이전 분석 결과가 없어" in result["llm_summary"]
+        assert "다음 행동" in result["llm_summary"]
+    
+    def test_followup_evidence_prompt(self):
+        """Follow-up 근거 설명 프롬프트 생성."""
+        from backend.agents.supervisor.prompts import build_followup_evidence_prompt
+        
+        artifacts = {
+            "scores": {"health_score": 75, "documentation_quality": 80},
+            "labels": {"health_level": "good"},
+        }
+        
+        system, user = build_followup_evidence_prompt(
+            user_query="왜 그런 점수가 나왔어?",
+            prev_intent="analyze",
+            prev_answer_kind="report",
+            repo_id="test/repo",
+            artifacts=artifacts,
+        )
+        
+        assert "근거" in system
+        assert "3-5문장" in system
+        assert "참조 데이터" in system
+        assert "test/repo" in user
+        assert "health_score" in user
+        assert "75" in user
+    
+    def test_followup_response_has_sources(self):
+        """Follow-up 응답에 직전 아티팩트 sources 포함."""
+        from backend.agents.supervisor.nodes.summarize_node import _build_followup_response
+        
+        sources = ["PREV:test/repo:scores", "PREV:test/repo:labels"]
+        result = _build_followup_response(
+            state={},
+            summary="Test evidence explanation",
+            sources=sources,
+            repo_id="test/repo",
+            diagnosis_result=None,
+        )
+        
+        contract = result.get("answer_contract", {})
+        assert len(contract.get("sources", [])) >= 2
+        assert "prev_turn_artifact" in contract.get("source_kinds", [])
+        assert result["answer_kind"] == "explain"
+    
+    def test_followup_config_registered(self):
+        """followup.evidence가 V1 지원 목록에 등록됨."""
+        from backend.agents.supervisor.intent_config import (
+            is_v1_supported,
+            get_intent_meta,
+            get_answer_kind,
+        )
+        
+        assert is_v1_supported("followup", "evidence")
+        
+        meta = get_intent_meta("followup", "evidence")
+        assert meta["requires_repo"] is False
+        assert meta["runs_diagnosis"] is False
+        
+        assert get_answer_kind("followup", "evidence") == "explain"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

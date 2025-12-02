@@ -57,6 +57,19 @@ IDENTITY_PATTERNS = [
     r"(너는|넌)\s*(뭐|누구)",
 ]
 
+# Follow-up 패턴 (직전 턴 참조)
+FOLLOWUP_PATTERNS = [
+    r"(그|그거|이거|저거|그것|이것)\s*(결과|점수|근거|이유|왜|어디서|출처)",
+    r"(왜|어떻게|어디서).*(나왔|계산|판단)",
+    r"(근거|이유|출처).*(뭐|알려|설명)",
+    r"^(왜|어떻게|어디서)[요?\s]*$",
+    r"(좀더|더)\s*(자세히|설명|알려)",
+    r"(방금|아까|위에|이전).*(결과|분석|점수)",
+]
+
+# Follow-up 키워드 (부분 매칭)
+FOLLOWUP_KEYWORDS = {"근거", "이유", "왜", "출처", "어디서", "자세히", "더 설명", "방금"}
+
 ANALYSIS_KEYWORDS = {"분석", "진단", "건강", "온보딩", "기여", "점수", "상태", "어때", "analyze", "health"}
 CHITCHAT_KEYWORDS = {"고마워", "감사", "thanks", "ㅋㅋ", "ㅎㅎ", "좋아", "굿", "ok", "알겠어", "ㅇㅋ"}
 
@@ -76,6 +89,27 @@ def _has_repo_pattern(query: str) -> bool:
     return bool(re.search(r"[a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+", query))
 
 
+def _detect_followup(query: str, has_prev_artifacts: bool) -> bool:
+    """Detect follow-up intent from query patterns."""
+    if not has_prev_artifacts:
+        return False
+    
+    q = query.lower().strip()
+    
+    # Pattern matching
+    for p in FOLLOWUP_PATTERNS:
+        if re.search(p, q):
+            return True
+    
+    # Keyword matching (short queries)
+    if len(q) <= 20:
+        for kw in FOLLOWUP_KEYWORDS:
+            if kw in q:
+                return True
+    
+    return False
+
+
 def _is_short_or_emoji(query: str) -> bool:
     """Check if query is too short or mostly emoji."""
     stripped = query.strip()
@@ -86,9 +120,13 @@ def _is_short_or_emoji(query: str) -> bool:
     return emoji_count > len(stripped) / 3
 
 
-def _tier1_heuristic(query: str) -> Optional[ClassifyResult]:
+def _tier1_heuristic(query: str, has_prev_artifacts: bool = False) -> Optional[ClassifyResult]:
     """Tier-1: Rule-based classification (no LLM, high confidence)."""
     q = query.lower().strip()
+    
+    # Follow-up detection (직전 턴 아티팩트 있을 때만)
+    if _detect_followup(query, has_prev_artifacts):
+        return ClassifyResult("followup", "evidence", None, 1.0, "heuristic")
     
     # Identity questions → greeting (check first)
     for p in IDENTITY_PATTERNS:
@@ -277,8 +315,12 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     
     new_state: SupervisorState = dict(state)  # type: ignore
     
+    # Check for previous artifacts (for follow-up detection)
+    diagnosis_result = safe_get(state, "diagnosis_result")
+    has_prev_artifacts = bool(diagnosis_result and isinstance(diagnosis_result, dict))
+    
     # Tier-1: Heuristic (instant, no LLM)
-    result = _tier1_heuristic(query)
+    result = _tier1_heuristic(query, has_prev_artifacts)
     
     if result is None:
         # Tier-2: LLM classification

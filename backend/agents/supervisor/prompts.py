@@ -90,6 +90,40 @@ SYSTEM_SCORE_EXPLAIN = """당신은 오픈소스 프로젝트 분석의 특정 �
 더 자세한 내용이 궁금하시면 "{metric_name} 더 설명해줘" 또는 "다른 지표는 뭐가 있어?"라고 물어보세요.
 """
 
+
+# Follow-up Evidence: 직전 턴 결과에 대한 근거 설명
+SYSTEM_FOLLOWUP_EVIDENCE = """당신은 직전 분석 결과의 근거를 설명하는 역할입니다.
+
+## 역할
+- 직전 턴에서 제공한 결과의 근거/출처를 설명
+- 제공된 아티팩트 데이터만 사용 (추측 금지)
+- 3-5문장으로 간결하게 설명
+
+## 출력 형식
+
+### 근거 설명
+
+[3-5문장: 직전 결과가 왜 그렇게 나왔는지 설명]
+
+**참조 데이터**
+- [아티팩트 출처 1]: [값/요약]
+- [아티팩트 출처 2]: [값/요약]
+- (필요시 추가)
+
+**다음 행동**
+- (관련 후속 질문 1-2개 제안)
+"""
+
+# Follow-up No Artifacts Template
+FOLLOWUP_NO_ARTIFACTS_TEMPLATE = """이전 분석 결과가 없어 근거를 설명하기 어렵습니다.
+
+**다음 행동**
+- 저장소 분석하기: `facebook/react 분석해줘`
+- 이전에 분석한 저장소가 있다면 다시 물어봐 주세요"""
+
+FOLLOWUP_SOURCE_ID = "SYS:TEMPLATES:FOLLOWUP"
+
+
 # General QA / Greeting: intent=general_qa or smalltalk
 SYSTEM_CHAT = """당신은 ODOC, 친절한 오픈소스 온보딩 도우미입니다.
 
@@ -330,6 +364,58 @@ def build_chat_prompt(user_query: str, repo_summary: str = "") -> tuple[str, str
     return system, user
 
 
+def build_followup_evidence_prompt(
+    user_query: str,
+    prev_intent: str,
+    prev_answer_kind: str,
+    repo_id: str,
+    artifacts: Dict[str, Any],
+) -> tuple[str, str]:
+    """Builds prompt for follow-up evidence explanation. Returns (system, user)."""
+    system = COMMON_RULES + "\n" + SYSTEM_FOLLOWUP_EVIDENCE
+    
+    user_parts = [f"## 사용자 질문\n{user_query}\n"]
+    
+    # 직전 턴 정보
+    user_parts.append(f"## 직전 턴 정보")
+    user_parts.append(f"- 저장소: {repo_id}")
+    user_parts.append(f"- 이전 intent: {prev_intent}")
+    user_parts.append(f"- 응답 유형: {prev_answer_kind}")
+    user_parts.append("")
+    
+    # 아티팩트 데이터
+    user_parts.append("## 참조 가능한 아티팩트")
+    
+    if "scores" in artifacts:
+        user_parts.append("### scores")
+        for k, v in artifacts["scores"].items():
+            user_parts.append(f"- {k}: {v}")
+        user_parts.append("")
+    
+    if "labels" in artifacts:
+        user_parts.append("### labels")
+        for k, v in artifacts["labels"].items():
+            if isinstance(v, list):
+                user_parts.append(f"- {k}: {', '.join(v) if v else '(없음)'}")
+            else:
+                user_parts.append(f"- {k}: {v}")
+        user_parts.append("")
+    
+    if "explain_context" in artifacts:
+        user_parts.append("### explain_context (주요 지표)")
+        ctx = artifacts["explain_context"]
+        for metric_key, metric_data in list(ctx.items())[:3]:
+            user_parts.append(f"- {metric_key}:")
+            if isinstance(metric_data, dict):
+                for k, v in list(metric_data.items())[:5]:
+                    user_parts.append(f"  - {k}: {v}")
+        user_parts.append("")
+    
+    user_parts.append("위 아티팩트를 기반으로 사용자의 질문에 답해 주세요.")
+    
+    return system, "\n".join(user_parts)
+
+
 def _format_tasks_brief(tasks: Dict[str, list]) -> str:
     """Formats top 3 beginner tasks for the prompt."""
     beginner_tasks = tasks.get("beginner", [])[:3]
@@ -374,6 +460,11 @@ LLM_PARAMS = {
     "score_explain": {
         "temperature": 0.25,
         "max_tokens": 512,
+        "top_p": 0.9,
+    },
+    "followup_evidence": {
+        "temperature": 0.2,
+        "max_tokens": 400,
         "top_p": 0.9,
     },
     "overview": {
