@@ -277,6 +277,8 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         activity_score=scores.activity_maintainability,
         readme_categories=readme_categories,
         activity_scores=activity_scores_dict,
+        repo_info=details.get("repo_info"),  # 데이터 품질 검사용
+        activity_data=details.get("activity"),  # 데이터 품질 검사용
     )
 
     # 온보딩 계획 생성 (needs["need_onboarding"]이 True일 때만)

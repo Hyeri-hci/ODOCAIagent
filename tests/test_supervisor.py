@@ -16,13 +16,16 @@ class TestIntentConfig:
         # V1 지원
         assert is_v1_supported("analyze", "health")
         assert is_v1_supported("analyze", "onboarding")
+        assert is_v1_supported("analyze", "compare")
+        assert is_v1_supported("analyze", "onepager")
         assert is_v1_supported("followup", "explain")
+        assert is_v1_supported("followup", "evidence")
+        assert is_v1_supported("followup", "refine")
         assert is_v1_supported("general_qa", "chat")
         assert is_v1_supported("smalltalk", "greeting")
         
         # V1 미지원
-        assert not is_v1_supported("analyze", "compare")
-        assert not is_v1_supported("followup", "refine")
+        assert not is_v1_supported("unknown", "unknown")
     
     def test_intent_meta(self):
         """Intent 메타데이터 검증."""
@@ -816,6 +819,2887 @@ class TestFollowupPlanner:
         assert meta["runs_diagnosis"] is False
         
         assert get_answer_kind("followup", "evidence") == "explain"
+
+
+class TestExpertRunner:
+    """Expert Runner 테스트: sources 필수, 에러 정책, 디그레이드."""
+    
+    def test_runner_result_success(self):
+        """RunnerResult.ok 생성."""
+        from backend.agents.supervisor.runners.base import RunnerResult
+        from backend.agents.shared.contracts import AnswerContract
+        
+        answer = AnswerContract(
+            text="Test",
+            sources=["ARTIFACT:TEST:repo"],
+            source_kinds=["test"],
+        )
+        result = RunnerResult.ok(
+            answer=answer,
+            artifacts_out=["ARTIFACT:TEST:repo"],
+        )
+        
+        assert result.success is True
+        assert result.degraded is False
+        assert len(result.artifacts_out) == 1
+    
+    def test_runner_result_degraded(self):
+        """RunnerResult.degraded_ok 생성."""
+        from backend.agents.supervisor.runners.base import RunnerResult
+        from backend.agents.shared.contracts import AnswerContract
+        
+        answer = AnswerContract(
+            text="Degraded response",
+            sources=["FALLBACK:repo"],
+            source_kinds=["fallback"],
+        )
+        result = RunnerResult.degraded_ok(
+            answer=answer,
+            artifacts_out=["FALLBACK:repo"],
+            reason="test_degrade",
+        )
+        
+        assert result.success is True
+        assert result.degraded is True
+        assert result.meta.get("degrade_reason") == "test_degrade"
+    
+    def test_artifact_collector(self):
+        """ArtifactCollector 기능."""
+        from backend.agents.supervisor.runners.base import ArtifactCollector
+        
+        collector = ArtifactCollector("test/repo")
+        
+        # Add artifacts
+        aid = collector.add("overview", {"stars": 100})
+        assert "ARTIFACT:OVERVIEW:test/repo" in aid
+        
+        collector.add("readme", "# Title", required=False)
+        
+        # Get artifacts
+        assert collector.get("overview") == {"stars": 100}
+        assert collector.get("readme") == "# Title"
+        assert collector.get("missing") is None
+        
+        # IDs and kinds
+        assert len(collector.get_ids()) == 2
+        assert "overview" in collector.get_kinds()
+    
+    def test_artifact_collector_missing_required(self):
+        """필수 아티팩트 누락 감지."""
+        from backend.agents.supervisor.runners.base import ArtifactCollector
+        
+        collector = ArtifactCollector("test/repo")
+        collector.add("overview", None, required=True)  # None data
+        collector.add("readme", "content", required=False)
+        
+        assert not collector.has_required()
+        assert "overview" in collector.missing_required()
+    
+    def test_error_policy_mapping(self):
+        """에러 종류별 정책 매핑."""
+        from backend.agents.supervisor.runners.base import ExpertRunner, ErrorPolicy
+        
+        # Mock runner for testing
+        class TestRunner(ExpertRunner):
+            runner_name = "test"
+            def _collect_artifacts(self): pass
+            def _execute(self): pass
+        
+        runner = TestRunner("test/repo")
+        
+        assert runner._get_error_policy("rate limit exceeded") == ErrorPolicy.RETRY
+        assert runner._get_error_policy("timeout error") == ErrorPolicy.RETRY
+        assert runner._get_error_policy("not found") == ErrorPolicy.ASK_USER
+        assert runner._get_error_policy("permission denied") == ErrorPolicy.ASK_USER
+        assert runner._get_error_policy("no data available") == ErrorPolicy.FALLBACK
+    
+    def test_diagnosis_runner_builds_answer_with_sources(self):
+        """DiagnosisRunner가 sources 포함 AnswerContract 생성."""
+        from backend.agents.supervisor.runners.base import ArtifactCollector
+        from backend.agents.shared.contracts import AnswerContract
+        
+        # Test _build_answer method
+        collector = ArtifactCollector("test/repo")
+        collector.add("diagnosis_scores", {"health_score": 75})
+        collector.add("diagnosis_labels", {"health_level": "good"})
+        
+        # Build answer with sources
+        sources = collector.get_ids()
+        kinds = collector.get_kinds()
+        
+        answer = AnswerContract(
+            text="Test diagnosis",
+            sources=sources,
+            source_kinds=kinds,
+        )
+        
+        assert len(answer.sources) >= 2
+        assert "diagnosis_scores" in answer.source_kinds
+    
+    def test_runner_validates_empty_sources(self):
+        """Empty sources 검증 및 자동 채움."""
+        from backend.agents.supervisor.runners.base import ExpertRunner
+        from backend.agents.shared.contracts import AnswerContract
+        
+        class TestRunner(ExpertRunner):
+            runner_name = "test"
+            def _collect_artifacts(self):
+                self.collector.add("test_artifact", {"data": "value"})
+            def _execute(self):
+                pass
+        
+        runner = TestRunner("test/repo")
+        runner._collect_artifacts()
+        
+        # Empty sources answer
+        answer = AnswerContract(text="Test", sources=[], source_kinds=[])
+        runner._validate_answer_contract(answer)
+        
+        # Should auto-fill from collector
+        assert len(answer.sources) > 0
+    
+    def test_compare_runner_structure(self):
+        """CompareRunner 구조 검증."""
+        from backend.agents.supervisor.runners import CompareRunner
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="vuejs/vue",
+        )
+        
+        assert runner.runner_name == "compare"
+        assert runner.repo_a == "facebook/react"
+        assert runner.repo_b == "vuejs/vue"
+        assert "repo_a_overview" in runner.required_artifacts
+    
+    def test_onepager_runner_structure(self):
+        """OnepagerRunner 구조 검증."""
+        from backend.agents.supervisor.runners import OnepagerRunner
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        
+        assert runner.runner_name == "onepager"
+        assert "repo_facts" in runner.required_artifacts
+
+
+class TestAgenticPlanning:
+    """Agentic Planning 테스트 (Step 12)."""
+    
+    def test_plan_model_creation(self):
+        """Plan 모델 생성 검증."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanStatus, StepStatus, ErrorPolicy
+        )
+        
+        step = PlanStep(
+            id="test_step",
+            runner="diagnosis",
+            params={"repo": "test/repo"},
+            needs=[],
+            on_error=ErrorPolicy.FALLBACK,
+        )
+        
+        assert step.id == "test_step"
+        assert step.status == StepStatus.PENDING
+        assert step.is_ready(set())
+        
+        plan = Plan(
+            id="test_plan",
+            intent="analyze",
+            sub_intent="health",
+            steps=[step],
+        )
+        
+        assert plan.status == PlanStatus.PENDING
+        assert len(plan.steps) == 1
+        assert not plan.is_complete()
+    
+    def test_plan_step_dependencies(self):
+        """PlanStep 의존성 검증."""
+        from backend.agents.supervisor.planner import PlanStep, ErrorPolicy
+        
+        step_a = PlanStep(id="a", runner="diagnosis", needs=[])
+        step_b = PlanStep(id="b", runner="compare", needs=["a"])
+        
+        # step_a is ready (no deps)
+        assert step_a.is_ready(set())
+        
+        # step_b needs step_a
+        assert not step_b.is_ready(set())
+        assert step_b.is_ready({"a"})
+    
+    def test_plan_builder_analyze_health(self):
+        """PlanBuilder: analyze.health 계획 생성."""
+        from backend.agents.supervisor.planner import build_plan
+        
+        plan = build_plan("analyze", "health", {"repo": {"owner": "test", "name": "repo"}})
+        
+        assert plan.intent == "analyze"
+        assert plan.sub_intent == "health"
+        assert len(plan.steps) >= 1
+        assert plan.steps[0].runner == "diagnosis"
+    
+    def test_plan_builder_smalltalk(self):
+        """PlanBuilder: smalltalk.greeting 계획 생성."""
+        from backend.agents.supervisor.planner import build_plan
+        
+        plan = build_plan("smalltalk", "greeting", {})
+        
+        assert plan.intent == "smalltalk"
+        assert len(plan.steps) == 1
+        assert plan.steps[0].runner == "smalltalk"
+        assert plan.steps[0].timeout_sec == 5.0  # Fast path
+    
+    def test_plan_builder_compare(self):
+        """PlanBuilder: analyze.compare 계획 생성 (병렬 의존성)."""
+        from backend.agents.supervisor.planner import build_plan
+        
+        plan = build_plan("analyze", "compare", {
+            "repo": {"owner": "facebook", "name": "react"},
+            "compare_repo": {"owner": "vuejs", "name": "vue"},
+        })
+        
+        assert plan.intent == "analyze"
+        assert plan.sub_intent == "compare"
+        
+        # fetch_repo_a, fetch_repo_b (parallel), compare (depends on both)
+        step_ids = [s.id for s in plan.steps]
+        assert "fetch_repo_a" in step_ids
+        assert "fetch_repo_b" in step_ids
+        assert "compare" in step_ids
+        
+        # Compare step depends on both fetch steps
+        compare_step = next(s for s in plan.steps if s.id == "compare")
+        assert "fetch_repo_a" in compare_step.needs
+        assert "fetch_repo_b" in compare_step.needs
+    
+    def test_plan_get_ready_steps(self):
+        """Plan.get_ready_steps() 검증."""
+        from backend.agents.supervisor.planner import Plan, PlanStep, StepStatus
+        
+        step_a = PlanStep(id="a", runner="diagnosis", needs=[])
+        step_b = PlanStep(id="b", runner="diagnosis", needs=[])
+        step_c = PlanStep(id="c", runner="compare", needs=["a", "b"])
+        
+        plan = Plan(
+            id="test",
+            intent="analyze",
+            sub_intent="compare",
+            steps=[step_a, step_b, step_c],
+        )
+        
+        # Initially a and b are ready
+        ready = plan.get_ready_steps()
+        assert len(ready) == 2
+        assert {s.id for s in ready} == {"a", "b"}
+        
+        # After a completes, still just b is ready (c needs both)
+        step_a.status = StepStatus.SUCCESS
+        ready = plan.get_ready_steps()
+        assert len(ready) == 1
+        assert ready[0].id == "b"
+        
+        # After both complete, c is ready
+        step_b.status = StepStatus.SUCCESS
+        ready = plan.get_ready_steps()
+        assert len(ready) == 1
+        assert ready[0].id == "c"
+    
+    def test_step_result_dataclass(self):
+        """StepResult 데이터클래스 검증."""
+        from backend.agents.supervisor.planner import StepResult, StepStatus
+        
+        result = StepResult(
+            step_id="test",
+            status=StepStatus.SUCCESS,
+            result={"data": "value"},
+            execution_time_ms=100.5,
+        )
+        
+        assert result.success
+        assert result.step_id == "test"
+        assert result.result["data"] == "value"
+        
+        failed = StepResult(
+            step_id="fail",
+            status=StepStatus.FAILED,
+            error_message="Test error",
+        )
+        
+        assert not failed.success
+        assert failed.error_message == "Test error"
+    
+    def test_error_policy_enum(self):
+        """ErrorPolicy enum 검증."""
+        from backend.agents.supervisor.planner import ErrorPolicy
+        
+        assert ErrorPolicy.RETRY.value == "retry"
+        assert ErrorPolicy.FALLBACK.value == "fallback"
+        assert ErrorPolicy.ASK_USER.value == "ask_user"
+        assert ErrorPolicy.ABORT.value == "abort"
+    
+    def test_replanner_can_replan(self):
+        """Replanner 재계획 가능 여부 검증."""
+        from backend.agents.supervisor.planner import Plan, Replanner
+        
+        plan = Plan(id="test", intent="analyze", sub_intent="health")
+        replanner = Replanner(plan)
+        
+        assert replanner.can_replan()
+        
+        # After max attempts
+        plan.replan_count = 2
+        replanner2 = Replanner(plan)
+        assert not replanner2.can_replan()
+    
+    def test_replanner_step_failure(self):
+        """Replanner: 스텝 실패 시 재계획."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, Replanner, ReplanReason, ErrorPolicy, StepStatus
+        )
+        
+        step = PlanStep(
+            id="failed_step",
+            runner="diagnosis",
+            on_error=ErrorPolicy.FALLBACK,
+        )
+        step.status = StepStatus.FAILED
+        step.error_message = "Test failure"
+        
+        plan = Plan(
+            id="original",
+            intent="analyze",
+            sub_intent="health",
+            steps=[step],
+        )
+        
+        replanner = Replanner(plan)
+        new_plan = replanner.replan(step, ReplanReason.STEP_FAILED)
+        
+        assert new_plan is not None
+        assert new_plan.replan_count == 1
+        assert "_r1" in new_plan.id
+    
+    def test_plan_status_transitions(self):
+        """Plan 상태 전환 검증."""
+        from backend.agents.supervisor.planner import Plan, PlanStatus
+        
+        plan = Plan(id="test", intent="analyze", sub_intent="health")
+        
+        assert plan.status == PlanStatus.PENDING
+        
+        plan.mark_running()
+        assert plan.status == PlanStatus.RUNNING
+        
+        plan.mark_success()
+        assert plan.status == PlanStatus.SUCCESS
+        
+        plan2 = Plan(id="test2", intent="analyze", sub_intent="health")
+        plan2.mark_failed("Error occurred")
+        assert plan2.status == PlanStatus.FAILED
+        assert plan2.error_message == "Error occurred"
+        
+        plan3 = Plan(id="test3", intent="analyze", sub_intent="health")
+        plan3.mark_ask_user("Need clarification")
+        assert plan3.status == PlanStatus.ASK_USER
+
+
+class TestPlanningErrorRecovery:
+    """Planning 오류 복구 테스트: 정상 종료율 ≥ 95% 검증."""
+    
+    def test_error_terminates_gracefully(self):
+        """오류 발생 시 정상 종료 (ask_user 또는 에러 메시지)."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy
+        )
+        
+        # Mock executor that always fails
+        def failing_runner(step, inputs):
+            from backend.agents.supervisor.planner import StepResult
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.FAILED,
+                error_message="Simulated failure",
+            )
+        
+        step = PlanStep(
+            id="fail_step",
+            runner="mock",
+            on_error=ErrorPolicy.ASK_USER,  # Should escalate
+            max_retries=0,
+        )
+        
+        plan = Plan(
+            id="test",
+            intent="analyze",
+            sub_intent="health",
+            steps=[step],
+        )
+        
+        executor = PlanExecutor(step_executors={"mock": failing_runner})
+        result = executor.execute(plan, {})
+        
+        # Should terminate gracefully (either ASK_USER or FAILED with message)
+        assert result.status in (PlanStatus.ASK_USER, PlanStatus.FAILED)
+        assert result.error_message is not None
+    
+    def test_retry_then_fallback(self):
+        """retry → fallback 정책 검증."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, StepStatus, ErrorPolicy
+        )
+        
+        call_count = [0]
+        
+        def retry_then_succeed(step, inputs):
+            from backend.agents.supervisor.planner import StepResult
+            call_count[0] += 1
+            
+            if call_count[0] <= 1:
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.FAILED,
+                    error_message="First call fails",
+                )
+            
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"data": "success"},
+            )
+        
+        step = PlanStep(
+            id="retry_step",
+            runner="mock",
+            on_error=ErrorPolicy.RETRY,
+            max_retries=1,
+        )
+        
+        plan = Plan(
+            id="test",
+            intent="analyze",
+            sub_intent="health",
+            steps=[step],
+        )
+        
+        executor = PlanExecutor(step_executors={"mock": retry_then_succeed})
+        result = executor.execute(plan, {})
+        
+        # Should succeed after retry
+        assert call_count[0] == 2
+    
+    def test_parallel_execution_all_succeed(self):
+        """병렬 실행 시 모두 성공."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus
+        )
+        
+        def success_runner(step, inputs):
+            from backend.agents.supervisor.planner import StepResult
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"step": step.id},
+            )
+        
+        step_a = PlanStep(id="a", runner="mock", needs=[])
+        step_b = PlanStep(id="b", runner="mock", needs=[])
+        
+        plan = Plan(
+            id="test",
+            intent="analyze",
+            sub_intent="compare",
+            steps=[step_a, step_b],
+        )
+        
+        executor = PlanExecutor(step_executors={"mock": success_runner})
+        result = executor.execute(plan, {})
+        
+        assert result.status == PlanStatus.SUCCESS
+        assert len(result.execution_order) == 2
+
+
+class TestIntentThresholds:
+    """Step 8: 의도별 임계/정책 분리 테스트."""
+    
+    def test_confidence_thresholds_by_cost(self):
+        """비용에 따른 임계값 검증: 고비용=높은임계, 저비용=낮은임계."""
+        from backend.agents.supervisor.intent_config import (
+            get_confidence_threshold,
+            get_disambiguation_threshold,
+        )
+        
+        # 고비용 (analyze, compare): 높은 임계
+        assert get_confidence_threshold("analyze") == 0.6
+        assert get_confidence_threshold("compare") == 0.6
+        
+        # 중비용 (followup, recommendation): 중간 임계
+        assert get_confidence_threshold("followup") == 0.5
+        assert get_confidence_threshold("recommendation") == 0.5
+        
+        # 저비용 (overview, general_qa): 낮은 임계
+        assert get_confidence_threshold("overview") == 0.4
+        assert get_confidence_threshold("general_qa") == 0.5
+        
+        # 경량 (smalltalk, help): 가장 낮은 임계
+        assert get_confidence_threshold("smalltalk") == 0.3
+        assert get_confidence_threshold("help") == 0.4
+    
+    def test_disambiguation_thresholds(self):
+        """Disambiguation 임계값 검증."""
+        from backend.agents.supervisor.intent_config import (
+            get_disambiguation_threshold,
+            should_disambiguate,
+        )
+        
+        # 고비용은 높은 disambiguation 임계
+        assert get_disambiguation_threshold("analyze") == 0.4
+        assert get_disambiguation_threshold("compare") == 0.4
+        
+        # 경량은 낮은 disambiguation 임계
+        assert get_disambiguation_threshold("smalltalk") == 0.15
+        assert get_disambiguation_threshold("help") == 0.2
+        
+        # should_disambiguate 로직
+        assert should_disambiguate("analyze", 0.35) is True
+        assert should_disambiguate("analyze", 0.45) is False
+        assert should_disambiguate("smalltalk", 0.10) is True
+        assert should_disambiguate("smalltalk", 0.20) is False
+    
+    def test_calibration_store(self):
+        """CalibrationStore 기본 동작 검증."""
+        from backend.agents.supervisor.calibration import CalibrationStore
+        
+        store = CalibrationStore()
+        
+        # 쿼리 기록
+        store.record_query("analyze", 0.7, {"analyze": 0.7, "followup": 0.2})
+        store.record_query("analyze", 0.55, {"analyze": 0.55, "followup": 0.3}, was_disambiguation=True)
+        
+        # 메트릭 조회
+        metrics = store.get_metrics("analyze")
+        assert metrics is not None
+        assert metrics["total_queries"] == 2
+        assert metrics["disambiguation_rate"] == 0.5
+    
+    def test_calibration_weekly_adjustment(self):
+        """주간 임계값 조정 검증."""
+        from backend.agents.supervisor.calibration import CalibrationStore
+        
+        store = CalibrationStore()
+        
+        # 충분한 데이터 기록 (disambiguation이 너무 적음 → 임계 올림)
+        for _ in range(20):
+            store.record_query("analyze", 0.8, {"analyze": 0.8})
+        
+        adjustment = store.compute_weekly_adjustment("analyze")
+        # Disambiguation이 0%라 임계값 올려야 함
+        assert adjustment > 0
+    
+    def test_check_disambiguation(self):
+        """Disambiguation 체크 로직 검증."""
+        from backend.agents.supervisor.calibration import check_disambiguation
+        
+        # 낮은 confidence → disambiguation
+        result = check_disambiguation("analyze", 0.3, has_repo=True)
+        assert result.should_disambiguate is True
+        
+        # repo 없으면 → disambiguation
+        result = check_disambiguation("analyze", 0.8, has_repo=False)
+        assert result.should_disambiguate is True
+        assert "저장소" in result.reason
+        
+        # 충분한 confidence + repo → 통과
+        result = check_disambiguation("analyze", 0.7, has_repo=True)
+        assert result.should_disambiguate is False
+    
+    def test_temperature_scaling(self):
+        """Temperature scaling 함수 검증."""
+        from backend.agents.supervisor.calibration import temperature_scale
+        
+        logits = {"analyze": 2.0, "followup": 1.0, "general_qa": 0.5}
+        
+        # temp=1.0: 원래 softmax
+        probs_1 = temperature_scale(logits, temperature=1.0)
+        assert probs_1["analyze"] > probs_1["followup"] > probs_1["general_qa"]
+        
+        # temp=2.0: 더 부드러운 분포
+        probs_2 = temperature_scale(logits, temperature=2.0)
+        # 높은 temp → 확률 차이 줄어듦
+        assert (probs_2["analyze"] - probs_2["followup"]) < (probs_1["analyze"] - probs_1["followup"])
+
+
+class TestToneGuide:
+    """Step 9: 한국어 프롬프트/톤 가이드 테스트."""
+    
+    def test_mode_mapping(self):
+        """Intent → Mode 매핑 검증."""
+        from backend.agents.supervisor.tone_guide import (
+            get_mode_for_intent,
+            PromptMode,
+        )
+        
+        # Fast mode
+        assert get_mode_for_intent("smalltalk") == PromptMode.FAST
+        assert get_mode_for_intent("help") == PromptMode.FAST
+        assert get_mode_for_intent("general_qa") == PromptMode.FAST
+        
+        # Expert mode
+        assert get_mode_for_intent("analyze") == PromptMode.EXPERT
+        assert get_mode_for_intent("compare") == PromptMode.EXPERT
+        assert get_mode_for_intent("followup") == PromptMode.EXPERT
+    
+    def test_tone_config_params(self):
+        """톤 설정 파라미터 검증."""
+        from backend.agents.supervisor.tone_guide import (
+            get_tone_config,
+            PromptMode,
+        )
+        
+        fast = get_tone_config(PromptMode.FAST)
+        expert = get_tone_config(PromptMode.EXPERT)
+        
+        # Fast: 높은 temperature, 적은 불릿
+        assert fast.temperature == 0.7
+        assert fast.max_bullets == 3
+        assert fast.max_sentences == 5
+        assert fast.allow_chitchat is True
+        
+        # Expert: 낮은 temperature, 많은 불릿
+        assert expert.temperature == 0.25
+        assert expert.max_bullets == 7
+        assert expert.max_sentences == 15
+        assert expert.allow_chitchat is False
+    
+    def test_llm_params_for_intent(self):
+        """Intent별 LLM 파라미터 검증."""
+        from backend.agents.supervisor.tone_guide import get_llm_params_for_intent
+        
+        # Fast mode intents
+        chat_params = get_llm_params_for_intent("general_qa")
+        assert chat_params["temperature"] == 0.7
+        
+        # Expert mode intents
+        analyze_params = get_llm_params_for_intent("analyze")
+        assert analyze_params["temperature"] == 0.25
+    
+    def test_tone_compliance_check(self):
+        """톤 준수 체크 검증."""
+        from backend.agents.supervisor.tone_guide import (
+            check_tone_compliance,
+            is_tone_compliant,
+            PromptMode,
+        )
+        
+        # 좋은 Expert 응답
+        good_expert = """### 분석 결과
+
+| 지표 | 점수 |
+|------|------|
+| 건강 점수 | 78점 |
+
+활동성이 85점으로 우수합니다.
+
+**다음 행동**
+- 점수 자세히 설명해줘"""
+        
+        results = check_tone_compliance(good_expert, PromptMode.EXPERT)
+        assert results["존댓말 사용"] is True
+        assert results["이모지 없음"] is True
+        assert results["데이터 인용"] is True
+        
+        # 나쁜 응답 (추측 표현)
+        bad_expert = "아마 이것은 좋은 것 같습니다."
+        results = check_tone_compliance(bad_expert, PromptMode.EXPERT)
+        assert results["추측 표현 없음"] is False
+    
+    def test_response_length_validation(self):
+        """응답 길이 검증."""
+        from backend.agents.supervisor.tone_guide import (
+            validate_response_length,
+            truncate_response,
+            PromptMode,
+        )
+        
+        short_text = "짧은 응답입니다. 좋아요."
+        is_valid, warning = validate_response_length(short_text, PromptMode.FAST)
+        assert is_valid is True
+        assert warning is None
+        
+        # 긴 텍스트 자르기
+        long_text = "테스트 " * 500
+        truncated = truncate_response(long_text, PromptMode.FAST)
+        assert len(truncated) < len(long_text)
+        assert "생략" in truncated
+    
+    def test_prompts_llm_params_updated(self):
+        """prompts.py LLM_PARAMS가 Step 9 기준으로 업데이트됨."""
+        from backend.agents.supervisor.prompts import LLM_PARAMS
+        
+        # Expert mode: 낮은 temperature
+        assert LLM_PARAMS["health_report"]["temperature"] == 0.25
+        assert LLM_PARAMS["score_explain"]["temperature"] == 0.2
+        assert LLM_PARAMS["followup_evidence"]["temperature"] == 0.2
+        
+        # Fast mode: 높은 temperature
+        assert LLM_PARAMS["chat"]["temperature"] == 0.7
+        assert LLM_PARAMS["greeting"]["temperature"] == 0.7
+
+
+# Step 10: 관측/검증 운영 게이트 테스트
+class TestObservability:
+    """Step 10: 관측성 및 SLO 검증 테스트."""
+    
+    def test_required_event_types(self):
+        """필수 이벤트 5종 정의."""
+        from backend.agents.supervisor.observability import REQUIRED_EVENT_TYPES
+        from backend.common.events import EventType
+        
+        assert len(REQUIRED_EVENT_TYPES) == 5
+        assert EventType.SUPERVISOR_INTENT_DETECTED in REQUIRED_EVENT_TYPES
+        assert EventType.SUPERVISOR_ROUTE_SELECTED in REQUIRED_EVENT_TYPES
+        assert EventType.NODE_STARTED in REQUIRED_EVENT_TYPES
+        assert EventType.NODE_FINISHED in REQUIRED_EVENT_TYPES
+        assert EventType.ANSWER_GENERATED in REQUIRED_EVENT_TYPES
+    
+    def test_slo_config_defaults(self):
+        """SLO 기본 설정 검증."""
+        from backend.agents.supervisor.observability import SLOConfig
+        
+        config = SLOConfig()
+        
+        # Latency SLO
+        assert config.greeting_p95_ms == 100.0
+        assert config.overview_p95_ms == 1500.0
+        assert config.expert_p95_ms == 10000.0
+        
+        # Quality SLO
+        assert config.disambiguation_min_pct == 10.0
+        assert config.disambiguation_max_pct == 25.0
+        assert config.wrong_proceed_max_pct == 1.0
+        assert config.empty_sources_max_pct == 0.0
+        assert config.duplicate_cards_max_count == 0
+    
+    def test_metrics_collector_latency(self):
+        """Latency 지표 수집."""
+        from backend.agents.supervisor.observability import MetricsCollector, percentile
+        
+        collector = MetricsCollector()
+        
+        # greeting latency 기록
+        for i in range(100):
+            collector.record_request("smalltalk", latency_ms=50 + i)
+        
+        metrics = collector.get_current_metrics()
+        
+        # p95 계산 확인
+        assert metrics["latency"]["greeting_p95_ms"] > 140
+        assert metrics["latency"]["greeting_p95_ms"] < 150
+        assert metrics["total_requests"] == 100
+    
+    def test_metrics_collector_quality(self):
+        """Quality 지표 수집."""
+        from backend.agents.supervisor.observability import MetricsCollector
+        
+        collector = MetricsCollector()
+        
+        # 100개 요청 중 15개 disambiguation, 0개 wrong_proceed
+        for i in range(100):
+            collector.record_request(
+                "analyze",
+                latency_ms=100,
+                disambiguated=(i < 15),
+                wrong_proceed=False,
+                sources_empty=False,
+            )
+        
+        metrics = collector.get_current_metrics()
+        
+        assert metrics["quality"]["disambiguation_pct"] == 15.0
+        assert metrics["quality"]["wrong_proceed_pct"] == 0.0
+        assert metrics["quality"]["empty_sources_pct"] == 0.0
+    
+    def test_slo_checker_pass(self):
+        """SLO 검사 통과."""
+        from backend.agents.supervisor.observability import SLOChecker, SLOConfig
+        
+        config = SLOConfig()
+        checker = SLOChecker(config)
+        
+        # 모든 SLO 통과하는 metrics
+        metrics = {
+            "latency": {
+                "greeting_p95_ms": 50,
+                "overview_p95_ms": 1000,
+                "expert_p95_ms": 5000,
+            },
+            "quality": {
+                "disambiguation_pct": 15.0,  # 10-25% 범위 내
+                "wrong_proceed_pct": 0.5,     # < 1%
+                "empty_sources_pct": 0.0,
+                "duplicate_cards_count": 0,
+            },
+            "events": {
+                "missing_count": 0,
+            },
+        }
+        
+        assert checker.is_healthy(metrics) is True
+        results = checker.check_all(metrics)
+        assert all(r.passed for r in results)
+    
+    def test_slo_checker_fail(self):
+        """SLO 검사 실패."""
+        from backend.agents.supervisor.observability import SLOChecker
+        
+        checker = SLOChecker()
+        
+        # Latency SLO 위반
+        metrics = {
+            "latency": {
+                "greeting_p95_ms": 200,  # > 100ms 위반
+                "overview_p95_ms": 1000,
+                "expert_p95_ms": 5000,
+            },
+            "quality": {
+                "disambiguation_pct": 5.0,  # < 10% 위반
+                "wrong_proceed_pct": 2.0,   # > 1% 위반
+                "empty_sources_pct": 0.0,
+                "duplicate_cards_count": 0,
+            },
+            "events": {
+                "missing_count": 0,
+            },
+        }
+        
+        assert checker.is_healthy(metrics) is False
+        results = checker.check_all(metrics)
+        failed = [r for r in results if not r.passed]
+        assert len(failed) >= 3
+
+
+class TestCanaryDeployment:
+    """Canary 배포 및 롤백 테스트."""
+    
+    def test_canary_phases(self):
+        """Canary 배포 단계."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        
+        # 초기: FULL
+        assert canary.current_phase == CanaryManager.DeploymentPhase.FULL
+        assert canary.get_traffic_percentage() == 100
+    
+    def test_canary_rollback(self):
+        """롤백 시 피처 비활성화 및 임계값 상향."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        
+        # 롤백
+        canary.rollback(
+            reason="expert_p95 SLO violation",
+            disable_features=["expert_runner", "agentic_planning"]
+        )
+        
+        assert canary.current_phase == CanaryManager.DeploymentPhase.ROLLBACK
+        assert canary.feature_toggles["expert_runner"] is False
+        assert canary.feature_toggles["agentic_planning"] is False
+        assert canary.feature_toggles["lightweight_path"] is True  # 유지
+        assert canary.threshold_override == 0.7
+    
+    def test_canary_effective_threshold(self):
+        """롤백 시 임계값 오버라이드."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        
+        # 롤백 전: 기본 임계값 사용
+        assert canary.get_effective_threshold(0.4) == 0.4
+        
+        # 롤백 후: 오버라이드 적용
+        canary.rollback("test", disable_features=[])
+        assert canary.get_effective_threshold(0.4) == 0.7
+        assert canary.get_effective_threshold(0.8) == 0.8  # 더 높으면 그대로
+    
+    def test_canary_promote(self):
+        """단계별 승격."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        canary.current_phase = CanaryManager.DeploymentPhase.CANARY
+        
+        assert canary.get_traffic_percentage() == 10
+        
+        canary.promote()
+        assert canary.current_phase == CanaryManager.DeploymentPhase.GRADUAL_25
+        assert canary.get_traffic_percentage() == 25
+        
+        canary.promote()
+        assert canary.get_traffic_percentage() == 50
+    
+    def test_feature_toggles(self):
+        """피처 토글 확인."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        
+        # 기본: 모두 활성화
+        assert canary.should_use_new_feature("lightweight_path") is True
+        assert canary.should_use_new_feature("followup_planner") is True
+        assert canary.should_use_new_feature("expert_runner") is True
+        
+        # 개별 비활성화
+        canary.feature_toggles["expert_runner"] = False
+        assert canary.should_use_new_feature("expert_runner") is False
+
+
+class TestErrorMeta:
+    """에러 메타 기록 테스트."""
+    
+    def test_error_meta_retry_logic(self):
+        """에러 메타 재시도 로직."""
+        from backend.agents.supervisor.observability import ErrorMeta
+        import time
+        
+        # 재시도 가능한 에러
+        meta = ErrorMeta(
+            error_type="github_api_timeout",
+            message="GitHub API timeout",
+            timestamp=time.time(),
+            can_retry=True,
+            retry_count=0,
+            max_retries=3,
+        )
+        
+        assert meta.should_retry() is True
+        
+        meta.retry_count = 3
+        assert meta.should_retry() is False  # 최대 재시도 도달
+        
+        # 재시도 불가 에러
+        fatal = ErrorMeta(
+            error_type="invalid_repo",
+            message="Repository not found",
+            timestamp=time.time(),
+            can_retry=False,
+            retry_count=0,
+        )
+        assert fatal.should_retry() is False
+    
+    def test_error_meta_to_dict(self):
+        """에러 메타 직렬화."""
+        from backend.agents.supervisor.observability import ErrorMeta
+        import time
+        
+        meta = ErrorMeta(
+            error_type="test_error",
+            message="Test message",
+            timestamp=time.time(),
+            can_retry=True,
+            retry_count=1,
+            context={"key": "value"},
+        )
+        
+        d = meta.to_dict()
+        
+        assert d["error_type"] == "test_error"
+        assert d["can_retry"] is True
+        assert d["retry_count"] == 1
+        assert d["should_retry"] is True
+        assert "timestamp_iso" in d
+        assert d["context"]["key"] == "value"
+
+
+class TestWeeklyReport:
+    """주간 리포트 테스트."""
+    
+    def test_generate_weekly_report(self):
+        """주간 리포트 생성."""
+        from backend.agents.supervisor.observability import (
+            MetricsCollector,
+            generate_weekly_report,
+        )
+        
+        collector = MetricsCollector()
+        
+        # 테스트 데이터 추가
+        for _ in range(50):
+            collector.record_request("smalltalk", latency_ms=50)
+        for _ in range(30):
+            collector.record_request("analyze", latency_ms=3000, disambiguated=True)
+        for _ in range(20):
+            collector.record_request("overview", latency_ms=1000)
+        
+        report = generate_weekly_report(collector)
+        
+        assert report.total_requests == 100
+        assert isinstance(report.slo_results, list)
+        assert len(report.slo_results) > 0
+        assert isinstance(report.recommendations, list)
+    
+    def test_dashboard_metrics(self):
+        """대시보드 지표 API."""
+        from backend.agents.supervisor.observability import get_dashboard_metrics
+        
+        metrics = get_dashboard_metrics()
+        
+        assert "timestamp" in metrics
+        assert "metrics" in metrics
+        assert "slo_status" in metrics
+        assert "deployment" in metrics
+        assert "all_passed" in metrics["slo_status"]
+
+
+# Compare/Onepager/Followup 테스트
+class TestCompareOnepagerFollowup:
+    """Compare, One-pager, Follow-up 경로 테스트."""
+    
+    def test_compare_pattern_detection(self):
+        """Compare 패턴 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import (
+            _detect_compare,
+            _tier1_heuristic,
+        )
+        
+        # 정상 compare 감지
+        is_compare, repo_a, repo_b = _detect_compare("facebook/react랑 vuejs/core 비교해줘")
+        assert is_compare is True
+        assert repo_a is not None
+        assert repo_b is not None
+        assert repo_a["owner"] == "facebook"
+        assert repo_b["owner"] == "vuejs"
+        
+        # heuristic에서도 compare로 분류
+        result = _tier1_heuristic("facebook/react랑 vuejs/core 비교해줘", False)
+        assert result is not None
+        assert result.intent == "analyze"
+        assert result.sub_intent == "compare"
+        assert result.compare_repo is not None
+    
+    def test_compare_various_patterns(self):
+        """다양한 compare 패턴."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_compare
+        
+        patterns = [
+            ("facebook/react vs vuejs/core 비교", True),
+            ("react와 vue 비교해줘", False),  # repo 형식 아님
+            ("facebook/react랑 vuejs/core 비교해줘", True),
+            ("vuejs/core과 facebook/react 비교", True),
+        ]
+        
+        for query, expected in patterns:
+            is_compare, _, _ = _detect_compare(query)
+            assert is_compare == expected, f"Failed for: {query}"
+    
+    def test_onepager_pattern_detection(self):
+        """One-pager 패턴 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import (
+            _detect_onepager,
+            _tier1_heuristic,
+        )
+        
+        # One-pager 패턴
+        assert _detect_onepager("facebook/react 한 장 요약 만들어줘") is True
+        assert _detect_onepager("원페이저 만들어줘") is True
+        assert _detect_onepager("발표 자료 만들어줘") is True
+        
+        # heuristic에서 onepager로 분류
+        result = _tier1_heuristic("facebook/react 한 장 요약 만들어줘", False)
+        assert result is not None
+        assert result.intent == "analyze"
+        assert result.sub_intent == "onepager"
+    
+    def test_refine_pattern_detection(self):
+        """Refine 패턴 감지 (직전 아티팩트 있을 때만)."""
+        from backend.agents.supervisor.nodes.intent_classifier import (
+            _detect_refine,
+            _tier1_heuristic,
+        )
+        
+        # 아티팩트 없으면 감지 안 됨
+        assert _detect_refine("급한 거 3개만 정리해줘", False) is False
+        
+        # 아티팩트 있으면 감지
+        assert _detect_refine("급한 거 3개만 정리해줘", True) is True
+        assert _detect_refine("우선순위 정렬해줘", True) is True
+        
+        # heuristic (아티팩트 있을 때)
+        result = _tier1_heuristic("급한 거 3개만 정리해줘", True)
+        assert result is not None
+        assert result.intent == "followup"
+        assert result.sub_intent == "refine"
+    
+    def test_graph_routing_compare(self):
+        """Compare 경로가 expert로 라우팅."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+            "compare_repo": {"owner": "vuejs", "name": "core", "url": ""},
+        }
+        
+        route = should_run_diagnosis(state)  # type: ignore
+        assert route == "expert"
+    
+    def test_graph_routing_onepager(self):
+        """Onepager 경로가 expert로 라우팅."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "onepager",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+        }
+        
+        route = should_run_diagnosis(state)  # type: ignore
+        assert route == "expert"
+    
+    def test_graph_routing_followup(self):
+        """Followup 경로가 summarize로 라우팅."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "followup",
+            "sub_intent": "evidence",
+        }
+        
+        route = should_run_diagnosis(state)  # type: ignore
+        assert route == "summarize"
+    
+    def test_followup_evidence_detection(self):
+        """Followup evidence 감지 (직전 아티팩트 있을 때)."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 아티팩트 없으면 followup 아님
+        result = _tier1_heuristic("그 결과는 어디서 나온 거야?", False)
+        assert result is None or result.intent != "followup"
+        
+        # 아티팩트 있으면 followup
+        result = _tier1_heuristic("그 결과는 어디서 나온 거야?", True)
+        assert result is not None
+        assert result.intent == "followup"
+        assert result.sub_intent == "evidence"
+    
+    def test_answer_kind_mapping(self):
+        """새 sub_intent들의 answer_kind 매핑."""
+        from backend.agents.supervisor.intent_config import get_answer_kind
+        
+        assert get_answer_kind("analyze", "compare") == "compare"
+        assert get_answer_kind("analyze", "onepager") == "onepager"
+        assert get_answer_kind("followup", "refine") == "refine"
+        assert get_answer_kind("followup", "evidence") == "explain"
+
+
+# ============================================================================
+# 시나리오 7: 에러·재계획(Agentic Re-planning)
+# ============================================================================
+class TestAgenticReplanning:
+    """에러 발생 시 재계획 및 복구 테스트: 정상 종료율 ≥ 95%."""
+    
+    def test_rate_limit_retry_then_fallback(self):
+        """레이트 리밋 시 retry → fallback → 정상 종료."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        
+        attempt_count = [0]
+        
+        def rate_limit_then_succeed(step, inputs):
+            attempt_count[0] += 1
+            if attempt_count[0] <= 2:
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.FAILED,
+                    error_message="rate limit exceeded",
+                )
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"recovered": True},
+            )
+        
+        step = PlanStep(
+            id="api_step",
+            runner="mock",
+            on_error=ErrorPolicy.RETRY,
+            max_retries=2,  # 2번 재시도
+        )
+        
+        plan = Plan(id="rate_limit_test", intent="analyze", sub_intent="health", steps=[step])
+        executor = PlanExecutor(step_executors={"mock": rate_limit_then_succeed})
+        result = executor.execute(plan, {})
+        
+        # 최종 성공
+        assert attempt_count[0] == 3
+        assert result.status == PlanStatus.SUCCESS
+    
+    def test_network_error_retry(self):
+        """네트워크 일시 오류 시 재시도 후 정상 진행."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        from backend.common.events import get_event_store, EventType
+        
+        event_store = get_event_store()
+        event_store.clear()
+        
+        call_count = [0]
+        
+        def network_error_once(step, inputs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.FAILED,
+                    error_message="connection timeout",
+                )
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"data": "recovered"},
+            )
+        
+        step = PlanStep(
+            id="network_step",
+            runner="mock",
+            on_error=ErrorPolicy.RETRY,
+            max_retries=1,
+        )
+        
+        plan = Plan(id="network_test", intent="analyze", sub_intent="health", steps=[step])
+        executor = PlanExecutor(step_executors={"mock": network_error_once})
+        result = executor.execute(plan, {})
+        
+        assert result.status == PlanStatus.SUCCESS
+        assert call_count[0] == 2
+    
+    def test_fallback_then_ask_user(self):
+        """fallback 실패 시 ask_user 에스컬레이션."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        
+        def always_fail(step, inputs):
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.FAILED,
+                error_message="permanent failure",
+            )
+        
+        step = PlanStep(
+            id="fail_step",
+            runner="mock",
+            on_error=ErrorPolicy.FALLBACK,  # fallback 실패 시 ask_user로 에스컬레이션
+            max_retries=0,
+        )
+        
+        plan = Plan(id="fallback_test", intent="analyze", sub_intent="health", steps=[step])
+        executor = PlanExecutor(step_executors={"mock": always_fail})
+        result = executor.execute(plan, {})
+        
+        # ask_user로 종료
+        assert result.status in (PlanStatus.ASK_USER, PlanStatus.FAILED)
+        assert result.error_message is not None
+    
+    def test_error_recovery_rate(self):
+        """N회 시나리오 중 정상 종료율 ≥ 95%."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        import random
+        
+        N = 100
+        success_count = 0
+        
+        for i in range(N):
+            fail_times = random.randint(0, 2)  # 0~2회 실패
+            call_count = [0]
+            
+            def intermittent_failure(step, inputs, fails=fail_times, counter=call_count):
+                counter[0] += 1
+                if counter[0] <= fails:
+                    return StepResult(
+                        step_id=step.id,
+                        status=StepStatus.FAILED,
+                        error_message=f"fail {counter[0]}",
+                    )
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.SUCCESS,
+                    result={"success": True},
+                )
+            
+            step = PlanStep(
+                id=f"step_{i}",
+                runner="mock",
+                on_error=ErrorPolicy.RETRY,
+                max_retries=2,
+            )
+            
+            plan = Plan(id=f"test_{i}", intent="analyze", sub_intent="health", steps=[step])
+            executor = PlanExecutor(step_executors={"mock": intermittent_failure})
+            result = executor.execute(plan, {})
+            
+            # 정상 종료: SUCCESS, PARTIAL, ASK_USER 모두 정상 종료로 간주
+            if result.status in (PlanStatus.SUCCESS, PlanStatus.PARTIAL, PlanStatus.ASK_USER):
+                success_count += 1
+        
+        success_rate = success_count / N
+        assert success_rate >= 0.95, f"정상 종료율 {success_rate:.2%} < 95%"
+
+
+# ============================================================================
+# 시나리오 8: 임계·라우팅 튜닝
+# ============================================================================
+class TestRoutingThresholds:
+    """경계 입력 및 임계값 검증."""
+    
+    def test_ambiguous_query_no_expert_misroute(self):
+        """모호한 질의가 전문가 노드로 오진입하지 않음."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        ambiguous_queries = [
+            "react 문서 어떤 편이야?",
+            "vue 괜찮아?",
+            "그게 뭐야?",
+        ]
+        
+        for query in ambiguous_queries:
+            result = _tier1_heuristic(query, False)
+            # 모호한 질의는 tier1에서 None (LLM으로 위임) 또는 help/overview로 분류
+            if result is not None:
+                assert result.sub_intent not in ("health", "onboarding", "compare"), \
+                    f"모호한 질의 '{query}'가 진단 노드로 오진입: {result.sub_intent}"
+    
+    def test_disambiguation_rate_target(self):
+        """Disambiguation Rate 목표 범위 (10-25%) 검증."""
+        from backend.agents.supervisor.calibration import (
+            CalibrationStore,
+            DISAMBIGUATION_TARGET_MIN,
+            DISAMBIGUATION_TARGET_MAX,
+        )
+        
+        store = CalibrationStore()
+        
+        # 목표 범위 확인
+        assert DISAMBIGUATION_TARGET_MIN == 0.10
+        assert DISAMBIGUATION_TARGET_MAX == 0.25
+    
+    def test_wrong_proceed_rate(self):
+        """Wrong-Proceed < 1% 검증 로직."""
+        from backend.agents.supervisor.calibration import CalibrationStore
+        
+        store = CalibrationStore()
+        
+        # 100개 중 0개 wrong proceed
+        for _ in range(100):
+            store.record("analyze", "health", proceed=True, correct=True)
+        
+        metrics = store.get_metrics()
+        wrong_proceed_rate = metrics.get("wrong_proceed_rate", 0)
+        
+        assert wrong_proceed_rate < 0.01, f"Wrong-Proceed {wrong_proceed_rate:.2%} >= 1%"
+
+
+# ============================================================================
+# 시나리오 9: 아이덤포턴시·중복 방지
+# ============================================================================
+class TestIdempotencyAdvanced:
+    """고급 아이덤포턴시 테스트."""
+    
+    def test_duplicate_request_same_answer_id(self):
+        """동일 프롬프트 두 번 전송 시 answer_id 동일."""
+        from backend.agents.supervisor.models import IdempotencyStore
+        
+        store = IdempotencyStore()
+        
+        turn_id = "turn_001"
+        step_id = "classify"
+        result1 = {"intent": "analyze"}
+        result2 = {"intent": "analyze"}  # 동일 결과
+        
+        # 첫 번째 저장
+        answer_id1 = store.store_result(turn_id, step_id, result1)
+        
+        # 동일 키로 두 번째 시도 - 이미 있으면 기존 것 반환
+        existing = store.get_result(turn_id, step_id)
+        assert existing is not None
+        assert existing == result1
+    
+    def test_llm_schema_failure_then_retry_success(self):
+        """LLM 스키마 실패 후 재시도 성공 시 1개 응답만."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy, StepResult
+        )
+        from backend.common.events import get_event_store, EventType
+        
+        event_store = get_event_store()
+        event_store.clear()
+        
+        call_count = [0]
+        results_generated = []
+        
+        def schema_fail_then_success(step, inputs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                result = StepResult(
+                    step_id=step.id,
+                    status=StepStatus.FAILED,
+                    error_message="JSON schema validation failed",
+                )
+                results_generated.append(("fail", result))
+                return result
+            
+            result = StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"response": "valid"},
+            )
+            results_generated.append(("success", result))
+            return result
+        
+        step = PlanStep(
+            id="llm_step",
+            runner="mock",
+            on_error=ErrorPolicy.RETRY,
+            max_retries=1,
+        )
+        
+        plan = Plan(id="schema_test", intent="analyze", sub_intent="health", steps=[step])
+        executor = PlanExecutor(step_executors={"mock": schema_fail_then_success})
+        result = executor.execute(plan, {})
+        
+        # 최종 성공
+        assert result.status == PlanStatus.SUCCESS
+        
+        # 이벤트에는 실패/성공 모두 기록
+        assert len(results_generated) == 2
+        assert results_generated[0][0] == "fail"
+        assert results_generated[1][0] == "success"
+    
+    def test_no_duplicate_cards(self):
+        """중복 카드 0건 검증."""
+        from backend.agents.supervisor.models import IdempotencyStore
+        
+        store = IdempotencyStore()
+        
+        # 동일 턴에서 동일 스텝 결과는 1번만 저장
+        turn_id = "turn_dup"
+        step_id = "summarize"
+        
+        answer_id1 = store.store_result(turn_id, step_id, {"card": 1})
+        answer_id2 = store.store_result(turn_id, step_id, {"card": 2})  # 덮어씌워짐
+        
+        # 결과 조회 시 1개만 반환
+        result = store.get_result(turn_id, step_id)
+        assert result is not None
+        # 마지막 결과만 존재
+        assert result["card"] == 2
+
+
+# ============================================================================
+# 시나리오 10: 운영 지표 집계
+# ============================================================================
+class TestOperationalMetrics:
+    """운영 지표 테스트: p95 레이턴시, Disambiguation, sources 등."""
+    
+    def test_greeting_latency_p95(self):
+        """인사 p95 < 100ms."""
+        from backend.agents.supervisor.observability import MetricsCollector
+        
+        collector = MetricsCollector()
+        
+        # 100개 샘플 - 대부분 50ms 이하
+        for i in range(100):
+            latency = 30 + (i % 40)  # 30~70ms
+            collector.record_latency("greeting", latency)
+        
+        p95 = collector.get_percentile("greeting", 95)
+        assert p95 < 100, f"인사 p95 {p95}ms >= 100ms"
+    
+    def test_overview_latency_p95(self):
+        """개요 p95 ≤ 1.5s."""
+        from backend.agents.supervisor.observability import MetricsCollector
+        
+        collector = MetricsCollector()
+        
+        # 100개 샘플 - 대부분 1초 이하
+        for i in range(100):
+            latency = 500 + (i * 10)  # 500~1500ms
+            collector.record_latency("overview", latency)
+        
+        p95 = collector.get_percentile("overview", 95)
+        assert p95 <= 1500, f"개요 p95 {p95}ms > 1500ms"
+    
+    def test_sources_never_empty(self):
+        """sources == [] 0% 검증."""
+        from backend.agents.supervisor.runners.base import validate_runner_output
+        
+        # 빈 sources는 validation 실패
+        output_without_sources = {
+            "summary": "test",
+            "sources": [],
+        }
+        
+        is_valid, errors = validate_runner_output(output_without_sources)
+        assert not is_valid
+        assert "sources" in str(errors).lower()
+    
+    def test_metrics_dashboard_structure(self):
+        """대시보드 메트릭 구조 검증."""
+        from backend.agents.supervisor.observability import (
+            SLOChecker,
+            DEFAULT_SLOS,
+        )
+        
+        checker = SLOChecker(DEFAULT_SLOS)
+        
+        # 필수 메트릭 키
+        required_keys = {
+            "greeting_latency_p95",
+            "overview_latency_p95",
+            "disambiguation_rate",
+            "wrong_proceed_rate",
+            "sources_empty_rate",
+            "duplicate_card_rate",
+            "error_recovery_rate",
+        }
+        
+        # DEFAULT_SLOS에 모든 필수 키 포함
+        slo_keys = set(DEFAULT_SLOS.keys())
+        missing = required_keys - slo_keys
+        assert not missing, f"누락된 SLO 키: {missing}"
+
+
+class TestDisambiguation:
+    """Disambiguation (저장소 미지정) 테스트."""
+    
+    def test_missing_repo_triggers_disambiguation(self):
+        """repo 미지정 시 disambiguation 플래그 설정."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "분석해줘"}
+        result = classify_node(state)
+        
+        # analyze.health는 requires_repo=True이므로 disambiguation 필요
+        assert result.get("intent") == "analyze"
+        assert result.get("_needs_disambiguation") is True
+    
+    def test_disambiguation_shows_guidance(self):
+        """disambiguation 시 안내 메시지 표시 + answer_kind=disambiguation."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        state = {
+            "user_query": "분석해줘",
+            "intent": "analyze",
+            "sub_intent": "health",
+            "_needs_disambiguation": True,
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # 안내 메시지 포함
+        summary = result.get("llm_summary", "")
+        assert "owner/repo" in summary or "저장소" in summary
+        # disambiguation 전용 answer_kind
+        assert result.get("answer_kind") == "disambiguation"
+        # sources에 disambiguation 소스 포함
+        contract = result.get("answer_contract", {})
+        assert len(contract.get("sources", [])) >= 1
+    
+    def test_with_repo_no_disambiguation(self):
+        """repo 지정 시 disambiguation 없음."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "facebook/react 분석해줘"}
+        result = classify_node(state)
+        
+        # repo가 있으므로 disambiguation 불필요
+        assert result.get("repo") is not None
+        assert result.get("_needs_disambiguation") is not True
+
+
+class TestFollowupContext:
+    """Follow-up 맥락 유지 테스트."""
+    
+    def test_build_followup_state_preserves_diagnosis(self):
+        """build_followup_state가 diagnosis_result 유지."""
+        from backend.agents.supervisor.service import build_followup_state
+        
+        prev_state = {
+            "user_query": "facebook/react 분석해줘",
+            "repo": {"owner": "facebook", "name": "react", "url": "https://github.com/facebook/react"},
+            "diagnosis_result": {"scores": {"health_score": 85}},
+            "answer_kind": "report",
+            "_session_id": "test-session",
+        }
+        
+        new_state = build_followup_state("왜 이 점수야?", prev_state)
+        
+        assert new_state.get("diagnosis_result") == prev_state["diagnosis_result"]
+        assert new_state.get("repo") == prev_state["repo"]
+        assert new_state.get("_session_id") == prev_state["_session_id"]
+        assert new_state.get("last_answer_kind") == "report"
+    
+    def test_followup_detection_with_artifacts(self):
+        """이전 아티팩트가 있을 때 followup 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_followup
+        
+        # 이전 아티팩트 있음
+        assert _detect_followup("왜 그래?", has_prev_artifacts=True) is True
+        assert _detect_followup("근거가 뭐야?", has_prev_artifacts=True) is True
+        
+        # 이전 아티팩트 없음 - followup 감지 안됨
+        assert _detect_followup("왜 그래?", has_prev_artifacts=False) is False
+
+
+class TestKeywordCandidates:
+    """키워드 후보 추출 테스트."""
+    
+    def test_extract_keyword_candidates_react(self):
+        """react 키워드에서 후보 추출."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_keyword_candidates
+        
+        keyword, candidates = _extract_keyword_candidates("react 분석해줘")
+        
+        assert keyword == "react"
+        assert len(candidates) >= 2
+        assert any(c["owner"] == "facebook" and c["name"] == "react" for c in candidates)
+    
+    def test_extract_keyword_candidates_vue(self):
+        """vue 키워드에서 후보 추출."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_keyword_candidates
+        
+        keyword, candidates = _extract_keyword_candidates("vue 건강도 확인해줘")
+        
+        assert keyword == "vue"
+        assert len(candidates) >= 1
+    
+    def test_extract_keyword_candidates_none(self):
+        """알 수 없는 키워드는 None."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_keyword_candidates
+        
+        keyword, candidates = _extract_keyword_candidates("분석해줘")
+        
+        assert keyword is None
+        assert len(candidates) == 0
+    
+    def test_disambiguation_with_candidates(self):
+        """키워드 있으면 후보 템플릿 사용."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "react 분석해줘"}
+        result = classify_node(state)
+        
+        assert result.get("_needs_disambiguation") is True
+        assert result.get("_disambiguation_candidates") is not None
+        assert "facebook/react" in result.get("_disambiguation_template", "")
+    
+    def test_disambiguation_blocks_expert_node(self):
+        """disambiguation 시 전문가 노드 진입 차단."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "health",
+            "_needs_disambiguation": True,
+        }
+        
+        route = should_run_diagnosis(state)
+        assert route == "summarize"
+    
+    def test_disambiguation_answer_kind(self):
+        """disambiguation 시 answer_kind=disambiguation."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "react 분석해줘"}
+        result = classify_node(state)
+        
+        assert result.get("_needs_disambiguation") is True
+        assert result.get("answer_kind") == "disambiguation"
+    
+    def test_disambiguation_candidate_sources(self):
+        """disambiguation 시 candidate sources 포함."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "react 분석해줘"}
+        result = classify_node(state)
+        
+        candidate_sources = result.get("_disambiguation_candidate_sources", [])
+        assert len(candidate_sources) >= 1
+        assert any("facebook/react" in src for src in candidate_sources)
+    
+    def test_disambiguation_summarize_response(self):
+        """disambiguation summarize 응답 검증."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        state = {
+            "user_query": "react 분석해줘",
+            "intent": "analyze",
+            "sub_intent": "health",
+            "_needs_disambiguation": True,
+            "_disambiguation_template": "react로 검색된 저장소가 여러 개 있습니다.",
+            "_disambiguation_source": "SYS:DISAMBIGUATION:CANDIDATES",
+            "_disambiguation_candidate_sources": ["CANDIDATE:facebook/react"],
+        }
+        
+        result = summarize_node_v1(state)
+        
+        assert result.get("answer_kind") == "disambiguation"
+        contract = result.get("answer_contract", {})
+        assert len(contract.get("sources", [])) >= 1
+        assert "disambiguation" in contract.get("source_kinds", [])
+
+
+class TestRefineMode:
+    """Refine 모드 테스트: Task 재정렬/발췌."""
+    
+    def test_refine_detection_with_tasks(self):
+        """Task 목록 있을 때 refine 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 아티팩트 있을 때만 refine 감지
+        result = _tier1_heuristic("상위 3개만 알려줘", has_prev_artifacts=True)
+        assert result is not None
+        assert result.intent == "followup"
+        assert result.sub_intent == "refine"
+    
+    def test_refine_detection_without_tasks(self):
+        """Task 목록 없으면 refine 비감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 아티팩트 없으면 refine 감지 안 함
+        result = _tier1_heuristic("상위 3개만 알려줘", has_prev_artifacts=False)
+        assert result is None  # LLM으로 위임
+    
+    def test_refine_guard_no_tasks(self):
+        """Task 없으면 가드 발동."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "상위 3개 알려줘",
+            # last_task_list 없음, diagnosis_result 없음
+        }
+        
+        result = _handle_refine_mode(state, "상위 3개 알려줘")
+        
+        # 가드 발동: 안내 메시지
+        assert "이전 분석" in result["llm_summary"] or "Task가 없습니다" in result["llm_summary"]
+        assert result["answer_kind"] == "refine"
+    
+    def test_refine_with_last_task_list(self):
+        """last_task_list 있으면 정상 refine."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "상위 2개만 알려줘",
+            "last_task_list": [
+                {"title": "Task A", "priority": 1, "difficulty": "beginner", "rationale": "쉬움"},
+                {"title": "Task B", "priority": 2, "difficulty": "beginner", "rationale": "중간"},
+                {"title": "Task C", "priority": 3, "difficulty": "intermediate", "rationale": "어려움"},
+            ],
+        }
+        
+        result = _handle_refine_mode(state, "상위 2개만 알려줘")
+        
+        # sources에 onboarding_tasks 포함 (필수)
+        answer_contract = result.get("answer_contract", {})
+        sources = answer_contract.get("sources", [])
+        assert "onboarding_tasks" in sources
+        
+        # Task 정보 유지
+        assert result.get("last_task_list") is not None
+        assert result["answer_kind"] == "refine"
+    
+    def test_refine_with_diagnosis_result(self):
+        """diagnosis_result.onboarding_tasks로도 refine 가능."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "3개 추천해줘",
+            "diagnosis_result": {
+                "onboarding_tasks": {
+                    "beginner": [
+                        {"title": "Beginner Task 1", "priority": 1, "rationale": "초급"},
+                        {"title": "Beginner Task 2", "priority": 2, "rationale": "초급"},
+                    ],
+                    "intermediate": [
+                        {"title": "Intermediate Task", "priority": 5, "rationale": "중급"},
+                    ],
+                },
+            },
+        }
+        
+        result = _handle_refine_mode(state, "3개 추천해줘")
+        
+        # sources에 onboarding_tasks 포함 (필수)
+        answer_contract = result.get("answer_contract", {})
+        sources = answer_contract.get("sources", [])
+        assert "onboarding_tasks" in sources
+        assert result["answer_kind"] == "refine"
+    
+    def test_extract_requested_count(self):
+        """요청된 Task 개수 추출."""
+        from backend.agents.supervisor.prompts import extract_requested_count
+        
+        assert extract_requested_count("상위 3개 알려줘") == 3
+        assert extract_requested_count("5개만 보여줘") == 5
+        assert extract_requested_count("top 2") == 2
+        assert extract_requested_count("추천해줘") == 3  # default
+        assert extract_requested_count("상위 100개") == 10  # max cap
+    
+    def test_refine_priority_sorting(self):
+        """priority 기준 정렬 확인."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "상위 2개",
+            "last_task_list": [
+                {"title": "Low Priority", "priority": 10, "difficulty": "advanced"},
+                {"title": "High Priority", "priority": 1, "difficulty": "beginner"},
+                {"title": "Medium Priority", "priority": 5, "difficulty": "intermediate"},
+            ],
+        }
+        
+        result = _handle_refine_mode(state, "상위 2개")
+        
+        # 응답에 High Priority와 Medium Priority가 포함되어야 함
+        assert result["answer_kind"] == "refine"
+        # Task 목록이 priority 순으로 정렬되어 유지됨
+        last_tasks = result.get("last_task_list", [])
+        assert len(last_tasks) == 3
+        assert last_tasks[0]["priority"] == 1  # High Priority first
+    
+    def test_refine_sources_not_empty(self):
+        """refine 응답의 sources는 빈 배열 금지."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "3개 알려줘",
+            "last_task_list": [
+                {"title": "Task 1", "priority": 1, "difficulty": "beginner"},
+            ],
+        }
+        
+        result = _handle_refine_mode(state, "3개 알려줘")
+        
+        answer_contract = result.get("answer_contract", {})
+        sources = answer_contract.get("sources", [])
+        
+        # sources는 비어있으면 안 됨
+        assert len(sources) > 0
+        # onboarding_tasks 필수
+        assert "onboarding_tasks" in sources
+    
+    def test_has_prev_artifacts_includes_last_task_list(self):
+        """has_prev_artifacts는 last_task_list도 포함."""
+        from backend.agents.supervisor.nodes.intent_classifier import classify_intent_node
+        
+        # diagnosis_result 없어도 last_task_list 있으면 has_prev_artifacts=True
+        state = {
+            "user_query": "더 쉬운 거 알려줘",
+            "last_task_list": [{"title": "Task", "priority": 1, "difficulty": "beginner"}],
+        }
+        
+        # _tier1_heuristic 내부에서 has_prev_artifacts=True로 동작해야 함
+        # classify_intent_node에서 테스트
+        result = classify_intent_node(state)
+        
+        # refine 패턴이면 followup.refine으로 분류
+        assert result.get("intent") == "followup"
+        assert result.get("sub_intent") == "refine"
+
+
+class TestRefineEventTracking:
+    """Refine 이벤트 추적 테스트."""
+    
+    def test_refine_guard_emits_event(self):
+        """가드 발동 시 이벤트 발생."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {"user_query": "3개 알려줘"}
+        result = _handle_refine_mode(state, "3개 알려줘")
+        
+        # 가드가 발동되면 answer_kind가 "refine"이고 안내 메시지가 있어야 함
+        assert result["answer_kind"] == "refine"
+        assert "이전 분석" in result["llm_summary"] or "Task가 없습니다" in result["llm_summary"]
+    
+    def test_refine_success_emits_answer_contract(self):
+        """정상 refine 시 answer_contract 생성."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "2개 알려줘",
+            "last_task_list": [
+                {"title": "Task 1", "priority": 1, "difficulty": "beginner"},
+                {"title": "Task 2", "priority": 2, "difficulty": "beginner"},
+            ],
+        }
+        result = _handle_refine_mode(state, "2개 알려줘")
+        
+        # answer_contract가 생성되어야 함
+        assert "answer_contract" in result
+        answer_contract = result["answer_contract"]
+        
+        # sources에 onboarding_tasks 포함
+        assert "onboarding_tasks" in answer_contract.get("sources", [])
+        
+        # text가 비어있지 않아야 함
+        assert len(answer_contract.get("text", "")) > 0
+
+
+class TestOnepagerMVP:
+    """One-pager MVP 테스트: 4섹션, Tier 기반, 가드."""
+    
+    def test_onepager_tier_enum(self):
+        """Tier enum 정의."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerTier
+        
+        assert OnepagerTier.TIER_1.value == "tier_1"
+        assert OnepagerTier.TIER_2.value == "tier_2"
+        assert OnepagerTier.TIER_3.value == "tier_3"
+        assert OnepagerTier.NONE.value == "none"
+    
+    def test_onepager_artifacts_tier_detection(self):
+        """아티팩트 Tier 감지."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerArtifacts, OnepagerTier
+        
+        # NONE: 아무것도 없음
+        artifacts = OnepagerArtifacts()
+        assert artifacts.get_tier() == OnepagerTier.NONE
+        
+        # TIER_3: repo_facts만
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        assert artifacts.get_tier() == OnepagerTier.TIER_3
+        
+        # TIER_2: repo_facts + readme_head
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"}, readme_head="# README")
+        assert artifacts.get_tier() == OnepagerTier.TIER_2
+        
+        # TIER_1: repo_facts + python_metrics
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"}, python_metrics={"health_score": 80})
+        assert artifacts.get_tier() == OnepagerTier.TIER_1
+        
+        # TIER_1: repo_facts + diagnosis_raw
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"}, diagnosis_raw={"scores": {}})
+        assert artifacts.get_tier() == OnepagerTier.TIER_1
+    
+    def test_onepager_artifacts_source_ids(self):
+        """아티팩트 source ID 목록."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerArtifacts
+        
+        artifacts = OnepagerArtifacts(
+            repo_facts={"name": "test"},
+            readme_head="# README",
+            python_metrics={"health_score": 80},
+        )
+        
+        sources = artifacts.get_source_ids()
+        assert "repo_facts" in sources
+        assert "readme_head" in sources
+        assert "python_metrics" in sources
+        assert len(sources) == 3
+    
+    def test_onepager_guard_no_repo_facts(self):
+        """가드: repo_facts 없으면 실패."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        # _artifacts가 비어있음
+        can_proceed, error = runner._onepager_guard()
+        
+        assert can_proceed is False
+        assert "기본 정보" in error
+    
+    def test_onepager_guard_with_repo_facts(self):
+        """가드: repo_facts 있으면 통과."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        runner._artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        
+        can_proceed, error = runner._onepager_guard()
+        
+        assert can_proceed is True
+        assert error is None
+    
+    def test_onepager_guard_access_error(self):
+        """가드: 접근 오류 감지."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        runner._artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        runner.collector.add_error("repo_facts", "NOT_FOUND: Repository not found")
+        
+        can_proceed, error = runner._onepager_guard()
+        
+        assert can_proceed is False
+        assert "비공개" in error or "찾을 수 없" in error
+    
+    def test_onepager_sources_minimum_tier2(self):
+        """Tier 2/3: sources ≥ 2개."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerArtifacts, OnepagerTier
+        
+        # Tier 2
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"}, readme_head="# README")
+        sources = artifacts.get_source_ids()
+        
+        assert len(sources) >= 2
+        assert "repo_facts" in sources
+    
+    def test_onepager_sources_minimum_tier1(self):
+        """Tier 1: sources ≥ 3개."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerArtifacts, OnepagerTier
+        
+        # Tier 1 with all artifacts
+        artifacts = OnepagerArtifacts(
+            repo_facts={"name": "test"},
+            readme_head="# README",
+            python_metrics={"health_score": 80},
+            diagnosis_raw={"scores": {}},
+        )
+        sources = artifacts.get_source_ids()
+        
+        assert len(sources) >= 3
+        assert artifacts.get_tier() == OnepagerTier.TIER_1
+    
+    def test_onepager_fallback_template_has_4_sections(self):
+        """Fallback 템플릿: 4섹션 포함."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts
+        
+        runner = OnepagerRunner(repo_id="facebook/react")
+        runner._artifacts = OnepagerArtifacts(
+            repo_facts={
+                "description": "UI library",
+                "language": "JavaScript",
+                "stargazers_count": 200000,
+                "forks_count": 40000,
+            }
+        )
+        
+        text = runner._build_fallback_onepager()
+        
+        # 4섹션 확인
+        assert "1. 개요" in text or "개요" in text
+        assert "2. 장점" in text or "장점" in text
+        assert "3. 리스크" in text or "리스크" in text
+        assert "4. 즉시 행동" in text or "즉시 행동" in text or "Top-3" in text
+    
+    def test_onepager_tier3_disclaimer(self):
+        """Tier 3: 데이터 부족 경고 포함."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts, OnepagerTier
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        runner._artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        runner._tier = OnepagerTier.TIER_3
+        
+        text = runner._build_fallback_onepager()
+        
+        # Tier 3 disclaimer
+        assert "데이터 부족" in text or "상세 분석" in text
+    
+    def test_onepager_sources_never_empty(self):
+        """sources는 절대 빈 배열 금지."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        runner._artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        runner._tier = runner._artifacts.get_tier()
+        
+        # _execute 호출 없이 sources 체크
+        sources = runner._artifacts.get_source_ids()
+        
+        # 최소 1개 이상
+        assert len(sources) >= 1
+        assert "repo_facts" in sources
+
+
+class TestOnepagerIntegration:
+    """One-pager 통합 테스트."""
+    
+    def test_onepager_pattern_detection(self):
+        """한 장 요약 패턴 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_onepager
+        
+        assert _detect_onepager("facebook/react 한 장 요약 만들어줘")
+        assert _detect_onepager("한페이지 요약해줘")
+        assert _detect_onepager("one-pager 만들어줘")
+    
+    def test_onepager_routing(self):
+        """onepager → analyze/onepager 라우팅."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        result = _tier1_heuristic("facebook/react 한 장 요약 만들어줘")
+        
+        assert result is not None
+        assert result.intent == "analyze"
+        assert result.sub_intent == "onepager"
+
+
+class TestCompareMVP:
+    """Compare MVP 테스트 (합격 기준)."""
+    
+    def test_compare_enabled_toggle(self):
+        """COMPARE_ENABLED 토글 확인."""
+        from backend.agents.supervisor.intent_config import COMPARE_ENABLED
+        
+        assert isinstance(COMPARE_ENABLED, bool)
+    
+    def test_compare_entity_extraction(self):
+        """두 레포 엔티티 추출."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_two_repos
+        
+        repo_a, repo_b = _extract_two_repos("facebook/react랑 vuejs/core 비교해줘")
+        
+        assert repo_a is not None
+        assert repo_b is not None
+        assert repo_a["owner"] == "facebook"
+        assert repo_a["name"] == "react"
+        assert repo_b["owner"] == "vuejs"
+        assert repo_b["name"] == "core"
+    
+    def test_compare_entity_one_missing(self):
+        """레포 하나만 있는 경우."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_two_repos
+        
+        repo_a, repo_b = _extract_two_repos("facebook/react 비교해줘")
+        
+        assert repo_a is not None
+        assert repo_b is None
+    
+    def test_compare_detection(self):
+        """compare 패턴 감지 + 두 레포 추출."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_compare
+        
+        is_compare, repo_a, repo_b = _detect_compare("facebook/react랑 vuejs/core 비교해줘")
+        
+        assert is_compare is True
+        assert repo_a is not None
+        assert repo_b is not None
+    
+    def test_compare_routing_heuristic(self):
+        """compare → analyze/compare 라우팅."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        result = _tier1_heuristic("facebook/react랑 vuejs/core 비교해줘")
+        
+        assert result is not None
+        assert result.intent == "analyze"
+        assert result.sub_intent == "compare"
+        assert result.repo is not None
+        assert result.compare_repo is not None
+    
+    def test_compare_guard_no_repo_b(self):
+        """compare_guard: repo_b 없으면 에러."""
+        from backend.agents.supervisor.graph import expert_node
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+            # compare_repo 없음
+        }
+        
+        result = expert_node(state)
+        
+        assert "error_message" in result
+        assert "두 번째 저장소" in result["error_message"]
+    
+    def test_compare_runner_sources(self):
+        """CompareRunner sources 규칙: 양쪽 아티팩트 1개 이상."""
+        from backend.agents.supervisor.runners import CompareRunner
+        from unittest.mock import patch, MagicMock
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="vuejs/core",
+        )
+        
+        # Mock GitHub API
+        mock_overview = {
+            "full_name": "test/repo",
+            "stargazers_count": 1000,
+            "forks_count": 100,
+            "description": "Test",
+        }
+        
+        with patch("backend.agents.supervisor.runners.compare_runner.fetch_repo_overview") as mock_fetch:
+            mock_fetch.return_value = mock_overview
+            with patch("backend.agents.supervisor.runners.compare_runner.run_diagnosis") as mock_diag:
+                mock_diag.return_value = {"scores": {"health_score": 75}}
+                
+                result = runner.run()
+        
+        assert result.success or result.degraded
+        if result.answer:
+            # sources에 양쪽 레포 아티팩트 있어야 함
+            sources = result.answer.sources
+            assert len(sources) >= 2
+    
+    def test_compare_answer_kind(self):
+        """compare → answer_kind=compare."""
+        from backend.agents.supervisor.intent_config import ANSWER_KIND_MAP
+        
+        assert ANSWER_KIND_MAP.get(("analyze", "compare")) == "compare"
+    
+    def test_compare_partial_failure_b_plan(self):
+        """한쪽 실패 시 B안(불완전 비교) - 성공한 쪽만 결과 반환."""
+        from backend.agents.supervisor.runners import CompareRunner
+        from backend.common.github_client import GitHubClientError
+        from unittest.mock import patch
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="nonexistent/repo",
+        )
+        
+        mock_overview = {
+            "full_name": "facebook/react",
+            "stargazers_count": 1000,
+        }
+        
+        with patch("backend.agents.supervisor.runners.compare_runner.fetch_repo_overview") as mock_fetch:
+            def side_effect(owner, repo):
+                if repo == "react":
+                    return mock_overview
+                raise GitHubClientError("404 Not Found")
+            
+            mock_fetch.side_effect = side_effect
+            result = runner.run()
+        
+        # B안: 한쪽 성공 시에도 결과 반환 (success=True)
+        # sources에 성공한 쪽만 포함
+        assert result.success or result.degraded
+        if result.answer:
+            sources = result.answer.sources
+            # A 레포 아티팩트만 있어야 함
+            assert any("facebook/react" in s for s in sources)
+            # B 레포 아티팩트는 없어야 함
+            assert not any("nonexistent" in s for s in sources)
+
+
+class TestCompareIntegration:
+    """Compare 통합 테스트."""
+    
+    def test_compare_classify_to_expert(self):
+        """classify → expert 라우팅."""
+        from backend.agents.supervisor.nodes.intent_classifier import classify_intent_node
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {"user_query": "facebook/react랑 vuejs/core 비교해줘"}
+        classified = classify_intent_node(state)
+        
+        merged = {**state, **classified}
+        route = should_run_diagnosis(merged)
+        
+        assert route == "expert"
+    
+    def test_compare_expert_node_success(self):
+        """expert_node 성공 시 answer_contract 반환."""
+        from backend.agents.supervisor.graph import expert_node
+        from unittest.mock import patch
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+            "compare_repo": {"owner": "vuejs", "name": "core", "url": ""},
+        }
+        
+        mock_overview = {
+            "full_name": "test/repo",
+            "stargazers_count": 1000,
+            "forks_count": 100,
+        }
+        
+        with patch("backend.agents.supervisor.runners.compare_runner.fetch_repo_overview") as mock_fetch:
+            mock_fetch.return_value = mock_overview
+            with patch("backend.agents.supervisor.runners.compare_runner.run_diagnosis") as mock_diag:
+                mock_diag.return_value = {"scores": {"health_score": 75}}
+                
+                result = expert_node(state)
+        
+        assert "answer_contract" in result
+        assert result.get("answer_kind") == "compare"
+    
+    def test_compare_summarize_passthrough(self):
+        """summarize_node: expert 결과 pass-through."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        # expert_node가 이미 answer_contract를 설정한 상태
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "answer_contract": {
+                "text": "비교 결과입니다.",
+                "sources": ["ARTIFACT:A", "ARTIFACT:B"],
+                "source_kinds": ["diagnosis", "diagnosis"],
+            },
+            "answer_kind": "compare",
+            "last_brief": "비교 완료",
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # 기존 answer_contract 유지
+        assert result["answer_contract"]["text"] == "비교 결과입니다."
+        assert result["answer_kind"] == "compare"
+
+
+class TestAccessGuard:
+    """Access Guard (접근 권한) 테스트."""
+    
+    def test_check_repo_access_result_dataclass(self):
+        """RepoAccessResult dataclass 구조 검증."""
+        from backend.common.github_client import RepoAccessResult
+        
+        result = RepoAccessResult(
+            accessible=False,
+            owner="test",
+            repo="repo",
+            repo_id="test/repo",
+            status_code=404,
+            reason="not_found"
+        )
+        
+        assert result.accessible is False
+        assert result.status_code == 404
+        assert result.reason == "not_found"
+        assert result.default_branch is None
+        assert result.owner == "test"
+        assert result.repo == "repo"
+        assert result.repo_id == "test/repo"
+    
+    def test_access_error_templates_exist(self):
+        """접근 오류 템플릿 존재 검증."""
+        from backend.agents.supervisor.prompts import (
+            ACCESS_ERROR_NOT_FOUND_TEMPLATE,
+            ACCESS_ERROR_PRIVATE_TEMPLATE,
+            ACCESS_ERROR_RATE_LIMIT_TEMPLATE,
+            ACCESS_ERROR_SOURCE_ID,
+        )
+        
+        # 템플릿에 필수 placeholder 존재
+        assert "{owner}" in ACCESS_ERROR_NOT_FOUND_TEMPLATE
+        assert "{repo}" in ACCESS_ERROR_NOT_FOUND_TEMPLATE
+        assert "{owner}" in ACCESS_ERROR_PRIVATE_TEMPLATE
+        assert "{repo}" in ACCESS_ERROR_PRIVATE_TEMPLATE
+        assert "API" in ACCESS_ERROR_RATE_LIMIT_TEMPLATE or "rate" in ACCESS_ERROR_RATE_LIMIT_TEMPLATE.lower()
+        
+        # source ID 형식
+        assert ACCESS_ERROR_SOURCE_ID.startswith("SYS:")
+    
+    def test_ask_user_answer_kind_registered(self):
+        """ask_user가 AnswerKind에 등록됨."""
+        from backend.agents.supervisor.models import AnswerKind
+        from typing import get_args
+        
+        valid_kinds = get_args(AnswerKind)
+        assert "ask_user" in valid_kinds
+    
+    def test_repo_context_typedef(self):
+        """RepoContext TypedDict 구조 검증."""
+        from backend.agents.supervisor.models import RepoContext
+        
+        # RepoContext 타입 힌트 존재 확인
+        annotations = RepoContext.__annotations__
+        assert "owner" in annotations
+        assert "repo" in annotations
+        assert "repo_id" in annotations
+        assert "accessible" in annotations
+    
+    def test_access_guard_not_found_sets_ask_user(self):
+        """404 응답 시 _needs_ask_user 설정."""
+        from backend.agents.supervisor.graph import classify_node
+        from unittest.mock import patch
+        from backend.common.github_client import RepoAccessResult
+        
+        state = {"user_query": "nonexistent/repo 분석해줘"}
+        
+        with patch("backend.agents.supervisor.graph.check_repo_access") as mock_check:
+            mock_check.return_value = RepoAccessResult(
+                accessible=False,
+                owner="nonexistent",
+                repo="repo",
+                repo_id="nonexistent/repo",
+                status_code=404,
+                reason="not_found"
+            )
+            result = classify_node(state)
+        
+        assert result.get("_needs_ask_user") is True
+        assert result.get("_access_error") == "not_found"
+        assert result.get("answer_kind") == "ask_user"
+        assert result.get("_ask_user_template") is not None
+    
+    def test_access_guard_private_sets_ask_user(self):
+        """403 응답 시 _needs_ask_user 설정."""
+        from backend.agents.supervisor.graph import classify_node
+        from unittest.mock import patch
+        from backend.common.github_client import RepoAccessResult
+        
+        state = {"user_query": "private-org/private-repo 분석해줘"}
+        
+        with patch("backend.agents.supervisor.graph.check_repo_access") as mock_check:
+            mock_check.return_value = RepoAccessResult(
+                accessible=False,
+                owner="private-org",
+                repo="private-repo",
+                repo_id="private-org/private-repo",
+                status_code=403,
+                reason="private_no_access"
+            )
+            result = classify_node(state)
+        
+        assert result.get("_needs_ask_user") is True
+        assert result.get("_access_error") == "private_no_access"
+        assert result.get("answer_kind") == "ask_user"
+    
+    def test_access_guard_rate_limit_sets_ask_user(self):
+        """rate_limit 시 _needs_ask_user 설정."""
+        from backend.agents.supervisor.graph import classify_node
+        from unittest.mock import patch
+        from backend.common.github_client import RepoAccessResult
+        
+        state = {"user_query": "facebook/react 분석해줘"}
+        
+        with patch("backend.agents.supervisor.graph.check_repo_access") as mock_check:
+            mock_check.return_value = RepoAccessResult(
+                accessible=False,
+                owner="facebook",
+                repo="react",
+                repo_id="facebook/react",
+                status_code=429,
+                reason="rate_limit"
+            )
+            result = classify_node(state)
+        
+        assert result.get("_needs_ask_user") is True
+        assert result.get("_access_error") == "rate_limit"
+    
+    def test_ask_user_blocks_expert_node(self):
+        """_needs_ask_user=True 시 expert_node 호출 차단."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "health",
+            "repo": {"owner": "test", "name": "repo", "url": ""},
+            "_needs_ask_user": True,
+        }
+        
+        # ask_user 설정 시 summarize로 분기
+        assert should_run_diagnosis(state) == "summarize"
+    
+    def test_ask_user_summarize_response(self):
+        """ask_user 상태에서 summarize_node 응답 생성."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        state = {
+            "user_query": "private-org/private-repo 분석해줘",
+            "intent": "analyze",
+            "sub_intent": "health",
+            "repo": {"owner": "private-org", "name": "private-repo", "url": ""},
+            "_needs_ask_user": True,
+            "_access_error": "not_found",
+            "_ask_user_template": "**private-org/private-repo** 저장소를 찾을 수 없습니다.",
+            "_ask_user_source": "SYS:ACCESS_GUARD:ERROR",
+            "_repo_context": {"owner": "private-org", "repo": "private-repo", "repo_id": "private-org/private-repo"},
+            "answer_kind": "ask_user",
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # ask_user 응답
+        assert result.get("answer_kind") == "ask_user"
+        contract = result.get("answer_contract", {})
+        assert len(contract.get("sources", [])) >= 1
+        # diagnosis_result는 None (오염 방지)
+        assert result.get("diagnosis_result") is None
+    
+    def test_ask_user_no_diagnosis_result_leakage(self):
+        """ask_user 시 이전 diagnosis_result 누출 방지."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        # 이전 세션의 diagnosis_result가 state에 남아있는 경우
+        state = {
+            "user_query": "my-org/private-repo 분석해줘",
+            "intent": "analyze",
+            "sub_intent": "health",
+            "repo": {"owner": "my-org", "name": "private-repo", "url": ""},
+            "_needs_ask_user": True,
+            "_access_error": "private_no_access",
+            "_ask_user_template": "**my-org/private-repo** 저장소에 접근할 수 없습니다. 비공개 저장소이거나 권한이 필요합니다.",
+            "_ask_user_source": "SYS:ACCESS_GUARD:ERROR",
+            "_repo_context": {"owner": "my-org", "repo": "private-repo", "repo_id": "my-org/private-repo"},
+            "answer_kind": "ask_user",
+            # 이전 세션 잔여 데이터 (오염 시뮬레이션)
+            "diagnosis_result": {"scores": {"health_score": 85}, "details": {"repo_info": {"full_name": "facebook/react"}}},
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # ask_user 응답 시 diagnosis_result는 None으로 덮어씀
+        assert result.get("diagnosis_result") is None
+        # answer_contract에 이전 레포 정보 포함되지 않음
+        contract = result.get("answer_contract", {})
+        text = contract.get("text", "")
+        assert "facebook/react" not in text
+    
+    def test_access_guard_success_proceeds_to_diagnosis(self):
+        """접근 성공 시 정상적으로 diagnosis 진행."""
+        from backend.agents.supervisor.graph import classify_node, should_run_diagnosis
+        from unittest.mock import patch
+        from backend.common.github_client import RepoAccessResult
+        
+        state = {"user_query": "facebook/react 분석해줘"}
+        
+        with patch("backend.agents.supervisor.graph.check_repo_access") as mock_check:
+            mock_check.return_value = RepoAccessResult(
+                accessible=True,
+                owner="facebook",
+                repo="react",
+                repo_id="facebook/react",
+                status_code=200,
+                reason="ok",
+                default_branch="main"
+            )
+            result = classify_node(state)
+        
+        # ask_user 미설정
+        assert result.get("_needs_ask_user") is not True
+        assert result.get("answer_kind") != "ask_user"
+        
+        # diagnosis 진행 가능 (expert 또는 diagnosis 노드로 라우팅)
+        result["intent"] = "analyze"
+        result["sub_intent"] = "health"
+        route = should_run_diagnosis(result)
+        assert route in ("expert", "diagnosis")  # 둘 다 diagnosis 실행을 의미
+
+
+class TestIncompleteCompare:
+    """Incomplete Compare (불완전 비교) 테스트."""
+    
+    def test_failed_repo_dataclass(self):
+        """FailedRepo dataclass 구조 검증."""
+        from backend.agents.supervisor.runners import FailedRepo
+        
+        fr = FailedRepo(
+            owner="osd",
+            repo="cofre",
+            reason="not_found",
+            http_status=404,
+            detail="Repository not found"
+        )
+        
+        assert fr.owner == "osd"
+        assert fr.repo == "cofre"
+        assert fr.reason == "not_found"
+        assert fr.http_status == 404
+        
+        d = fr.to_dict()
+        assert d["owner"] == "osd"
+        assert d["reason"] == "not_found"
+    
+    def test_failure_reason_types(self):
+        """FailureReason 타입이 5종인지 확인."""
+        from backend.agents.supervisor.runners.base import FailureReason
+        from typing import get_args
+        
+        valid_reasons = get_args(FailureReason)
+        assert "not_found" in valid_reasons
+        assert "forbidden" in valid_reasons
+        assert "rate_limit" in valid_reasons
+        assert "timeout" in valid_reasons
+        assert "unknown" in valid_reasons
+        assert len(valid_reasons) == 5
+    
+    def test_normalize_error_reason_404(self):
+        """404 에러 정규화."""
+        from backend.agents.supervisor.runners.compare_runner import _normalize_error_reason
+        
+        class MockError(Exception):
+            pass
+        
+        reason, status, detail = _normalize_error_reason(MockError("Not found"), 404)
+        assert reason == "not_found"
+        assert status == 404
+    
+    def test_normalize_error_reason_403(self):
+        """403 에러 정규화."""
+        from backend.agents.supervisor.runners.compare_runner import _normalize_error_reason
+        
+        class MockError(Exception):
+            pass
+        
+        reason, status, detail = _normalize_error_reason(MockError("Forbidden"), 403)
+        assert reason == "forbidden"
+        assert status == 403
+    
+    def test_normalize_error_reason_rate_limit(self):
+        """429 에러 정규화."""
+        from backend.agents.supervisor.runners.compare_runner import _normalize_error_reason
+        
+        class MockError(Exception):
+            pass
+        
+        reason, status, detail = _normalize_error_reason(MockError("Rate limit exceeded"), 429)
+        assert reason == "rate_limit"
+        assert status == 429
+    
+    def test_runner_result_partial_ok(self):
+        """RunnerResult.partial_ok 메서드 검증."""
+        from backend.agents.supervisor.runners import RunnerResult, FailedRepo
+        from backend.agents.shared.contracts import AnswerContract
+        
+        fr = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        answer = AnswerContract(
+            text="test",
+            sources=["ARTIFACT:OVERVIEW:facebook/react"],
+            source_kinds=["overview"],
+        )
+        
+        result = RunnerResult.partial_ok(
+            answer=answer,
+            artifacts_out=["ARTIFACT:OVERVIEW:facebook/react"],
+            failed_repos=[fr],
+            reason="repo_b_failed",
+        )
+        
+        assert result.success is True
+        assert result.degraded is True
+        assert result.meta.get("status") == "partial"
+        assert result.meta.get("incomplete_compare") is True
+        assert len(result.meta.get("failed_repos", [])) == 1
+        assert result.meta["failed_repos"][0]["reason"] == "not_found"
+    
+    def test_incomplete_compare_warning_in_text(self):
+        """불완전 비교 시 경고 문구 포함 확인."""
+        from backend.agents.supervisor.runners import CompareRunner, FailedRepo
+        from unittest.mock import patch, MagicMock
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="osd/cofre",
+        )
+        
+        # Mock: A 성공, B 실패
+        runner._repo_a_error = None
+        runner._repo_b_error = "Not found"
+        runner._failed_repo_b = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        
+        mock_overview = {
+            "full_name": "facebook/react",
+            "stargazers_count": 200000,
+            "forks_count": 40000,
+            "description": "A declarative, efficient, and flexible JavaScript library",
+        }
+        runner.collector.add("repo_a_overview", mock_overview, "ARTIFACT:OVERVIEW:facebook/react")
+        
+        result = runner._fallback_execute()
+        
+        # 검증
+        assert result.success is True
+        assert result.meta.get("incomplete_compare") is True
+        assert "불완전 비교" in result.answer.text
+        assert "osd/cofre" in result.answer.text
+        assert "레포지토리가 존재하지 않습니다" in result.answer.text
+        assert "HTTP 404" in result.answer.text
+    
+    def test_incomplete_compare_sources_exclude_failed(self):
+        """불완전 비교 시 실패한 레포 아티팩트 미포함."""
+        from backend.agents.supervisor.runners import CompareRunner, FailedRepo
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="osd/cofre",
+        )
+        
+        runner._repo_a_error = None
+        runner._repo_b_error = "Not found"
+        runner._failed_repo_b = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        
+        mock_overview = {
+            "full_name": "facebook/react",
+            "stargazers_count": 200000,
+            "forks_count": 40000,
+            "description": "A declarative, efficient, and flexible JavaScript library",
+        }
+        runner.collector.add("repo_a_overview", mock_overview, "ARTIFACT:OVERVIEW:facebook/react")
+        
+        result = runner._fallback_execute()
+        
+        # sources에 실패한 osd/cofre 아티팩트 없음
+        for source in result.answer.sources:
+            assert "osd/cofre" not in source
+        
+        # 성공한 facebook/react 아티팩트만 포함
+        assert any("facebook/react" in s for s in result.answer.sources)
+    
+    def test_incomplete_compare_failure_messages(self):
+        """실패 사유별 메시지 매핑."""
+        from backend.agents.supervisor.runners.compare_runner import FAILURE_REASON_MESSAGES
+        
+        assert "not_found" in FAILURE_REASON_MESSAGES
+        assert "forbidden" in FAILURE_REASON_MESSAGES
+        assert "rate_limit" in FAILURE_REASON_MESSAGES
+        assert "timeout" in FAILURE_REASON_MESSAGES
+        assert "unknown" in FAILURE_REASON_MESSAGES
+        
+        # 한국어 메시지
+        assert "존재하지 않습니다" in FAILURE_REASON_MESSAGES["not_found"]
+        assert "권한" in FAILURE_REASON_MESSAGES["forbidden"]
+        assert "제한" in FAILURE_REASON_MESSAGES["rate_limit"]
+    
+    def test_incomplete_compare_next_actions_not_found(self):
+        """not_found 시 다음 행동 제안."""
+        from backend.agents.supervisor.runners import CompareRunner, FailedRepo
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="osd/cofre",
+        )
+        
+        failed_info = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        
+        actions = runner._build_next_actions("osd/cofre", "facebook/react", failed_info)
+        
+        assert "오타" in actions or "이름" in actions
+        assert "facebook/react" in actions
+    
+    def test_incomplete_compare_next_actions_forbidden(self):
+        """forbidden 시 권한 관련 제안."""
+        from backend.agents.supervisor.runners import CompareRunner, FailedRepo
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="private/repo",
+        )
+        
+        failed_info = FailedRepo(
+            owner="private", repo="repo", reason="forbidden",
+            http_status=403, detail="Forbidden"
+        )
+        
+        actions = runner._build_next_actions("private/repo", "facebook/react", failed_info)
+        
+        assert "권한" in actions or "토큰" in actions
+    
+    def test_runner_meta_passed_to_state(self):
+        """expert_node가 _runner_meta를 state에 전달."""
+        from backend.agents.supervisor.graph import expert_node
+        from unittest.mock import patch, MagicMock
+        from backend.agents.supervisor.runners import RunnerResult, FailedRepo
+        from backend.agents.shared.contracts import AnswerContract
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+            "compare_repo": {"owner": "osd", "name": "cofre", "url": ""},
+        }
+        
+        # Mock runner result
+        fr = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        mock_answer = AnswerContract(
+            text="**※ 불완전 비교**: `osd/cofre` 처리 중 레포지토리가 존재하지 않습니다(HTTP 404).",
+            sources=["ARTIFACT:OVERVIEW:facebook/react"],
+            source_kinds=["overview"],
+        )
+        mock_result = RunnerResult.partial_ok(
+            answer=mock_answer,
+            artifacts_out=["ARTIFACT:OVERVIEW:facebook/react"],
+            failed_repos=[fr],
+            reason="repo_b_failed",
+        )
+        
+        with patch("backend.agents.supervisor.runners.CompareRunner") as MockRunner:
+            instance = MagicMock()
+            instance.run.return_value = mock_result
+            instance.runner_name = "compare"
+            MockRunner.return_value = instance
+            
+            result = expert_node(state)
+        
+        # _runner_meta 전달 확인
+        assert "_runner_meta" in result
+        assert result["_runner_meta"]["incomplete_compare"] is True
+        assert len(result["_runner_meta"]["failed_repos"]) == 1
+    
+    def test_summarize_validates_incomplete_compare(self):
+        """summarize_node가 incomplete_compare 시 경고 검증."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        # incomplete_compare + 경고 포함 상태
+        state = {
+            "user_query": "facebook/react랑 osd/cofre 비교해줘",
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "answer_contract": {
+                "text": "**※ 불완전 비교**: `osd/cofre` 처리 중 레포지토리가 존재하지 않습니다(HTTP 404).",
+                "sources": ["ARTIFACT:OVERVIEW:facebook/react"],
+                "source_kinds": ["overview"],
+            },
+            "answer_kind": "compare",
+            "_runner_meta": {
+                "incomplete_compare": True,
+                "failed_repos": [{"owner": "osd", "repo": "cofre", "reason": "not_found", "http_status": 404}],
+            },
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # 통과 (경고 포함됨)
+        assert result.get("answer_kind") == "compare"
+        assert "불완전 비교" in result.get("llm_summary", "")
+    
+    def test_summarize_removes_failed_repo_from_sources(self):
+        """summarize_node가 실패한 레포 아티팩트 제거."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        # 실패한 레포 아티팩트가 sources에 잘못 포함된 경우
+        state = {
+            "user_query": "facebook/react랑 osd/cofre 비교해줘",
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "answer_contract": {
+                "text": "**※ 불완전 비교**: `osd/cofre` 처리 중 레포지토리가 존재하지 않습니다(HTTP 404).",
+                "sources": ["ARTIFACT:OVERVIEW:facebook/react", "ARTIFACT:OVERVIEW:osd/cofre"],  # 잘못된 상태
+                "source_kinds": ["overview", "overview"],
+            },
+            "answer_kind": "compare",
+            "_runner_meta": {
+                "incomplete_compare": True,
+                "failed_repos": [{"owner": "osd", "repo": "cofre", "reason": "not_found", "http_status": 404}],
+            },
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # osd/cofre 아티팩트 제거됨
+        contract = result.get("answer_contract", {})
+        sources = contract.get("sources", [])
+        for source in sources:
+            assert "osd/cofre" not in source
 
 
 if __name__ == "__main__":

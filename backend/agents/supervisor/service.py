@@ -126,3 +126,50 @@ def build_initial_state(
         state["user_context"] = user_context
 
     return state
+
+
+def build_followup_state(
+    user_query: str,
+    prev_state: SupervisorState,
+    user_context: UserContext | None = None,
+) -> SupervisorState:
+    """Builds state for follow-up turn, preserving previous context."""
+    state: SupervisorState = {
+        "user_query": user_query,
+    }
+    
+    # Preserve repo from previous turn
+    if prev_state.get("repo"):
+        state["repo"] = prev_state["repo"]
+    
+    # Preserve compare_repo if exists
+    if prev_state.get("compare_repo"):
+        state["compare_repo"] = prev_state["compare_repo"]
+    
+    # Preserve diagnosis_result for follow-up detection
+    if prev_state.get("diagnosis_result"):
+        state["diagnosis_result"] = prev_state["diagnosis_result"]
+    
+    # Preserve session for continuity
+    if prev_state.get("_session_id"):
+        state["_session_id"] = prev_state["_session_id"]
+    
+    # Preserve follow-up context (answer_kind → last_answer_kind)
+    last_answer = prev_state.get("last_answer_kind") or prev_state.get("answer_kind")
+    if last_answer:
+        state["last_answer_kind"] = last_answer
+    if prev_state.get("last_task_list"):
+        state["last_task_list"] = prev_state["last_task_list"]
+    if prev_state.get("last_brief"):
+        state["last_brief"] = prev_state["last_brief"]
+    
+    # Preserve history
+    if prev_state.get("history"):
+        state["history"] = list(prev_state["history"])
+    
+    if user_context:
+        state["user_context"] = user_context
+    elif prev_state.get("user_context"):
+        state["user_context"] = prev_state["user_context"]
+    
+    return state

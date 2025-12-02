@@ -49,6 +49,8 @@ OVERVIEW_PATTERNS = [
     r"(뭐야|뭔가요|소개|정의|설명).*(저장소|레포|repo)",
     r"(저장소|레포|repo).*(뭐야|뭔가요|소개|정의|설명)",
     r"^([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*(뭐야|뭔가요|소개|정의|설명해|알려줘)[\s!?.]*$",
+    r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*(가|이)\s*(뭐야|뭔가요|뭐|뭔)",
+    r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+).*(어떤|무슨).*(프로젝트|저장소|레포)",
 ]
 
 IDENTITY_PATTERNS = [
@@ -70,8 +72,113 @@ FOLLOWUP_PATTERNS = [
 # Follow-up 키워드 (부분 매칭)
 FOLLOWUP_KEYWORDS = {"근거", "이유", "왜", "출처", "어디서", "자세히", "더 설명", "방금"}
 
+# Compare 패턴 (두 개의 repo 비교)
+COMPARE_PATTERNS = [
+    r"(.+)(랑|와|과|vs|versus|compared?\s*to)\s*(.+)\s*(비교|compare)",
+    r"(비교|compare)\s*(.+)(랑|와|과|vs)\s*(.+)",
+    r"(.+)(이랑|하고)\s*(.+)\s*(비교)",
+]
+
+# One-pager/요약 패턴
+ONEPAGER_PATTERNS = [
+    r"(한\s*장|원페이저|one.?pager|요약|정리).*(만들어|생성|줘|해줘)",
+    r"(발표|보고|브리핑).*(자료|요약)",
+    r"(정리|요약).*(한\s*장|간단히)",
+]
+
+# Refine 패턴 (Task 재필터링)
+REFINE_PATTERNS = [
+    r"(급한|중요한|쉬운|어려운).*(것|거).*(정리|추려|골라|다시|알려|보여)",
+    r"(\d+)개.*(만|정리|다시|추려|알려|보여)",
+    r"(우선순위|priority).*(정렬|순서)",
+    r"(더\s*쉬운|더\s*어려운).*(것|거|task)",
+    r"(상위|top)\s*\d+",
+]
+
 ANALYSIS_KEYWORDS = {"분석", "진단", "건강", "온보딩", "기여", "점수", "상태", "어때", "analyze", "health"}
 CHITCHAT_KEYWORDS = {"고마워", "감사", "thanks", "ㅋㅋ", "ㅎㅎ", "좋아", "굿", "ok", "알겠어", "ㅇㅋ"}
+
+# 잘 알려진 저장소 후보 (키워드 → 후보 리스트)
+KNOWN_REPO_CANDIDATES = {
+    "react": [
+        {"owner": "facebook", "name": "react", "desc": "UI 라이브러리"},
+        {"owner": "reactjs", "name": "react.dev", "desc": "React 공식 문서"},
+        {"owner": "reactjs", "name": "reactjs.org", "desc": "React 웹사이트"},
+    ],
+    "vue": [
+        {"owner": "vuejs", "name": "core", "desc": "Vue 3 코어"},
+        {"owner": "vuejs", "name": "vue", "desc": "Vue 2"},
+    ],
+    "angular": [
+        {"owner": "angular", "name": "angular", "desc": "Angular 프레임워크"},
+        {"owner": "angular", "name": "components", "desc": "Angular 컴포넌트"},
+    ],
+    "next": [
+        {"owner": "vercel", "name": "next.js", "desc": "Next.js 프레임워크"},
+    ],
+    "nextjs": [
+        {"owner": "vercel", "name": "next.js", "desc": "Next.js 프레임워크"},
+    ],
+    "vscode": [
+        {"owner": "microsoft", "name": "vscode", "desc": "VS Code 에디터"},
+    ],
+    "typescript": [
+        {"owner": "microsoft", "name": "TypeScript", "desc": "TypeScript 컴파일러"},
+    ],
+    "python": [
+        {"owner": "python", "name": "cpython", "desc": "Python 인터프리터"},
+    ],
+    "django": [
+        {"owner": "django", "name": "django", "desc": "Django 웹 프레임워크"},
+    ],
+    "flask": [
+        {"owner": "pallets", "name": "flask", "desc": "Flask 웹 프레임워크"},
+    ],
+    "fastapi": [
+        {"owner": "tiangolo", "name": "fastapi", "desc": "FastAPI 프레임워크"},
+    ],
+    "pytorch": [
+        {"owner": "pytorch", "name": "pytorch", "desc": "PyTorch 딥러닝"},
+    ],
+    "tensorflow": [
+        {"owner": "tensorflow", "name": "tensorflow", "desc": "TensorFlow ML"},
+    ],
+    "node": [
+        {"owner": "nodejs", "name": "node", "desc": "Node.js 런타임"},
+    ],
+    "express": [
+        {"owner": "expressjs", "name": "express", "desc": "Express 웹 프레임워크"},
+    ],
+    "svelte": [
+        {"owner": "sveltejs", "name": "svelte", "desc": "Svelte 프레임워크"},
+    ],
+    "langchain": [
+        {"owner": "langchain-ai", "name": "langchain", "desc": "LangChain LLM 프레임워크"},
+    ],
+    "rust": [
+        {"owner": "rust-lang", "name": "rust", "desc": "Rust 프로그래밍 언어"},
+    ],
+    "go": [
+        {"owner": "golang", "name": "go", "desc": "Go 프로그래밍 언어"},
+    ],
+    "kubernetes": [
+        {"owner": "kubernetes", "name": "kubernetes", "desc": "Kubernetes 컨테이너 오케스트레이션"},
+    ],
+    "docker": [
+        {"owner": "moby", "name": "moby", "desc": "Docker/Moby 컨테이너"},
+    ],
+}
+
+
+def _extract_keyword_candidates(query: str) -> Tuple[Optional[str], list]:
+    """Extract keyword and repo candidates from query."""
+    q = query.lower().strip()
+    
+    for keyword, candidates in KNOWN_REPO_CANDIDATES.items():
+        if keyword in q:
+            return keyword, candidates
+    
+    return None, []
 
 
 @dataclass
@@ -82,6 +189,7 @@ class ClassifyResult:
     repo: Optional[RepoInfo]
     confidence: float
     method: str  # "heuristic" | "llm" | "degrade"
+    compare_repo: Optional[RepoInfo] = None  # Second repo for compare
 
 
 def _has_repo_pattern(query: str) -> bool:
@@ -124,6 +232,22 @@ def _tier1_heuristic(query: str, has_prev_artifacts: bool = False) -> Optional[C
     """Tier-1: Rule-based classification (no LLM, high confidence)."""
     q = query.lower().strip()
     
+    # Compare detection (두 개의 repo 비교)
+    is_compare, repo_a, repo_b = _detect_compare(query)
+    if is_compare and repo_a and repo_b:
+        result = ClassifyResult("analyze", "compare", repo_a, 1.0, "heuristic")
+        result.compare_repo = repo_b  # type: ignore
+        return result
+    
+    # Refine detection (직전 턴 아티팩트 있을 때만, one-pager보다 먼저 체크)
+    if _detect_refine(query, has_prev_artifacts):
+        return ClassifyResult("followup", "refine", None, 1.0, "heuristic")
+    
+    # One-pager detection
+    if _detect_onepager(query):
+        repo = _extract_repo(query)
+        return ClassifyResult("analyze", "onepager", repo, 1.0, "heuristic")
+    
     # Follow-up detection (직전 턴 아티팩트 있을 때만)
     if _detect_followup(query, has_prev_artifacts):
         return ClassifyResult("followup", "evidence", None, 1.0, "heuristic")
@@ -153,6 +277,11 @@ def _tier1_heuristic(query: str, has_prev_artifacts: bool = False) -> Optional[C
         if re.search(p, q):
             return ClassifyResult("overview", "repo", repo, 1.0, "heuristic")
     
+    # Repo with question mark but no analysis keywords -> overview
+    if repo and re.search(r"(뭐야|뭔가요|뭔데|뭐지|어때)[?\s]*$", q):
+        if not any(kw in q for kw in ANALYSIS_KEYWORDS):
+            return ClassifyResult("overview", "repo", repo, 0.9, "heuristic")
+    
     # Analysis keywords → delegate to LLM for sub_intent classification
     if any(kw in q for kw in ANALYSIS_KEYWORDS):
         return None  # LLM will classify
@@ -177,13 +306,70 @@ def _extract_repo(query: str) -> Optional[RepoInfo]:
             name = name[:-4]
         return {"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}"}
     
-    # owner/repo format
-    short_match = re.search(r"([a-zA-Z][a-zA-Z0-9_-]*)/([a-zA-Z0-9_.-]+)", query)
+    # owner/repo format (handle vue.js/core style - dots allowed in owner)
+    # More permissive: allow dots in both owner and name
+    short_match = re.search(r"([a-zA-Z][a-zA-Z0-9_.-]*)/([a-zA-Z0-9_.-]+)", query)
     if short_match:
         owner, name = short_match.groups()
+        # Clean trailing punctuation from name
+        name = re.sub(r'[\s,;:!?]+$', '', name)
         return {"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}"}
     
     return None
+
+
+def _extract_two_repos(query: str) -> Tuple[Optional[RepoInfo], Optional[RepoInfo]]:
+    """Extract two GitHub repos from query for comparison."""
+    repos = []
+    
+    # Find all owner/repo patterns (allow dots in owner like vue.js)
+    patterns = re.findall(r"([a-zA-Z][a-zA-Z0-9_.-]*)/([a-zA-Z0-9_.-]+)", query)
+    for owner, name in patterns:
+        # Skip common false positives
+        if owner.lower() in ("http", "https", "www", "github"):
+            continue
+        # Clean trailing punctuation
+        name = re.sub(r'[\s,;:!?]+$', '', name)
+        repos.append({"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}"})
+    
+    if len(repos) >= 2:
+        return repos[0], repos[1]
+    elif len(repos) == 1:
+        return repos[0], None
+    return None, None
+
+
+def _detect_compare(query: str) -> Tuple[bool, Optional[RepoInfo], Optional[RepoInfo]]:
+    """Detect compare intent and extract two repos."""
+    q = query.lower().strip()
+    
+    for p in COMPARE_PATTERNS:
+        if re.search(p, q, re.IGNORECASE):
+            repo_a, repo_b = _extract_two_repos(query)
+            if repo_a and repo_b:
+                return True, repo_a, repo_b
+    
+    return False, None, None
+
+
+def _detect_onepager(query: str) -> bool:
+    """Detect one-pager/summary request."""
+    q = query.lower().strip()
+    for p in ONEPAGER_PATTERNS:
+        if re.search(p, q, re.IGNORECASE):
+            return True
+    return False
+
+
+def _detect_refine(query: str, has_prev_artifacts: bool) -> bool:
+    """Detect refine/filter request for previous results."""
+    if not has_prev_artifacts:
+        return False
+    q = query.lower().strip()
+    for p in REFINE_PATTERNS:
+        if re.search(p, q, re.IGNORECASE):
+            return True
+    return False
 
 
 INTENT_SYSTEM_PROMPT = """당신은 OSS 온보딩 플랫폼 ODOC의 Intent 분류기입니다.
@@ -317,7 +503,13 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     
     # Check for previous artifacts (for follow-up detection)
     diagnosis_result = safe_get(state, "diagnosis_result")
-    has_prev_artifacts = bool(diagnosis_result and isinstance(diagnosis_result, dict))
+    last_task_list = safe_get(state, "last_task_list")
+    
+    # has_prev_artifacts: diagnosis_result 또는 last_task_list가 있으면 True
+    has_prev_artifacts = bool(
+        (diagnosis_result and isinstance(diagnosis_result, dict)) or
+        (last_task_list and isinstance(last_task_list, list) and len(last_task_list) > 0)
+    )
     
     # Tier-1: Heuristic (instant, no LLM)
     result = _tier1_heuristic(query, has_prev_artifacts)
@@ -334,6 +526,8 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     new_state["sub_intent"] = result.sub_intent
     if result.repo:
         new_state["repo"] = result.repo
+    if result.compare_repo:
+        new_state["compare_repo"] = result.compare_repo
     
     # Store confidence for routing decisions
     new_state["_classification_confidence"] = result.confidence  # type: ignore

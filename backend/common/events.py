@@ -70,6 +70,10 @@ class EventType(str, Enum):
     NODE_STARTED = "node.started"
     NODE_FINISHED = "node.finished"
     
+    # Runner Level (Expert Runners)
+    RUNNER_STARTED = "runner.started"
+    RUNNER_FINISHED = "runner.finished"
+    
     # Artifact Level
     ARTIFACT_CREATED = "artifact.created"
     ARTIFACT_REFERENCED = "artifact.referenced"
@@ -179,6 +183,10 @@ class EventStore:
     
     def add_listener(self, listener: Callable[[Event], None]) -> None:
         self._listeners.append(listener)
+    
+    def remove_listener(self, listener: Callable[[Event], None]) -> None:
+        if listener in self._listeners:
+            self._listeners.remove(listener)
     
     def clear(self) -> None:
         self._events.clear()

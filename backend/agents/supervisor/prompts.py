@@ -30,14 +30,32 @@ COMMON_RULES = """## Core Rules (MUST FOLLOW)
 SYSTEM_HEALTH_REPORT = """당신은 오픈소스 프로젝트 분석 결과를 요약하는 전문가입니다.
 분석 결과를 이해하기 쉬운 한국어로 요약해 주세요.
 
-## 점수 해석 가이드 (100점 만점)
-- 90~100: 매우 우수
-- 80~89: 우수
-- 70~79: 양호
-- 60~69: 보통
-- 60 미만: 개선 필요
+## 데이터 부족 시 처리 (최우선!)
+insufficient_data=True이면 **점수표를 절대 표시하지 마세요**. 아래 형식만 사용합니다:
 
-## 출력 형식 (이 순서를 따르세요)
+### insufficient_data=True 출력 형식:
+
+**{owner}/{repo}**
+
+| 항목 | 값 |
+|------|-----|
+| 언어 | {language} |
+| Stars | {stars} |
+| Forks | {forks} |
+| 생성일 | {created_at} |
+
+> **데이터 부족**: 이 저장소는 활동 데이터가 충분하지 않아 점수 산정이 어렵습니다.
+> (이유: 신규 프로젝트/활동 없음/커밋 부족 중 해당하는 것)
+
+**권장 행동**
+- 활성화된 프로젝트로 다시 시도해 보세요
+- 예: `facebook/react 분석해줘`
+
+(여기서 응답 종료 - 점수표, 강점, 개선점, Task 등 모두 생략)
+
+---
+
+## insufficient_data=False (정상 분석)
 
 ### 한 줄 요약
 전반적으로 [상태] 프로젝트입니다. [핵심 특징 한 문장]
@@ -63,7 +81,6 @@ SYSTEM_HEALTH_REPORT = """당신은 오픈소스 프로젝트 분석 결과를 �
 
 ### 참고: 시작 Task (3개)
 {formatted_tasks}
-(각 Task가 초보자에게 적합한 이유를 한 줄씩 추가)
 """
 
 # Score Explain: intent=followup, sub_intent=explain
@@ -122,6 +139,53 @@ FOLLOWUP_NO_ARTIFACTS_TEMPLATE = """이전 분석 결과가 없어 근거를 설
 - 이전에 분석한 저장소가 있다면 다시 물어봐 주세요"""
 
 FOLLOWUP_SOURCE_ID = "SYS:TEMPLATES:FOLLOWUP"
+
+
+# Refine Templates (온보딩 Task 재정렬/발췌)
+SYSTEM_REFINE = """당신은 온보딩 Task 목록을 사용자 요청에 맞게 재정렬·발췌하는 역할입니다.
+
+## 역할
+- 주어진 Task 목록에서 요청된 개수만큼 선별
+- priority 기준 정렬 (낮을수록 높은 우선순위)
+- 각 Task가 왜 선택되었는지 간단히 설명
+
+## 출력 형식
+
+> **기준**: 신규 기여자 · 온보딩 속도 기준
+
+### 추천 Task {{count}}개
+
+{{task_list}}
+
+**선정 기준**
+- 우선순위가 가장 낮은(숫자가 가장 큰) Task부터 선별하였습니다.
+- 우선순위 산식: `0.5×impact + 0.3×feasibility + 0.2×readiness`
+
+**다음 행동**
+- 더 쉬운 Task: `더 쉬운 거 없어?`
+- 상세 분석: `{{task_title}} 자세히 알려줘`
+"""
+
+# Refine context header template
+REFINE_CONTEXT_HEADER = "> **기준**: {context_label}\n\n"
+
+# Default scoring formula display
+REFINE_SCORING_FORMULA = "0.5×impact + 0.3×feasibility + 0.2×readiness"
+
+REFINE_NO_TASKS_TEMPLATE = """이전 분석에서 추천된 Task가 없습니다.
+
+**다음 행동**
+- 저장소 온보딩 분석: `facebook/react 온보딩 분석해줘`
+- 건강도 분석부터 시작: `facebook/react 분석해줘`"""
+
+REFINE_EMPTY_RESULT_TEMPLATE = """요청하신 조건에 맞는 Task를 찾지 못했습니다.
+
+**다음 행동**
+- 조건 완화: `아무 Task나 3개 알려줘`
+- 다른 저장소 분석: `vuejs/core 분석해줘`"""
+
+REFINE_SOURCE_ID = "SYS:TEMPLATES:REFINE"
+REFINE_TASKS_SOURCE_KIND = "onboarding_tasks"
 
 
 # General QA / Greeting: intent=general_qa or smalltalk
@@ -210,32 +274,107 @@ HELP_SOURCE_ID = "SYS:TEMPLATES:HELP"
 OVERVIEW_SOURCE_ID = "SYS:TEMPLATES:OVERVIEW"
 
 
-# Overview LLM Prompt (아티팩트 기반 3-6문장 개요)
-SYSTEM_OVERVIEW = """당신은 GitHub 저장소를 간결하게 소개하는 전문가입니다.
+# Missing Repo Template (저장소 미지정 시)
+MISSING_REPO_TEMPLATE = """어떤 저장소를 분석할까요?
 
-## 역할
-- 저장소의 핵심 정보를 3-6문장으로 요약
-- 제공된 데이터(repo_facts, readme_head, recent_activity)만 사용
-- 추측하거나 데이터 없이 주장하지 않음
+저장소 이름을 `owner/repo` 형식으로 알려주세요.
+
+**예시**
+- `facebook/react 분석해줘`
+- `vuejs/core 건강도 확인해줘`
+- `microsoft/vscode 기여하고 싶어`"""
+
+MISSING_REPO_SOURCE_ID = "SYS:TEMPLATES:MISSING_REPO"
+
+# Disambiguation with Candidates Template (후보 제시 - 2개 이상)
+DISAMBIGUATION_CANDIDATES_TEMPLATE = """**{keyword}**로 검색된 저장소가 여러 개 있습니다.
+
+어떤 저장소를 분석할까요?
+
+{candidates}
+
+원하는 저장소를 선택하거나, 정확한 이름을 입력해 주세요."""
+
+DISAMBIGUATION_SOURCE_ID = "SYS:DISAMBIGUATION:CANDIDATES"
+
+# Auto-select Template (후보 1개 - 자동 선택 안내)
+AUTO_SELECT_REPO_TEMPLATE = """**{keyword}** → `{owner}/{repo}` 저장소를 분석합니다.
+
+> {desc}
+
+다른 저장소를 원하시면 `owner/repo` 형식으로 정확히 입력해 주세요."""
+
+AUTO_SELECT_SOURCE_ID = "SYS:AUTO_SELECT:REPO"
+
+# Access Error Templates (접근 오류 시 ask_user 플로우)
+ACCESS_ERROR_NOT_FOUND_TEMPLATE = """**{owner}/{repo}** 저장소를 찾을 수 없습니다.
+
+**확인해 주세요:**
+1. 저장소 이름이 정확한가요? (대소문자 구분)
+2. 저장소가 삭제되었거나 이름이 변경되었나요?
+
+**대안:**
+- 정확한 저장소 이름을 다시 입력해 주세요
+- 공개 저장소로 테스트: `facebook/react 분석해줘`"""
+
+ACCESS_ERROR_PRIVATE_TEMPLATE = """**{owner}/{repo}** 저장소에 접근할 수 없습니다.
+
+**Private 저장소인 경우:**
+1. GitHub 토큰에 해당 조직/저장소 접근 권한이 필요합니다
+2. Fine-grained PAT의 경우 `Repository access`에서 해당 저장소를 추가해 주세요
+3. 조직 저장소라면 조직 관리자에게 OAuth 앱 승인을 요청해 주세요
+
+**대안:**
+- 공개 저장소로 테스트: `facebook/react 분석해줘`
+- 토큰 권한 확인 후 다시 시도해 주세요"""
+
+ACCESS_ERROR_RATE_LIMIT_TEMPLATE = """GitHub API 호출 한도에 도달했습니다.
+
+**잠시 후 다시 시도해 주세요.**
+
+- 일반적으로 1시간 후 한도가 초기화됩니다
+- 더 높은 한도가 필요하면 GitHub 토큰을 설정해 주세요"""
+
+ACCESS_ERROR_SOURCE_ID = "SYS:ACCESS_GUARD:ERROR"
+
+
+# Incomplete Compare Warning Templates (불완전 비교 경고)
+INCOMPLETE_COMPARE_WARNING_TEMPLATE = """**※ 불완전 비교**: `{failed_repo}` 처리 중 {reason_message}(HTTP {http_status}). 성공한 `{success_repo}` 기준으로 요약을 제공합니다."""
+
+INCOMPLETE_COMPARE_FAILURE_REASONS = {
+    "not_found": "레포지토리가 존재하지 않습니다",
+    "forbidden": "접근 권한이 없습니다",
+    "rate_limit": "API 제한에 도달했습니다",
+    "timeout": "응답 지연(타임아웃)입니다",
+    "unknown": "알 수 없는 오류입니다",
+}
+
+INCOMPLETE_COMPARE_SOURCE_ID = "SYS:INCOMPLETE_COMPARE:WARNING"
+
+
+# Overview LLM Prompt (최소 정보만 - 추측 금지)
+SYSTEM_OVERVIEW = """당신은 GitHub 저장소 정보를 전달하는 역할입니다.
+
+## 엄격한 규칙
+1. README 내용을 그대로 믿지 마세요 (마케팅 문구일 수 있음)
+2. 실제 검증된 데이터만 언급: stars, forks, issues 수, 주요 언어
+3. 프로젝트가 "무엇을 한다"고 단정짓지 마세요
+4. 불확실하면 "상세 분석이 필요합니다"라고 안내
 
 ## 출력 형식
 
-### {repo_name}
+**{repo_name}**
 
-[3-6문장 개요: 프로젝트 목적, 주요 기술, 현재 상태]
+- 주요 언어: [language]
+- Stars: [숫자] / Forks: [숫자] / Open Issues: [숫자]
 
-**근거**
-- [데이터 기반 근거 1]
-- [데이터 기반 근거 2]
+> README 기반 설명이므로 정확한 정보는 상세 분석을 권장합니다.
 
 **다음 행동**
-- 건강도 분석: `{owner}/{repo} 분석해줘`
-- 기여 가이드: `{owner}/{repo}에 기여하고 싶어`
+- 상세 분석: `{owner}/{repo} 분석해줘`
 """
 
 OVERVIEW_FALLBACK_TEMPLATE = """**{owner}/{repo}**
-
-{description}
 
 | 항목 | 값 |
 |------|-----|
@@ -243,9 +382,10 @@ OVERVIEW_FALLBACK_TEMPLATE = """**{owner}/{repo}**
 | Stars | {stars:,} |
 | Forks | {forks:,} |
 
+> 상세 분석 없이 기본 메타데이터만 제공합니다.
+
 **다음 행동**
-- 건강도 분석: `{owner}/{repo} 분석해줘`
-- 기여 가이드: `{owner}/{repo}에 기여하고 싶어`"""
+- 상세 분석: `{owner}/{repo} 분석해줘`"""
 
 
 def build_overview_prompt(
@@ -301,12 +441,43 @@ def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, s
     
     # Format diagnosis data for user prompt
     scores = diagnosis_result.get("scores", {})
+    labels = diagnosis_result.get("labels", {})
     repo_info = diagnosis_result.get("details", {}).get("repo_info", {})
     tasks = diagnosis_result.get("onboarding_tasks", {})
     
-    user = f"""## 분석 대상
+    # insufficient_data 플래그 확인 (점수표 숨김 여부)
+    insufficient_data = labels.get("insufficient_data", False)
+    
+    if insufficient_data:
+        # 데이터 부족 시: 기본 정보만 제공
+        data_quality_issues = labels.get("data_quality_issues", [])
+        reason = ", ".join(data_quality_issues) if data_quality_issues else "활동 데이터 부족"
+        
+        user = f"""## 분석 대상
 저장소: {repo_info.get('full_name', 'Unknown')}
 설명: {repo_info.get('description', 'N/A')}
+언어: {repo_info.get('primary_language', repo_info.get('language', 'N/A'))}
+Stars: {repo_info.get('stargazers_count', 0)}
+Forks: {repo_info.get('forks_count', 0)}
+생성일: {repo_info.get('created_at', 'N/A')}
+
+## insufficient_data = True
+이유: {reason}
+
+점수표를 표시하지 마세요. 위의 insufficient_data=True 출력 형식을 따라 기본 정보만 표시하세요."""
+    else:
+        # 정상 분석: 점수표 포함
+        data_quality_issues = labels.get("data_quality_issues", [])
+        data_quality_warning = ""
+        if data_quality_issues:
+            data_quality_warning = f"\n## 데이터 품질 경고\n- {', '.join(data_quality_issues)}\n"
+        
+        user = f"""## 분석 대상
+저장소: {repo_info.get('full_name', 'Unknown')}
+설명: {repo_info.get('description', 'N/A')}
+Stars: {repo_info.get('stargazers_count', 0)} / Forks: {repo_info.get('forks_count', 0)}
+{data_quality_warning}
+## insufficient_data = False
 
 ## 점수
 - 건강 점수: {scores.get('health_score', 'N/A')}
@@ -315,8 +486,8 @@ def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, s
 - 온보딩 점수: {scores.get('onboarding_score', 'N/A')}
 
 ## 라벨
-- 건강 수준: {diagnosis_result.get('labels', {}).get('health_level', 'N/A')}
-- 온보딩 수준: {diagnosis_result.get('labels', {}).get('onboarding_level', 'N/A')}
+- 건강 수준: {labels.get('health_level', 'N/A')}
+- 온보딩 수준: {labels.get('onboarding_level', 'N/A')}
 
 ## 초보자 Task (상위 3개)
 {_format_tasks_brief(tasks)}
@@ -450,15 +621,80 @@ def _format_explain_context(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# LLM Parameters
+def build_refine_prompt(
+    task_list: list,
+    user_query: str,
+    requested_count: int = 3,
+) -> tuple[str, str]:
+    """Builds prompt for refine mode (Task 재정렬/발췌).
+    
+    Returns: (system_prompt, user_prompt)
+    """
+    system = COMMON_RULES + "\n\n" + SYSTEM_REFINE
+    
+    # Format task list for prompt
+    task_lines = []
+    for i, task in enumerate(task_list[:10], 1):
+        title = task.get("title", "제목 없음")
+        priority = task.get("priority", 99)
+        difficulty = task.get("difficulty", "unknown")
+        rationale = task.get("rationale", "")
+        
+        task_lines.append(f"{i}. **{title}** (난이도: {difficulty}, 우선순위: {priority})")
+        if rationale:
+            task_lines.append(f"   - {rationale[:100]}")
+    
+    task_text = "\n".join(task_lines) if task_lines else "(Task 없음)"
+    
+    user_parts = [
+        "## 사용자 요청",
+        user_query,
+        "",
+        "## 현재 Task 목록",
+        task_text,
+        "",
+        f"## 요청 사항",
+        f"위 목록에서 {requested_count}개를 선별해 주세요.",
+        "priority가 낮을수록 높은 우선순위입니다.",
+    ]
+    
+    return system, "\n".join(user_parts)
+
+
+def extract_requested_count(query: str) -> int:
+    """Extracts requested task count from user query."""
+    import re
+    
+    # 숫자 + 개 패턴
+    match = re.search(r"(\d+)\s*개", query)
+    if match:
+        return min(int(match.group(1)), 10)
+    
+    # top N 패턴
+    match = re.search(r"top\s*(\d+)", query, re.IGNORECASE)
+    if match:
+        return min(int(match.group(1)), 10)
+    
+    # 상위 N개 패턴
+    match = re.search(r"상위\s*(\d+)", query)
+    if match:
+        return min(int(match.group(1)), 10)
+    
+    return 3  # default
+
+
+# LLM Parameters (Step 9: Fast vs Expert 모드별 파라미터)
+# Fast mode: temp=0.7, Expert mode: temp=0.2-0.3, 공통 top_p=0.9
+
 LLM_PARAMS = {
+    # Expert Mode (건조·정확, 데이터 기반)
     "health_report": {
-        "temperature": 0.3,
+        "temperature": 0.25,
         "max_tokens": 1024,
         "top_p": 0.9,
     },
     "score_explain": {
-        "temperature": 0.25,
+        "temperature": 0.2,
         "max_tokens": 512,
         "top_p": 0.9,
     },
@@ -467,14 +703,31 @@ LLM_PARAMS = {
         "max_tokens": 400,
         "top_p": 0.9,
     },
+    "refine": {
+        "temperature": 0.2,
+        "max_tokens": 600,
+        "top_p": 0.9,
+    },
+    "compare": {
+        "temperature": 0.25,
+        "max_tokens": 1200,
+        "top_p": 0.9,
+    },
+    
+    # Fast Mode (공손·간결)
     "overview": {
-        "temperature": 0.3,
+        "temperature": 0.5,
         "max_tokens": 400,
         "top_p": 0.9,
     },
     "chat": {
         "temperature": 0.7,
         "max_tokens": 300,
+        "top_p": 0.9,
+    },
+    "greeting": {
+        "temperature": 0.7,
+        "max_tokens": 200,
         "top_p": 0.9,
     },
 }
