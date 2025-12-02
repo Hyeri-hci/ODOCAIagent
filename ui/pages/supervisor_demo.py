@@ -7,12 +7,14 @@ Supervisor Agent 데모 페이지
 """
 from __future__ import annotations
 
+import base64
 import os
 import sys
 import time
 import uuid
 import logging
 from typing import Any
+from urllib.parse import quote
 
 # 프로젝트 루트 추가
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -20,7 +22,6 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 import streamlit as st
-from streamlit_mermaid import st_mermaid
 
 st.set_page_config(
     page_title="Supervisor Agent Demo",
@@ -73,7 +74,7 @@ def capture_agent_logs():
 
 # 그래프 시각화 함수
 def render_graph_visualization(result: dict | None):
-    """Mermaid.js로 그래프 실행 경로를 시각화"""
+    """Mermaid.ink API로 그래프를 PNG 이미지로 시각화"""
     if not result:
         st.caption("실행 결과 없음")
         return
@@ -167,7 +168,17 @@ def render_graph_visualization(result: dict | None):
     style ANSWER fill:#E91E63,stroke:#333,stroke-width:2px,color:#fff
 '''
     
-    st_mermaid(mermaid_code, height=400)
+    # Mermaid.ink API로 이미지 URL 생성
+    mermaid_encoded = base64.urlsafe_b64encode(mermaid_code.encode()).decode()
+    img_url = f"https://mermaid.ink/img/{mermaid_encoded}?bgColor=white"
+    
+    # 큰 이미지로 표시
+    st.image(img_url, caption="Supervisor Graph 실행 경로", use_container_width=True)
+    
+    # 다운로드 링크 제공
+    col1, col2 = st.columns([1, 3])
+    with col1:
+        st.markdown(f"[PNG 다운로드]({img_url})")
     
     # 실행 경로 텍스트 설명
     path_desc = {
@@ -178,7 +189,8 @@ def render_graph_visualization(result: dict | None):
         "overview": "저장소 개요 조회",
         "summarize": "직접 요약",
     }
-    st.caption(f"실행 경로: **{path_desc.get(path, path)}**")
+    with col2:
+        st.caption(f"실행 경로: **{path_desc.get(path, path)}**")
 
 
 # 세션 상태 초기화
