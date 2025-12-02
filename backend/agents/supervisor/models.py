@@ -4,16 +4,19 @@ from __future__ import annotations
 from typing import Any, Literal, TypedDict, List, Dict
 
 
-# V1 Core Intents (4 main categories)
-SupervisorIntent = Literal["analyze", "followup", "general_qa", "smalltalk"]
+# V1 Core Intents (6 categories)
+SupervisorIntent = Literal["analyze", "followup", "general_qa", "smalltalk", "help", "overview"]
 
 # V1 Core SubIntents
 SubIntent = Literal[
-    "health",       # analyze: repo health diagnosis
-    "onboarding",   # analyze: onboarding-focused diagnosis
-    "explain",      # followup: explain scores/metrics
-    "chat",         # general_qa: general conversation
-    "greeting",     # smalltalk: greeting response
+    "health",          # analyze: repo health diagnosis
+    "onboarding",      # analyze: onboarding-focused diagnosis
+    "explain",         # followup: explain scores/metrics
+    "chat",            # general_qa: general conversation
+    "greeting",        # smalltalk: greeting response
+    "chitchat",        # smalltalk: casual chat
+    "getting_started", # help: usage guide
+    "repo",            # overview: repo introduction
 ]
 
 # V1 Answer kinds for UI badges

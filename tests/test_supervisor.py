@@ -55,20 +55,20 @@ class TestIntentClassifier:
     
     def test_greeting_classification(self):
         """인사 분류."""
-        from backend.agents.supervisor.nodes.intent_classifier import _fast_classify
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
         
-        result = _fast_classify("안녕")
+        result = _tier1_heuristic("안녕")
         assert result is not None
-        assert result[0] == "smalltalk"
-        assert result[1] == "greeting"
+        assert result.intent == "smalltalk"
+        assert result.sub_intent == "greeting"
     
     def test_help_classification(self):
         """도움말 분류."""
-        from backend.agents.supervisor.nodes.intent_classifier import _fast_classify
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
         
-        result = _fast_classify("뭘 할 수 있어?")
+        result = _tier1_heuristic("뭘 할 수 있어?")
         assert result is not None
-        assert result[0] == "help"
+        assert result.intent == "help"
     
     def test_repo_extraction(self):
         """저장소 추출."""
@@ -387,6 +387,154 @@ class TestIdempotency:
         
         assert cached is not None
         assert cached.answer_id == entry1.answer_id
+
+
+class TestHierarchicalRouting:
+    """계층 라우팅 테스트 (Heuristic → LLM)."""
+    
+    def test_tier1_greeting_heuristic(self):
+        """Tier-1: 인사는 휴리스틱으로 즉시 분류."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 단순 인사
+        result = _tier1_heuristic("안녕")
+        assert result is not None
+        assert result.intent == "smalltalk"
+        assert result.sub_intent == "greeting"
+        assert result.method == "heuristic"
+        assert result.confidence == 1.0
+        
+        # 영어 인사
+        result = _tier1_heuristic("hello")
+        assert result is not None
+        assert result.intent == "smalltalk"
+        assert result.sub_intent == "greeting"
+    
+    def test_tier1_help_heuristic(self):
+        """Tier-1: 도움말은 휴리스틱으로 즉시 분류."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 기능 문의
+        result = _tier1_heuristic("뭘 할 수 있어?")
+        assert result is not None
+        assert result.intent == "help"
+        assert result.sub_intent == "getting_started"
+        
+        # 사용법
+        result = _tier1_heuristic("사용법 알려줘")
+        assert result is not None
+        assert result.intent == "help"
+        
+        # 오류 문의
+        result = _tier1_heuristic("에러가 나요")
+        assert result is not None
+        assert result.intent == "help"
+    
+    def test_tier1_overview_heuristic(self):
+        """Tier-1: 레포 개요는 휴리스틱으로 분류."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        result = _tier1_heuristic("facebook/react 뭐야?")
+        assert result is not None
+        assert result.intent == "overview"
+        assert result.sub_intent == "repo"
+        assert result.repo is not None
+        assert result.repo["owner"] == "facebook"
+    
+    def test_tier1_short_emoji_fallback(self):
+        """Tier-1: 짧은/이모지 쿼리는 help로 폴백."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 짧은 쿼리
+        result = _tier1_heuristic("?")
+        assert result is not None
+        assert result.intent == "help"
+        
+        # 이모지만
+        result = _tier1_heuristic("👋")
+        assert result is not None
+        assert result.intent == "help"
+    
+    def test_tier1_analysis_requires_llm(self):
+        """Tier-1: 분석 요청은 LLM 분류 필요."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 분석 + repo → LLM 분류 필요
+        result = _tier1_heuristic("facebook/react 건강도 분석해줘")
+        assert result is None  # LLM으로 넘김
+    
+    def test_confidence_threshold(self):
+        """Confidence 임계값 검증."""
+        from backend.agents.supervisor.intent_config import (
+            get_confidence_threshold, 
+            should_degrade_to_help
+        )
+        
+        # 임계값 확인
+        assert get_confidence_threshold("analyze") == 0.6
+        assert get_confidence_threshold("help") == 0.4
+        assert get_confidence_threshold("smalltalk") == 0.3
+        
+        # 디그레이드 판단
+        assert should_degrade_to_help("analyze", 0.5) is True   # 0.5 < 0.6
+        assert should_degrade_to_help("analyze", 0.7) is False  # 0.7 >= 0.6
+        assert should_degrade_to_help("help", 0.3) is True      # 0.3 < 0.4
+        assert should_degrade_to_help("help", 0.5) is False     # 0.5 >= 0.4
+    
+    def test_routing_fast_path(self):
+        """라우팅: smalltalk/help/overview는 diagnosis 스킵."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        # smalltalk → summarize
+        state = {"intent": "smalltalk", "sub_intent": "greeting"}
+        assert should_run_diagnosis(state) == "summarize"
+        
+        # help → summarize
+        state = {"intent": "help", "sub_intent": "getting_started"}
+        assert should_run_diagnosis(state) == "summarize"
+        
+        # overview → summarize
+        state = {
+            "intent": "overview", 
+            "sub_intent": "repo",
+            "repo": {"owner": "test", "name": "repo", "url": ""},
+        }
+        assert should_run_diagnosis(state) == "summarize"
+    
+    def test_routing_analyze_requires_diagnosis(self):
+        """라우팅: analyze는 diagnosis 실행."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "health",
+            "repo": {"owner": "test", "name": "repo", "url": ""},
+        }
+        assert should_run_diagnosis(state) == "diagnosis"
+    
+    def test_graph_greeting_no_diagnosis(self):
+        """Graph: 인사는 diagnosis 노드 진입 안 함."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("안녕하세요!")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        assert result.get("intent") == "smalltalk"
+        assert result.get("diagnosis_result") is None  # diagnosis 실행 안 함
+        assert result.get("llm_summary")  # 응답은 있음
+    
+    def test_graph_help_no_diagnosis(self):
+        """Graph: 도움말은 diagnosis 노드 진입 안 함."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("어떤 기능이 있어?")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        assert result.get("intent") == "help"
+        assert result.get("diagnosis_result") is None
+        assert result.get("llm_summary")
 
 
 if __name__ == "__main__":
