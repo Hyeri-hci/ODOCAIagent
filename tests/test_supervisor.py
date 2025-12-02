@@ -1543,5 +1543,312 @@ class TestToneGuide:
         assert LLM_PARAMS["greeting"]["temperature"] == 0.7
 
 
+# Step 10: 관측/검증 운영 게이트 테스트
+class TestObservability:
+    """Step 10: 관측성 및 SLO 검증 테스트."""
+    
+    def test_required_event_types(self):
+        """필수 이벤트 5종 정의."""
+        from backend.agents.supervisor.observability import REQUIRED_EVENT_TYPES
+        from backend.common.events import EventType
+        
+        assert len(REQUIRED_EVENT_TYPES) == 5
+        assert EventType.SUPERVISOR_INTENT_DETECTED in REQUIRED_EVENT_TYPES
+        assert EventType.SUPERVISOR_ROUTE_SELECTED in REQUIRED_EVENT_TYPES
+        assert EventType.NODE_STARTED in REQUIRED_EVENT_TYPES
+        assert EventType.NODE_FINISHED in REQUIRED_EVENT_TYPES
+        assert EventType.ANSWER_GENERATED in REQUIRED_EVENT_TYPES
+    
+    def test_slo_config_defaults(self):
+        """SLO 기본 설정 검증."""
+        from backend.agents.supervisor.observability import SLOConfig
+        
+        config = SLOConfig()
+        
+        # Latency SLO
+        assert config.greeting_p95_ms == 100.0
+        assert config.overview_p95_ms == 1500.0
+        assert config.expert_p95_ms == 10000.0
+        
+        # Quality SLO
+        assert config.disambiguation_min_pct == 10.0
+        assert config.disambiguation_max_pct == 25.0
+        assert config.wrong_proceed_max_pct == 1.0
+        assert config.empty_sources_max_pct == 0.0
+        assert config.duplicate_cards_max_count == 0
+    
+    def test_metrics_collector_latency(self):
+        """Latency 지표 수집."""
+        from backend.agents.supervisor.observability import MetricsCollector, percentile
+        
+        collector = MetricsCollector()
+        
+        # greeting latency 기록
+        for i in range(100):
+            collector.record_request("smalltalk", latency_ms=50 + i)
+        
+        metrics = collector.get_current_metrics()
+        
+        # p95 계산 확인
+        assert metrics["latency"]["greeting_p95_ms"] > 140
+        assert metrics["latency"]["greeting_p95_ms"] < 150
+        assert metrics["total_requests"] == 100
+    
+    def test_metrics_collector_quality(self):
+        """Quality 지표 수집."""
+        from backend.agents.supervisor.observability import MetricsCollector
+        
+        collector = MetricsCollector()
+        
+        # 100개 요청 중 15개 disambiguation, 0개 wrong_proceed
+        for i in range(100):
+            collector.record_request(
+                "analyze",
+                latency_ms=100,
+                disambiguated=(i < 15),
+                wrong_proceed=False,
+                sources_empty=False,
+            )
+        
+        metrics = collector.get_current_metrics()
+        
+        assert metrics["quality"]["disambiguation_pct"] == 15.0
+        assert metrics["quality"]["wrong_proceed_pct"] == 0.0
+        assert metrics["quality"]["empty_sources_pct"] == 0.0
+    
+    def test_slo_checker_pass(self):
+        """SLO 검사 통과."""
+        from backend.agents.supervisor.observability import SLOChecker, SLOConfig
+        
+        config = SLOConfig()
+        checker = SLOChecker(config)
+        
+        # 모든 SLO 통과하는 metrics
+        metrics = {
+            "latency": {
+                "greeting_p95_ms": 50,
+                "overview_p95_ms": 1000,
+                "expert_p95_ms": 5000,
+            },
+            "quality": {
+                "disambiguation_pct": 15.0,  # 10-25% 범위 내
+                "wrong_proceed_pct": 0.5,     # < 1%
+                "empty_sources_pct": 0.0,
+                "duplicate_cards_count": 0,
+            },
+            "events": {
+                "missing_count": 0,
+            },
+        }
+        
+        assert checker.is_healthy(metrics) is True
+        results = checker.check_all(metrics)
+        assert all(r.passed for r in results)
+    
+    def test_slo_checker_fail(self):
+        """SLO 검사 실패."""
+        from backend.agents.supervisor.observability import SLOChecker
+        
+        checker = SLOChecker()
+        
+        # Latency SLO 위반
+        metrics = {
+            "latency": {
+                "greeting_p95_ms": 200,  # > 100ms 위반
+                "overview_p95_ms": 1000,
+                "expert_p95_ms": 5000,
+            },
+            "quality": {
+                "disambiguation_pct": 5.0,  # < 10% 위반
+                "wrong_proceed_pct": 2.0,   # > 1% 위반
+                "empty_sources_pct": 0.0,
+                "duplicate_cards_count": 0,
+            },
+            "events": {
+                "missing_count": 0,
+            },
+        }
+        
+        assert checker.is_healthy(metrics) is False
+        results = checker.check_all(metrics)
+        failed = [r for r in results if not r.passed]
+        assert len(failed) >= 3
+
+
+class TestCanaryDeployment:
+    """Canary 배포 및 롤백 테스트."""
+    
+    def test_canary_phases(self):
+        """Canary 배포 단계."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        
+        # 초기: FULL
+        assert canary.current_phase == CanaryManager.DeploymentPhase.FULL
+        assert canary.get_traffic_percentage() == 100
+    
+    def test_canary_rollback(self):
+        """롤백 시 피처 비활성화 및 임계값 상향."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        
+        # 롤백
+        canary.rollback(
+            reason="expert_p95 SLO violation",
+            disable_features=["expert_runner", "agentic_planning"]
+        )
+        
+        assert canary.current_phase == CanaryManager.DeploymentPhase.ROLLBACK
+        assert canary.feature_toggles["expert_runner"] is False
+        assert canary.feature_toggles["agentic_planning"] is False
+        assert canary.feature_toggles["lightweight_path"] is True  # 유지
+        assert canary.threshold_override == 0.7
+    
+    def test_canary_effective_threshold(self):
+        """롤백 시 임계값 오버라이드."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        
+        # 롤백 전: 기본 임계값 사용
+        assert canary.get_effective_threshold(0.4) == 0.4
+        
+        # 롤백 후: 오버라이드 적용
+        canary.rollback("test", disable_features=[])
+        assert canary.get_effective_threshold(0.4) == 0.7
+        assert canary.get_effective_threshold(0.8) == 0.8  # 더 높으면 그대로
+    
+    def test_canary_promote(self):
+        """단계별 승격."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        canary.current_phase = CanaryManager.DeploymentPhase.CANARY
+        
+        assert canary.get_traffic_percentage() == 10
+        
+        canary.promote()
+        assert canary.current_phase == CanaryManager.DeploymentPhase.GRADUAL_25
+        assert canary.get_traffic_percentage() == 25
+        
+        canary.promote()
+        assert canary.get_traffic_percentage() == 50
+    
+    def test_feature_toggles(self):
+        """피처 토글 확인."""
+        from backend.agents.supervisor.observability import CanaryManager
+        
+        canary = CanaryManager()
+        
+        # 기본: 모두 활성화
+        assert canary.should_use_new_feature("lightweight_path") is True
+        assert canary.should_use_new_feature("followup_planner") is True
+        assert canary.should_use_new_feature("expert_runner") is True
+        
+        # 개별 비활성화
+        canary.feature_toggles["expert_runner"] = False
+        assert canary.should_use_new_feature("expert_runner") is False
+
+
+class TestErrorMeta:
+    """에러 메타 기록 테스트."""
+    
+    def test_error_meta_retry_logic(self):
+        """에러 메타 재시도 로직."""
+        from backend.agents.supervisor.observability import ErrorMeta
+        import time
+        
+        # 재시도 가능한 에러
+        meta = ErrorMeta(
+            error_type="github_api_timeout",
+            message="GitHub API timeout",
+            timestamp=time.time(),
+            can_retry=True,
+            retry_count=0,
+            max_retries=3,
+        )
+        
+        assert meta.should_retry() is True
+        
+        meta.retry_count = 3
+        assert meta.should_retry() is False  # 최대 재시도 도달
+        
+        # 재시도 불가 에러
+        fatal = ErrorMeta(
+            error_type="invalid_repo",
+            message="Repository not found",
+            timestamp=time.time(),
+            can_retry=False,
+            retry_count=0,
+        )
+        assert fatal.should_retry() is False
+    
+    def test_error_meta_to_dict(self):
+        """에러 메타 직렬화."""
+        from backend.agents.supervisor.observability import ErrorMeta
+        import time
+        
+        meta = ErrorMeta(
+            error_type="test_error",
+            message="Test message",
+            timestamp=time.time(),
+            can_retry=True,
+            retry_count=1,
+            context={"key": "value"},
+        )
+        
+        d = meta.to_dict()
+        
+        assert d["error_type"] == "test_error"
+        assert d["can_retry"] is True
+        assert d["retry_count"] == 1
+        assert d["should_retry"] is True
+        assert "timestamp_iso" in d
+        assert d["context"]["key"] == "value"
+
+
+class TestWeeklyReport:
+    """주간 리포트 테스트."""
+    
+    def test_generate_weekly_report(self):
+        """주간 리포트 생성."""
+        from backend.agents.supervisor.observability import (
+            MetricsCollector,
+            generate_weekly_report,
+        )
+        
+        collector = MetricsCollector()
+        
+        # 테스트 데이터 추가
+        for _ in range(50):
+            collector.record_request("smalltalk", latency_ms=50)
+        for _ in range(30):
+            collector.record_request("analyze", latency_ms=3000, disambiguated=True)
+        for _ in range(20):
+            collector.record_request("overview", latency_ms=1000)
+        
+        report = generate_weekly_report(collector)
+        
+        assert report.total_requests == 100
+        assert isinstance(report.slo_results, list)
+        assert len(report.slo_results) > 0
+        assert isinstance(report.recommendations, list)
+    
+    def test_dashboard_metrics(self):
+        """대시보드 지표 API."""
+        from backend.agents.supervisor.observability import get_dashboard_metrics
+        
+        metrics = get_dashboard_metrics()
+        
+        assert "timestamp" in metrics
+        assert "metrics" in metrics
+        assert "slo_status" in metrics
+        assert "deployment" in metrics
+        assert "all_passed" in metrics["slo_status"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
