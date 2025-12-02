@@ -88,9 +88,11 @@ ONEPAGER_PATTERNS = [
 
 # Refine 패턴 (Task 재필터링)
 REFINE_PATTERNS = [
-    r"(급한|중요한|쉬운|어려운).*(것|거).*(정리|추려|골라|다시)",
-    r"(\d+)개.*(만|정리|다시|추려)",
+    r"(급한|중요한|쉬운|어려운).*(것|거).*(정리|추려|골라|다시|알려|보여)",
+    r"(\d+)개.*(만|정리|다시|추려|알려|보여)",
     r"(우선순위|priority).*(정렬|순서)",
+    r"(더\s*쉬운|더\s*어려운).*(것|거|task)",
+    r"(상위|top)\s*\d+",
 ]
 
 ANALYSIS_KEYWORDS = {"분석", "진단", "건강", "온보딩", "기여", "점수", "상태", "어때", "analyze", "health"}
@@ -457,7 +459,13 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     
     # Check for previous artifacts (for follow-up detection)
     diagnosis_result = safe_get(state, "diagnosis_result")
-    has_prev_artifacts = bool(diagnosis_result and isinstance(diagnosis_result, dict))
+    last_task_list = safe_get(state, "last_task_list")
+    
+    # has_prev_artifacts: diagnosis_result 또는 last_task_list가 있으면 True
+    has_prev_artifacts = bool(
+        (diagnosis_result and isinstance(diagnosis_result, dict)) or
+        (last_task_list and isinstance(last_task_list, list) and len(last_task_list) > 0)
+    )
     
     # Tier-1: Heuristic (instant, no LLM)
     result = _tier1_heuristic(query, has_prev_artifacts)

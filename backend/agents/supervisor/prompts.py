@@ -124,6 +124,44 @@ FOLLOWUP_NO_ARTIFACTS_TEMPLATE = """이전 분석 결과가 없어 근거를 설
 FOLLOWUP_SOURCE_ID = "SYS:TEMPLATES:FOLLOWUP"
 
 
+# Refine Templates (온보딩 Task 재정렬/발췌)
+SYSTEM_REFINE = """당신은 온보딩 Task 목록을 사용자 요청에 맞게 재정렬·발췌하는 역할입니다.
+
+## 역할
+- 주어진 Task 목록에서 요청된 개수만큼 선별
+- priority 기준 정렬 (낮을수록 높은 우선순위)
+- 각 Task가 왜 선택되었는지 간단히 설명
+
+## 출력 형식
+
+### 추천 Task {count}개
+
+{task_list}
+
+**선정 기준**
+- (선정 이유 1-2줄)
+
+**다음 행동**
+- 더 쉬운 Task: `더 쉬운 거 없어?`
+- 상세 분석: `{task_title} 자세히 알려줘`
+"""
+
+REFINE_NO_TASKS_TEMPLATE = """이전 분석에서 추천된 Task가 없습니다.
+
+**다음 행동**
+- 저장소 온보딩 분석: `facebook/react 온보딩 분석해줘`
+- 건강도 분석부터 시작: `facebook/react 분석해줘`"""
+
+REFINE_EMPTY_RESULT_TEMPLATE = """요청하신 조건에 맞는 Task를 찾지 못했습니다.
+
+**다음 행동**
+- 조건 완화: `아무 Task나 3개 알려줘`
+- 다른 저장소 분석: `vuejs/core 분석해줘`"""
+
+REFINE_SOURCE_ID = "SYS:TEMPLATES:REFINE"
+REFINE_TASKS_SOURCE_KIND = "onboarding_tasks"
+
+
 # General QA / Greeting: intent=general_qa or smalltalk
 SYSTEM_CHAT = """당신은 ODOC, 친절한 오픈소스 온보딩 도우미입니다.
 
@@ -474,6 +512,68 @@ def _format_explain_context(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_refine_prompt(
+    task_list: list,
+    user_query: str,
+    requested_count: int = 3,
+) -> tuple[str, str]:
+    """Builds prompt for refine mode (Task 재정렬/발췌).
+    
+    Returns: (system_prompt, user_prompt)
+    """
+    system = COMMON_RULES + "\n\n" + SYSTEM_REFINE
+    
+    # Format task list for prompt
+    task_lines = []
+    for i, task in enumerate(task_list[:10], 1):
+        title = task.get("title", "제목 없음")
+        priority = task.get("priority", 99)
+        difficulty = task.get("difficulty", "unknown")
+        rationale = task.get("rationale", "")
+        
+        task_lines.append(f"{i}. **{title}** (난이도: {difficulty}, 우선순위: {priority})")
+        if rationale:
+            task_lines.append(f"   - {rationale[:100]}")
+    
+    task_text = "\n".join(task_lines) if task_lines else "(Task 없음)"
+    
+    user_parts = [
+        "## 사용자 요청",
+        user_query,
+        "",
+        "## 현재 Task 목록",
+        task_text,
+        "",
+        f"## 요청 사항",
+        f"위 목록에서 {requested_count}개를 선별해 주세요.",
+        "priority가 낮을수록 높은 우선순위입니다.",
+    ]
+    
+    return system.format(count=requested_count, task_list="{결과}", task_title="{Task 제목}"), "\n".join(user_parts)
+
+
+def extract_requested_count(query: str) -> int:
+    """Extracts requested task count from user query."""
+    import re
+    
+    # 숫자 + 개 패턴
+    match = re.search(r"(\d+)\s*개", query)
+    if match:
+        return min(int(match.group(1)), 10)
+    
+    # top N 패턴
+    match = re.search(r"top\s*(\d+)", query, re.IGNORECASE)
+    if match:
+        return min(int(match.group(1)), 10)
+    
+    # 상위 N개 패턴
+    match = re.search(r"상위\s*(\d+)", query)
+    if match:
+        return min(int(match.group(1)), 10)
+    
+    return 3  # default
+
+
 # LLM Parameters (Step 9: Fast vs Expert 모드별 파라미터)
 # Fast mode: temp=0.7, Expert mode: temp=0.2-0.3, 공통 top_p=0.9
 
@@ -492,6 +592,11 @@ LLM_PARAMS = {
     "followup_evidence": {
         "temperature": 0.2,
         "max_tokens": 400,
+        "top_p": 0.9,
+    },
+    "refine": {
+        "temperature": 0.2,
+        "max_tokens": 600,
         "top_p": 0.9,
     },
     "compare": {

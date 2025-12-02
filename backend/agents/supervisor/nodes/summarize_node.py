@@ -564,6 +564,205 @@ def _build_followup_response(
     return result
 
 
+# Refine handler (Task 재정렬/발췌)
+def _handle_refine_mode(
+    state: SupervisorState, 
+    user_query: str,
+) -> Dict[str, Any]:
+    """Handles followup.refine mode - Task 재정렬/발췌."""
+    from ..prompts import (
+        build_refine_prompt,
+        extract_requested_count,
+        get_llm_params,
+        REFINE_NO_TASKS_TEMPLATE,
+        REFINE_EMPTY_RESULT_TEMPLATE,
+        REFINE_SOURCE_ID,
+        REFINE_TASKS_SOURCE_KIND,
+    )
+    
+    # 아티팩트 가드: last_task_list 또는 diagnosis_result.onboarding_tasks 필요
+    last_task_list = safe_get(state, "last_task_list")
+    diagnosis_result = safe_get(state, "diagnosis_result")
+    
+    task_list: List[Dict[str, Any]] = []
+    
+    # 1순위: last_task_list (이전 턴에서 저장된 Task 목록)
+    if last_task_list and isinstance(last_task_list, list) and len(last_task_list) > 0:
+        task_list = list(last_task_list)
+    # 2순위: diagnosis_result.onboarding_tasks
+    elif diagnosis_result and isinstance(diagnosis_result, dict):
+        onboarding_tasks = diagnosis_result.get("onboarding_tasks", {})
+        if onboarding_tasks:
+            for difficulty in ["beginner", "intermediate", "advanced"]:
+                for task in onboarding_tasks.get(difficulty, []):
+                    task_copy = dict(task)
+                    if "difficulty" not in task_copy:
+                        task_copy["difficulty"] = difficulty
+                    task_list.append(task_copy)
+    
+    # 아티팩트 없음 → 가드 발동
+    if not task_list:
+        logger.warning("[refine] No task artifacts found - guard triggered")
+        emit_event(
+            event_type=EventType.ANSWER_GENERATED,
+            actor="summarize_node",
+            inputs={"answer_kind": "refine", "guard": "no_tasks"},
+            outputs={"status": "guard_triggered"},
+        )
+        return _build_lightweight_response(
+            state,
+            REFINE_NO_TASKS_TEMPLATE,
+            "refine",
+            REFINE_SOURCE_ID,
+        )
+    
+    # 요청된 개수 추출 (기본 3개)
+    requested_count = extract_requested_count(user_query)
+    
+    # priority 기준 정렬 (낮을수록 높은 우선순위)
+    sorted_tasks = sorted(
+        task_list, 
+        key=lambda t: (t.get("priority", 99), t.get("difficulty", "intermediate"))
+    )
+    
+    # 상위 N개 발췌
+    selected_tasks = sorted_tasks[:requested_count]
+    
+    # 결과가 비어있으면 안내
+    if not selected_tasks:
+        return _build_lightweight_response(
+            state,
+            REFINE_EMPTY_RESULT_TEMPLATE,
+            "refine",
+            REFINE_SOURCE_ID,
+        )
+    
+    # LLM으로 정리된 응답 생성
+    system_prompt, user_prompt = build_refine_prompt(
+        task_list=sorted_tasks,
+        user_query=user_query,
+        requested_count=requested_count,
+    )
+    
+    llm_params = get_llm_params("refine")
+    llm_result = _call_llm_with_retry(system_prompt, user_prompt, llm_params, max_retries=1)
+    
+    # LLM 실패 시 규칙 기반 응답
+    if llm_result.degraded:
+        return _build_refine_fallback_response(state, selected_tasks, requested_count)
+    
+    return _build_refine_response(state, llm_result.content, selected_tasks, sorted_tasks)
+
+
+def _build_refine_response(
+    state: SupervisorState,
+    summary: str,
+    selected_tasks: List[Dict],
+    all_tasks: List[Dict],
+) -> Dict[str, Any]:
+    """Builds response for refine mode with task sources."""
+    from ..prompts import REFINE_TASKS_SOURCE_KIND
+    
+    # sources: onboarding_tasks(필수) + 선택된 task IDs
+    sources = ["onboarding_tasks"]
+    source_kinds = [REFINE_TASKS_SOURCE_KIND]
+    
+    for task in selected_tasks:
+        task_id = task.get("id") or task.get("title", "unknown")[:20]
+        sources.append(f"task:{task_id}")
+        source_kinds.append("task_item")
+    
+    answer_contract = AnswerContract(
+        text=summary,
+        sources=sources,
+        source_kinds=source_kinds,
+    )
+    
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": "refine"},
+        outputs={
+            "text_length": len(summary),
+            "selected_count": len(selected_tasks),
+            "total_tasks": len(all_tasks),
+            "sources": sources[:5],
+        },
+    )
+    
+    return {
+        "llm_summary": answer_contract.text,
+        "answer_kind": "refine",
+        "answer_contract": answer_contract.model_dump(),
+        "last_brief": f"Task {len(selected_tasks)}개 추천 완료",
+        "last_answer_kind": "refine",
+        "last_task_list": all_tasks,  # 전체 Task 목록 유지
+    }
+
+
+def _build_refine_fallback_response(
+    state: SupervisorState,
+    selected_tasks: List[Dict],
+    requested_count: int,
+) -> Dict[str, Any]:
+    """Builds fallback response when LLM fails in refine mode."""
+    from ..prompts import REFINE_TASKS_SOURCE_KIND
+    
+    # 규칙 기반 응답 생성
+    lines = [f"### 추천 Task {len(selected_tasks)}개", ""]
+    
+    for i, task in enumerate(selected_tasks, 1):
+        title = task.get("title", "제목 없음")
+        difficulty = task.get("difficulty", "unknown")
+        priority = task.get("priority", 99)
+        rationale = task.get("rationale", "")
+        
+        lines.append(f"**{i}. {title}**")
+        lines.append(f"- 난이도: {difficulty}, 우선순위: {priority}")
+        if rationale:
+            lines.append(f"- {rationale[:100]}")
+        lines.append("")
+    
+    lines.append("**다음 행동**")
+    lines.append("- 더 쉬운 Task: `더 쉬운 거 없어?`")
+    lines.append("- 상세 분석: `{Task 제목} 자세히 알려줘`")
+    
+    summary = "\n".join(lines)
+    
+    sources = ["onboarding_tasks"]
+    source_kinds = [REFINE_TASKS_SOURCE_KIND]
+    
+    for task in selected_tasks:
+        task_id = task.get("id") or task.get("title", "unknown")[:20]
+        sources.append(f"task:{task_id}")
+        source_kinds.append("task_item")
+    
+    answer_contract = AnswerContract(
+        text=summary,
+        sources=sources,
+        source_kinds=source_kinds,
+    )
+    
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": "refine", "fallback": True},
+        outputs={
+            "text_length": len(summary),
+            "selected_count": len(selected_tasks),
+        },
+    )
+    
+    return {
+        "llm_summary": answer_contract.text,
+        "answer_kind": "refine",
+        "answer_contract": answer_contract.model_dump(),
+        "last_brief": f"Task {len(selected_tasks)}개 추천 완료",
+        "last_answer_kind": "refine",
+        "degraded": True,
+    }
+
+
 # V1 Summarize Node (Main Entry Point)
 
 def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
@@ -640,6 +839,10 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     # 3.5. Follow-up Evidence path (직전 턴 아티팩트 기반 근거 설명)
     if mode == ("followup", "evidence"):
         return _handle_followup_evidence_mode(state, user_query, diagnosis_result)
+    
+    # 3.6. Follow-up Refine path (Task 재정렬/발췌)
+    if mode == ("followup", "refine"):
+        return _handle_refine_mode(state, user_query)
     
     # 4. Route by mode (LLM required)
     

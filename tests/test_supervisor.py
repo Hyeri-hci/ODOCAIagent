@@ -2509,6 +2509,202 @@ class TestKeywordCandidates:
         assert route == "summarize"
 
 
+class TestRefineMode:
+    """Refine 모드 테스트: Task 재정렬/발췌."""
+    
+    def test_refine_detection_with_tasks(self):
+        """Task 목록 있을 때 refine 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 아티팩트 있을 때만 refine 감지
+        result = _tier1_heuristic("상위 3개만 알려줘", has_prev_artifacts=True)
+        assert result is not None
+        assert result.intent == "followup"
+        assert result.sub_intent == "refine"
+    
+    def test_refine_detection_without_tasks(self):
+        """Task 목록 없으면 refine 비감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 아티팩트 없으면 refine 감지 안 함
+        result = _tier1_heuristic("상위 3개만 알려줘", has_prev_artifacts=False)
+        assert result is None  # LLM으로 위임
+    
+    def test_refine_guard_no_tasks(self):
+        """Task 없으면 가드 발동."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "상위 3개 알려줘",
+            # last_task_list 없음, diagnosis_result 없음
+        }
+        
+        result = _handle_refine_mode(state, "상위 3개 알려줘")
+        
+        # 가드 발동: 안내 메시지
+        assert "이전 분석" in result["llm_summary"] or "Task가 없습니다" in result["llm_summary"]
+        assert result["answer_kind"] == "refine"
+    
+    def test_refine_with_last_task_list(self):
+        """last_task_list 있으면 정상 refine."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "상위 2개만 알려줘",
+            "last_task_list": [
+                {"title": "Task A", "priority": 1, "difficulty": "beginner", "rationale": "쉬움"},
+                {"title": "Task B", "priority": 2, "difficulty": "beginner", "rationale": "중간"},
+                {"title": "Task C", "priority": 3, "difficulty": "intermediate", "rationale": "어려움"},
+            ],
+        }
+        
+        result = _handle_refine_mode(state, "상위 2개만 알려줘")
+        
+        # sources에 onboarding_tasks 포함 (필수)
+        answer_contract = result.get("answer_contract", {})
+        sources = answer_contract.get("sources", [])
+        assert "onboarding_tasks" in sources
+        
+        # Task 정보 유지
+        assert result.get("last_task_list") is not None
+        assert result["answer_kind"] == "refine"
+    
+    def test_refine_with_diagnosis_result(self):
+        """diagnosis_result.onboarding_tasks로도 refine 가능."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "3개 추천해줘",
+            "diagnosis_result": {
+                "onboarding_tasks": {
+                    "beginner": [
+                        {"title": "Beginner Task 1", "priority": 1, "rationale": "초급"},
+                        {"title": "Beginner Task 2", "priority": 2, "rationale": "초급"},
+                    ],
+                    "intermediate": [
+                        {"title": "Intermediate Task", "priority": 5, "rationale": "중급"},
+                    ],
+                },
+            },
+        }
+        
+        result = _handle_refine_mode(state, "3개 추천해줘")
+        
+        # sources에 onboarding_tasks 포함 (필수)
+        answer_contract = result.get("answer_contract", {})
+        sources = answer_contract.get("sources", [])
+        assert "onboarding_tasks" in sources
+        assert result["answer_kind"] == "refine"
+    
+    def test_extract_requested_count(self):
+        """요청된 Task 개수 추출."""
+        from backend.agents.supervisor.prompts import extract_requested_count
+        
+        assert extract_requested_count("상위 3개 알려줘") == 3
+        assert extract_requested_count("5개만 보여줘") == 5
+        assert extract_requested_count("top 2") == 2
+        assert extract_requested_count("추천해줘") == 3  # default
+        assert extract_requested_count("상위 100개") == 10  # max cap
+    
+    def test_refine_priority_sorting(self):
+        """priority 기준 정렬 확인."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "상위 2개",
+            "last_task_list": [
+                {"title": "Low Priority", "priority": 10, "difficulty": "advanced"},
+                {"title": "High Priority", "priority": 1, "difficulty": "beginner"},
+                {"title": "Medium Priority", "priority": 5, "difficulty": "intermediate"},
+            ],
+        }
+        
+        result = _handle_refine_mode(state, "상위 2개")
+        
+        # 응답에 High Priority와 Medium Priority가 포함되어야 함
+        assert result["answer_kind"] == "refine"
+        # Task 목록이 priority 순으로 정렬되어 유지됨
+        last_tasks = result.get("last_task_list", [])
+        assert len(last_tasks) == 3
+        assert last_tasks[0]["priority"] == 1  # High Priority first
+    
+    def test_refine_sources_not_empty(self):
+        """refine 응답의 sources는 빈 배열 금지."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "3개 알려줘",
+            "last_task_list": [
+                {"title": "Task 1", "priority": 1, "difficulty": "beginner"},
+            ],
+        }
+        
+        result = _handle_refine_mode(state, "3개 알려줘")
+        
+        answer_contract = result.get("answer_contract", {})
+        sources = answer_contract.get("sources", [])
+        
+        # sources는 비어있으면 안 됨
+        assert len(sources) > 0
+        # onboarding_tasks 필수
+        assert "onboarding_tasks" in sources
+    
+    def test_has_prev_artifacts_includes_last_task_list(self):
+        """has_prev_artifacts는 last_task_list도 포함."""
+        from backend.agents.supervisor.nodes.intent_classifier import classify_intent_node
+        
+        # diagnosis_result 없어도 last_task_list 있으면 has_prev_artifacts=True
+        state = {
+            "user_query": "더 쉬운 거 알려줘",
+            "last_task_list": [{"title": "Task", "priority": 1, "difficulty": "beginner"}],
+        }
+        
+        # _tier1_heuristic 내부에서 has_prev_artifacts=True로 동작해야 함
+        # classify_intent_node에서 테스트
+        result = classify_intent_node(state)
+        
+        # refine 패턴이면 followup.refine으로 분류
+        assert result.get("intent") == "followup"
+        assert result.get("sub_intent") == "refine"
+
+
+class TestRefineEventTracking:
+    """Refine 이벤트 추적 테스트."""
+    
+    def test_refine_guard_emits_event(self):
+        """가드 발동 시 이벤트 발생."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {"user_query": "3개 알려줘"}
+        result = _handle_refine_mode(state, "3개 알려줘")
+        
+        # 가드가 발동되면 answer_kind가 "refine"이고 안내 메시지가 있어야 함
+        assert result["answer_kind"] == "refine"
+        assert "이전 분석" in result["llm_summary"] or "Task가 없습니다" in result["llm_summary"]
+    
+    def test_refine_success_emits_answer_contract(self):
+        """정상 refine 시 answer_contract 생성."""
+        from backend.agents.supervisor.nodes.summarize_node import _handle_refine_mode
+        
+        state = {
+            "user_query": "2개 알려줘",
+            "last_task_list": [
+                {"title": "Task 1", "priority": 1, "difficulty": "beginner"},
+                {"title": "Task 2", "priority": 2, "difficulty": "beginner"},
+            ],
+        }
+        result = _handle_refine_mode(state, "2개 알려줘")
+        
+        # answer_contract가 생성되어야 함
+        assert "answer_contract" in result
+        answer_contract = result["answer_contract"]
+        
+        # sources에 onboarding_tasks 포함
+        assert "onboarding_tasks" in answer_contract.get("sources", [])
+        
+        # text가 비어있지 않아야 함
+        assert len(answer_contract.get("text", "")) > 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
