@@ -27,10 +27,7 @@ st.set_page_config(
     layout="wide",
 )
 
-
-# ============================================================================
 # 로깅 캡처 설정
-# ============================================================================
 class StreamlitLogHandler(logging.Handler):
     """Streamlit에 로그를 실시간으로 표시하는 핸들러"""
     
@@ -74,9 +71,117 @@ def capture_agent_logs():
     return log_handler
 
 
-# ============================================================================
+# 그래프 시각화 함수
+def render_graph_visualization(result: dict | None):
+    """Mermaid.js로 그래프 실행 경로를 시각화"""
+    if not result:
+        st.caption("실행 결과 없음")
+        return
+    
+    intent = result.get("intent", "")
+    sub_intent = result.get("sub_intent", "")
+    answer_kind = result.get("answer_kind", "chat")
+    has_diagnosis = bool(result.get("diagnosis_result"))
+    needs_disambiguation = result.get("_needs_disambiguation", False)
+    
+    # 실행된 경로 결정
+    if needs_disambiguation:
+        path = "disambiguation"
+    elif intent == "smalltalk" or intent == "help":
+        path = "fast"
+    elif intent == "overview":
+        path = "overview"
+    elif sub_intent in ("compare", "onepager"):
+        path = "expert"
+    elif has_diagnosis:
+        path = "diagnosis"
+    else:
+        path = "summarize"
+    
+    # Mermaid 다이어그램 생성
+    mermaid_code = f'''flowchart TD
+    subgraph Input
+        START((Query))
+    end
+    
+    subgraph Routing
+        INIT[init]
+        CLASSIFY[classify<br/>{intent}.{sub_intent}]
+    end
+    
+    subgraph Processing
+        DIAG[diagnosis]
+        EXPERT[expert<br/>compare/onepager]
+        FAST[fast path<br/>smalltalk/help]
+    end
+    
+    subgraph Output
+        SUMMARIZE[summarize]
+        DISAMB[disambiguation]
+        ANSWER((Answer<br/>{answer_kind}))
+    end
+    
+    START --> INIT
+    INIT --> CLASSIFY
+'''
+    
+    # 경로별 화살표 추가
+    if path == "fast":
+        mermaid_code += '''
+    CLASSIFY --> FAST
+    FAST --> ANSWER
+    style FAST fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
+'''
+    elif path == "disambiguation":
+        mermaid_code += '''
+    CLASSIFY --> DISAMB
+    DISAMB --> ANSWER
+    style DISAMB fill:#FF9800,stroke:#333,stroke-width:2px,color:#fff
+'''
+    elif path == "expert":
+        mermaid_code += '''
+    CLASSIFY --> EXPERT
+    EXPERT --> SUMMARIZE
+    SUMMARIZE --> ANSWER
+    style EXPERT fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
+'''
+    elif path == "diagnosis":
+        mermaid_code += '''
+    CLASSIFY --> DIAG
+    DIAG --> SUMMARIZE
+    SUMMARIZE --> ANSWER
+    style DIAG fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
+'''
+    else:
+        mermaid_code += '''
+    CLASSIFY --> SUMMARIZE
+    SUMMARIZE --> ANSWER
+'''
+    
+    # 공통 스타일
+    mermaid_code += '''
+    style START fill:#9C27B0,stroke:#333,stroke-width:2px,color:#fff
+    style INIT fill:#2196F3,stroke:#333,stroke-width:2px,color:#fff
+    style CLASSIFY fill:#2196F3,stroke:#333,stroke-width:2px,color:#fff
+    style SUMMARIZE fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
+    style ANSWER fill:#E91E63,stroke:#333,stroke-width:2px,color:#fff
+'''
+    
+    st_mermaid(mermaid_code, height=400)
+    
+    # 실행 경로 텍스트 설명
+    path_desc = {
+        "fast": "경량 경로 (LLM 호출 없음)",
+        "disambiguation": "엔티티 확인 필요",
+        "expert": "전문 러너 실행",
+        "diagnosis": "진단 에이전트 실행",
+        "overview": "저장소 개요 조회",
+        "summarize": "직접 요약",
+    }
+    st.caption(f"실행 경로: **{path_desc.get(path, path)}**")
+
+
 # 세션 상태 초기화
-# ============================================================================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "last_result" not in st.session_state:
@@ -94,9 +199,7 @@ if "turn_metrics" not in st.session_state:
     st.session_state.turn_metrics = []  # 턴별 메트릭 저장
 
 
-# ============================================================================
 # 메인 UI
-# ============================================================================
 st.title("Supervisor Agent Demo")
 st.caption("자연어로 GitHub 저장소에 대해 질문하면, 에이전트가 분석하고 응답합니다.")
 
@@ -267,131 +370,7 @@ with st.sidebar:
         render_graph_visualization(last_result)
 
 
-# 그래프 시각화 함수
-def render_graph_visualization(result: dict | None):
-    """Mermaid.js로 그래프 실행 경로를 시각화"""
-    if not result:
-        st.caption("실행 결과 없음")
-        return
-    
-    intent = result.get("intent", "")
-    sub_intent = result.get("sub_intent", "")
-    answer_kind = result.get("answer_kind", "chat")
-    has_diagnosis = bool(result.get("diagnosis_result"))
-    has_expert = bool(result.get("answer_contract") and sub_intent in ("compare", "onepager"))
-    needs_disambiguation = result.get("_needs_disambiguation", False)
-    
-    # 실행된 경로 결정
-    if needs_disambiguation:
-        path = "disambiguation"
-    elif intent == "smalltalk" or intent == "help":
-        path = "fast"
-    elif intent == "overview":
-        path = "overview"
-    elif sub_intent in ("compare", "onepager"):
-        path = "expert"
-    elif has_diagnosis:
-        path = "diagnosis"
-    else:
-        path = "summarize"
-    
-    # 노드 스타일 정의
-    styles = {
-        "active": "fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff",
-        "inactive": "fill:#f5f5f5,stroke:#ddd,stroke-width:1px,color:#999",
-        "current": "fill:#2196F3,stroke:#333,stroke-width:3px,color:#fff",
-    }
-    
-    # Mermaid 다이어그램 생성 (streamlit-mermaid용 - 마크다운 코드블록 없이)
-    mermaid_code = f'''flowchart TD
-    subgraph Input
-        START((Query))
-    end
-    
-    subgraph Routing
-        INIT[init]
-        CLASSIFY[classify<br/>{intent}.{sub_intent}]
-    end
-    
-    subgraph Processing
-        DIAG[diagnosis]
-        EXPERT[expert<br/>compare/onepager]
-        FAST[fast path<br/>smalltalk/help]
-    end
-    
-    subgraph Output
-        SUMMARIZE[summarize]
-        DISAMB[disambiguation]
-        ANSWER((Answer<br/>{answer_kind}))
-    end
-    
-    START --> INIT
-    INIT --> CLASSIFY
-'''
-    
-    # 경로별 화살표 추가
-    if path == "fast":
-        mermaid_code += '''
-    CLASSIFY --> FAST
-    FAST --> ANSWER
-    
-    style FAST fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
-'''
-    elif path == "disambiguation":
-        mermaid_code += '''
-    CLASSIFY --> DISAMB
-    DISAMB --> ANSWER
-    
-    style DISAMB fill:#FF9800,stroke:#333,stroke-width:2px,color:#fff
-'''
-    elif path == "expert":
-        mermaid_code += '''
-    CLASSIFY --> EXPERT
-    EXPERT --> SUMMARIZE
-    SUMMARIZE --> ANSWER
-    
-    style EXPERT fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
-'''
-    elif path == "diagnosis":
-        mermaid_code += '''
-    CLASSIFY --> DIAG
-    DIAG --> SUMMARIZE
-    SUMMARIZE --> ANSWER
-    
-    style DIAG fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
-'''
-    else:
-        mermaid_code += '''
-    CLASSIFY --> SUMMARIZE
-    SUMMARIZE --> ANSWER
-'''
-    
-    # 공통 스타일
-    mermaid_code += '''
-    style START fill:#9C27B0,stroke:#333,stroke-width:2px,color:#fff
-    style INIT fill:#2196F3,stroke:#333,stroke-width:2px,color:#fff
-    style CLASSIFY fill:#2196F3,stroke:#333,stroke-width:2px,color:#fff
-    style SUMMARIZE fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
-    style ANSWER fill:#E91E63,stroke:#333,stroke-width:2px,color:#fff
-'''
-    
-    st_mermaid(mermaid_code, height=400)
-    
-    # 실행 경로 텍스트 설명
-    path_desc = {
-        "fast": "경량 경로 (LLM 호출 없음)",
-        "disambiguation": "엔티티 확인 필요",
-        "expert": "전문 러너 실행",
-        "diagnosis": "진단 에이전트 실행",
-        "overview": "저장소 개요 조회",
-        "summarize": "직접 요약",
-    }
-    st.caption(f"실행 경로: **{path_desc.get(path, path)}**")
-
-
-# ============================================================================
 # 응답 유형 배지 표시
-# ============================================================================
 ANSWER_KIND_BADGES = {
     "report": ("📊 진단 리포트", "blue"),
     "explain": ("💡 점수 해설", "green"),
@@ -407,9 +386,7 @@ def get_answer_kind_badge(answer_kind: str) -> str:
     return f":{color}[{label}]"
 
 
-# ============================================================================
 # 대화 히스토리 표시
-# ============================================================================
 chat_container = st.container()
 
 with chat_container:
@@ -479,10 +456,7 @@ with chat_container:
                                         st.markdown(f"- {task.get('title', 'N/A')}")
 
 
-# ============================================================================
 # 채팅 입력 (하단 고정)
-# ============================================================================
-
 # 예시 질문 버튼에서 설정한 쿼리 처리
 example_query = st.session_state.example_query
 if example_query:
