@@ -637,5 +637,85 @@ class TestLightweightPath:
         assert "다음 행동" in result.get("llm_summary", "")
 
 
+class TestOverviewPath:
+    """Step 3: Overview 경로 테스트."""
+    
+    def test_fetch_overview_artifacts(self):
+        """아티팩트 수집 함수 테스트."""
+        from backend.agents.supervisor.service import fetch_overview_artifacts
+        
+        # 실제 저장소로 테스트 (캐시됨)
+        artifacts = fetch_overview_artifacts("facebook", "react")
+        
+        # repo_facts는 필수
+        assert artifacts.repo_facts
+        assert artifacts.repo_facts.get("full_name") == "facebook/react"
+        
+        # sources >= 1 (최소 repo_facts)
+        assert len(artifacts.sources) >= 1
+        assert any("REPO_FACTS" in s for s in artifacts.sources)
+    
+    def test_overview_artifacts_sources_count(self):
+        """아티팩트 sources >= 2 검증."""
+        from backend.agents.supervisor.service import fetch_overview_artifacts
+        
+        artifacts = fetch_overview_artifacts("microsoft", "vscode")
+        
+        # 정상 케이스: sources >= 2
+        # (repo_facts + readme_head 또는 recent_activity)
+        assert len(artifacts.sources) >= 2, f"Expected >= 2 sources, got {artifacts.sources}"
+    
+    def test_build_overview_prompt(self):
+        """Overview 프롬프트 빌드 테스트."""
+        from backend.agents.supervisor.prompts import build_overview_prompt
+        
+        system, user = build_overview_prompt(
+            owner="test",
+            repo="repo",
+            repo_facts={"description": "Test repo", "stars": 100, "language": "Python"},
+            readme_head="# Test\n\nThis is a test.",
+            recent_activity={"commit_count_30d": 10},
+        )
+        
+        assert "test/repo" in system
+        assert "다음 행동" in system
+        assert "repo_facts" in user
+        assert "readme_head" in user
+        assert "recent_activity" in user
+    
+    def test_overview_response_has_sources(self):
+        """Overview 응답에 sources 포함."""
+        from backend.agents.supervisor.nodes.summarize_node import _build_overview_response
+        
+        sources = ["ARTIFACT:REPO_FACTS:test/repo", "ARTIFACT:README_HEAD:test/repo"]
+        result = _build_overview_response(
+            state={},
+            summary="Test summary",
+            sources=sources,
+            repo_id="test/repo",
+        )
+        
+        contract = result.get("answer_contract", {})
+        assert len(contract.get("sources", [])) >= 2
+        assert "github_artifact" in contract.get("source_kinds", [])
+    
+    def test_overview_fallback_template(self):
+        """API 제한 시 fallback 템플릿 사용."""
+        from backend.agents.supervisor.prompts import OVERVIEW_FALLBACK_TEMPLATE
+        
+        fallback = OVERVIEW_FALLBACK_TEMPLATE.format(
+            owner="test",
+            repo="repo",
+            description="A test repo",
+            language="Python",
+            stars=100,
+            forks=10,
+        )
+        
+        assert "test/repo" in fallback
+        assert "다음 행동" in fallback
+        assert "100" in fallback  # stars
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

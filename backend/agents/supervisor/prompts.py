@@ -176,6 +176,90 @@ HELP_SOURCE_ID = "SYS:TEMPLATES:HELP"
 OVERVIEW_SOURCE_ID = "SYS:TEMPLATES:OVERVIEW"
 
 
+# Overview LLM Prompt (아티팩트 기반 3-6문장 개요)
+SYSTEM_OVERVIEW = """당신은 GitHub 저장소를 간결하게 소개하는 전문가입니다.
+
+## 역할
+- 저장소의 핵심 정보를 3-6문장으로 요약
+- 제공된 데이터(repo_facts, readme_head, recent_activity)만 사용
+- 추측하거나 데이터 없이 주장하지 않음
+
+## 출력 형식
+
+### {repo_name}
+
+[3-6문장 개요: 프로젝트 목적, 주요 기술, 현재 상태]
+
+**근거**
+- [데이터 기반 근거 1]
+- [데이터 기반 근거 2]
+
+**다음 행동**
+- 건강도 분석: `{owner}/{repo} 분석해줘`
+- 기여 가이드: `{owner}/{repo}에 기여하고 싶어`
+"""
+
+OVERVIEW_FALLBACK_TEMPLATE = """**{owner}/{repo}**
+
+{description}
+
+| 항목 | 값 |
+|------|-----|
+| 언어 | {language} |
+| Stars | {stars:,} |
+| Forks | {forks:,} |
+
+**다음 행동**
+- 건강도 분석: `{owner}/{repo} 분석해줘`
+- 기여 가이드: `{owner}/{repo}에 기여하고 싶어`"""
+
+
+def build_overview_prompt(
+    owner: str,
+    repo: str,
+    repo_facts: Dict[str, Any],
+    readme_head: str,
+    recent_activity: Dict[str, Any],
+) -> tuple[str, str]:
+    """Builds prompt for Overview mode. Returns (system, user)."""
+    system = COMMON_RULES + "\n" + SYSTEM_OVERVIEW.format(
+        repo_name=f"{owner}/{repo}",
+        owner=owner,
+        repo=repo,
+    )
+    
+    user_parts = [f"## 저장소: {owner}/{repo}\n"]
+    
+    # repo_facts
+    user_parts.append("### repo_facts")
+    user_parts.append(f"- 설명: {repo_facts.get('description') or '(없음)'}")
+    user_parts.append(f"- 언어: {repo_facts.get('language') or '(없음)'}")
+    user_parts.append(f"- Stars: {repo_facts.get('stars', 0):,}")
+    user_parts.append(f"- Forks: {repo_facts.get('forks', 0):,}")
+    user_parts.append(f"- Open Issues: {repo_facts.get('open_issues', 0)}")
+    user_parts.append(f"- License: {repo_facts.get('license') or '(없음)'}")
+    user_parts.append(f"- Archived: {repo_facts.get('archived', False)}")
+    user_parts.append("")
+    
+    # readme_head
+    if readme_head:
+        user_parts.append("### readme_head (처음 ~2KB)")
+        user_parts.append("```")
+        user_parts.append(readme_head[:1500])  # 토큰 절약
+        user_parts.append("```")
+        user_parts.append("")
+    
+    # recent_activity
+    if recent_activity:
+        user_parts.append("### recent_activity (최근 30일)")
+        user_parts.append(f"- 커밋 수: {recent_activity.get('commit_count_30d', 0)}")
+        user_parts.append(f"- 기여자 수: {recent_activity.get('unique_authors_30d', 0)}")
+        user_parts.append(f"- Open PRs: {recent_activity.get('open_prs', 0)}")
+        user_parts.append(f"- 마지막 커밋: {recent_activity.get('last_commit_date') or '(없음)'}")
+    
+    return system, "\n".join(user_parts)
+
+
 # Helper Functions
 def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, str]:
     """Builds prompt for health report mode. Returns (system, user)."""
@@ -280,7 +364,7 @@ def _format_explain_context(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# LLM Parameters (kept for compatibility)
+# LLM Parameters
 LLM_PARAMS = {
     "health_report": {
         "temperature": 0.3,
@@ -290,6 +374,11 @@ LLM_PARAMS = {
     "score_explain": {
         "temperature": 0.25,
         "max_tokens": 512,
+        "top_p": 0.9,
+    },
+    "overview": {
+        "temperature": 0.3,
+        "max_tokens": 400,
         "top_p": 0.9,
     },
     "chat": {

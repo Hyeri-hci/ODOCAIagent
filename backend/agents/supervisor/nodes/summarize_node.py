@@ -29,10 +29,7 @@ from ..models import (
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
 # Degrade Templates (아티팩트 부족/스키마 실패 시 응답)
-# =============================================================================
-
 DEGRADE_NO_ARTIFACT = """죄송합니다, 분석에 필요한 데이터를 가져오지 못했습니다.
 
 **다음 행동을 시도해 보세요:**
@@ -60,10 +57,7 @@ DEGRADE_SOURCE_ID = "system_degrade_template"
 DEGRADE_SOURCE_KIND = "system_template"
 
 
-# =============================================================================
 # Metric Constants
-# =============================================================================
-
 METRIC_ALIAS_MAP = get_all_aliases()
 SORTED_ALIASES = sorted(METRIC_ALIAS_MAP.keys(), key=len, reverse=True)
 METRIC_NAME_KR = {key: metric.name_ko for key, metric in METRIC_DEFINITIONS.items()}
@@ -76,10 +70,7 @@ METRIC_NOT_FOUND_MESSAGE = (
 )
 
 
-# =============================================================================
 # Helper Functions
-# =============================================================================
-
 def _extract_target_metrics(user_query: str) -> List[str]:
     """Extracts metric keywords from user query using alias mapping."""
     query_lower = user_query.lower()
@@ -159,10 +150,7 @@ def _generate_last_brief(summary: str, repo_id: str = "") -> str:
     return result
 
 
-# =============================================================================
 # LLM Call with Retry and Degrade
-# =============================================================================
-
 class LLMCallResult:
     """Result of LLM call with metadata."""
     def __init__(self, content: str, success: bool, retried: bool = False, degraded: bool = False):
@@ -226,10 +214,7 @@ def _call_llm(system_prompt: str, user_prompt: str, params: dict) -> str:
     return result.content
 
 
-# =============================================================================
 # Response Builder (with AnswerContract enforcement + Degrade support)
-# =============================================================================
-
 # Source kinds by answer_kind
 SOURCE_KIND_MAP = {
     "report": ["diagnosis_result"],
@@ -346,6 +331,114 @@ def _build_lightweight_response(
     }
 
 
+# Overview handler (아티팩트 수집 + LLM 요약)
+def _handle_overview_mode(state: SupervisorState, repo: Optional[Dict]) -> Dict[str, Any]:
+    """Handles overview.repo mode with artifact collection and LLM summary."""
+    from ..prompts import (
+        build_overview_prompt,
+        OVERVIEW_FALLBACK_TEMPLATE,
+        get_llm_params,
+    )
+    from ..service import fetch_overview_artifacts
+    
+    owner = safe_get(repo, "owner", "") if repo else ""
+    name = safe_get(repo, "name", "") if repo else ""
+    repo_id = f"{owner}/{name}"
+    
+    if not owner or not name:
+        return _build_response(
+            state,
+            "저장소 정보가 없습니다. `owner/repo` 형식으로 알려주세요.",
+            "chat",
+            degraded=True
+        )
+    
+    # Fetch artifacts
+    artifacts = fetch_overview_artifacts(owner, name)
+    
+    # API 제한 시 fallback (repo_facts만으로 개요)
+    if artifacts.error or not artifacts.repo_facts:
+        logger.warning(f"Overview fallback for {repo_id}: {artifacts.error}")
+        return _build_response(
+            state,
+            f"저장소 정보를 가져오지 못했습니다: {artifacts.error or '알 수 없는 오류'}",
+            "chat",
+            degraded=True
+        )
+    
+    # sources >= 2 보장 (repo_facts + readme_head 또는 recent_activity)
+    if len(artifacts.sources) < 2:
+        # Fallback to template-based response
+        fallback = OVERVIEW_FALLBACK_TEMPLATE.format(
+            owner=owner,
+            repo=name,
+            description=artifacts.repo_facts.get("description") or "(설명 없음)",
+            language=artifacts.repo_facts.get("language") or "(없음)",
+            stars=artifacts.repo_facts.get("stars", 0),
+            forks=artifacts.repo_facts.get("forks", 0),
+        )
+        return _build_overview_response(state, fallback, artifacts.sources, repo_id)
+    
+    # Build prompt and call LLM
+    system_prompt, user_prompt = build_overview_prompt(
+        owner=owner,
+        repo=name,
+        repo_facts=artifacts.repo_facts,
+        readme_head=artifacts.readme_head,
+        recent_activity=artifacts.recent_activity,
+    )
+    
+    llm_params = get_llm_params("overview")
+    llm_result = _call_llm_with_retry(system_prompt, user_prompt, llm_params, max_retries=1)
+    
+    if llm_result.degraded:
+        # LLM 실패 시 fallback
+        fallback = OVERVIEW_FALLBACK_TEMPLATE.format(
+            owner=owner,
+            repo=name,
+            description=artifacts.repo_facts.get("description") or "(설명 없음)",
+            language=artifacts.repo_facts.get("language") or "(없음)",
+            stars=artifacts.repo_facts.get("stars", 0),
+            forks=artifacts.repo_facts.get("forks", 0),
+        )
+        return _build_overview_response(state, fallback, artifacts.sources, repo_id)
+    
+    return _build_overview_response(state, llm_result.content, artifacts.sources, repo_id)
+
+
+def _build_overview_response(
+    state: SupervisorState,
+    summary: str,
+    sources: List[str],
+    repo_id: str,
+) -> Dict[str, Any]:
+    """Builds response for overview mode with artifact sources."""
+    answer_contract = AnswerContract(
+        text=summary,
+        sources=sources if sources else ["ARTIFACT:REPO_FACTS:" + repo_id],
+        source_kinds=["github_artifact"] * len(sources) if sources else ["github_artifact"],
+    )
+    
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": "chat", "mode": "overview"},
+        outputs={
+            "text_length": len(summary),
+            "source_count": len(sources),
+            "sources": sources[:3],  # 로그 축약
+        },
+    )
+    
+    return {
+        "llm_summary": answer_contract.text,
+        "answer_kind": "chat",
+        "answer_contract": answer_contract.model_dump(),
+        "last_brief": f"{repo_id} 개요 완료",
+        "last_answer_kind": "chat",
+    }
+
+
 # V1 Summarize Node (Main Entry Point)
 
 def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
@@ -360,12 +453,15 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         SMALLTALK_SOURCE_ID,
         HELP_SOURCE_ID,
         OVERVIEW_SOURCE_ID,
+        OVERVIEW_FALLBACK_TEMPLATE,
         build_health_report_prompt,
         build_score_explain_prompt,
+        build_overview_prompt,
         build_chat_prompt,
         get_llm_params,
     )
     from ..intent_config import is_v1_supported
+    from ..service import fetch_overview_artifacts
     
     # Null-safe state access
     intent = safe_get(state, "intent", DEFAULT_INTENT)
@@ -385,7 +481,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     
     mode = (intent, sub_intent)
     
-    # 2. Fast path: Smalltalk/Help/Overview (LLM 호출 없이 즉답)
+    # 2. Fast path: Smalltalk/Help (LLM 호출 없이 즉답)
     if intent == "smalltalk":
         if sub_intent == "greeting":
             return _build_lightweight_response(
@@ -401,13 +497,11 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
             state, HELP_GETTING_STARTED_TEMPLATE, "chat", HELP_SOURCE_ID
         )
     
+    # 3. Overview path (아티팩트 수집 + LLM 요약)
     if intent == "overview" and sub_intent == "repo":
-        owner = safe_get(repo, "owner", "owner") if repo else "owner"
-        name = safe_get(repo, "name", "repo") if repo else "repo"
-        template = OVERVIEW_REPO_TEMPLATE.format(owner=owner, repo=name)
-        return _build_lightweight_response(state, template, "chat", OVERVIEW_SOURCE_ID)
+        return _handle_overview_mode(state, repo)
     
-    # 3. Route by mode (LLM required)
+    # 4. Route by mode (LLM required)
     
     # --- Health Report Mode ---
     if mode in [("analyze", "health"), ("analyze", "onboarding")]:
