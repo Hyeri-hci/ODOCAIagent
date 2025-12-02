@@ -68,8 +68,15 @@ def init_node(state: SupervisorState) -> Dict[str, Any]:
 # Node 2: classify_node
 def classify_node(state: SupervisorState) -> Dict[str, Any]:
     """Classifies user intent using simple rules or LLM."""
-    from backend.agents.supervisor.nodes.intent_classifier import classify_intent_node
-    from backend.agents.supervisor.prompts import MISSING_REPO_TEMPLATE
+    from backend.agents.supervisor.nodes.intent_classifier import (
+        classify_intent_node,
+        _extract_keyword_candidates,
+    )
+    from backend.agents.supervisor.prompts import (
+        MISSING_REPO_TEMPLATE,
+        DISAMBIGUATION_CANDIDATES_TEMPLATE,
+        DISAMBIGUATION_SOURCE_ID,
+    )
     
     emit_event(
         EventType.NODE_STARTED,
@@ -90,7 +97,39 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
     meta = get_intent_meta(intent, sub_intent)
     if meta["requires_repo"] and not result.get("repo"):
         result["_needs_disambiguation"] = True
-        result["_disambiguation_template"] = MISSING_REPO_TEMPLATE
+        
+        # Extract keyword candidates
+        user_query = state.get("user_query", "")
+        keyword, candidates = _extract_keyword_candidates(user_query)
+        
+        if keyword and candidates:
+            # Build candidates list
+            candidate_lines = []
+            for c in candidates[:3]:
+                candidate_lines.append(f"- `{c['owner']}/{c['name']}` - {c['desc']}")
+            candidates_text = "\n".join(candidate_lines)
+            
+            result["_disambiguation_template"] = DISAMBIGUATION_CANDIDATES_TEMPLATE.format(
+                keyword=keyword,
+                candidates=candidates_text,
+            )
+            result["_disambiguation_source"] = DISAMBIGUATION_SOURCE_ID
+            result["_disambiguation_candidates"] = candidates
+        else:
+            result["_disambiguation_template"] = MISSING_REPO_TEMPLATE
+    
+    # Emit disambiguation event if needed
+    if result.get("_needs_disambiguation"):
+        emit_event(
+            EventType.SUPERVISOR_ROUTE_SELECTED,
+            actor="supervisor",
+            outputs={
+                "selected_route": "disambiguation",
+                "intent": intent,
+                "sub_intent": sub_intent,
+                "has_candidates": bool(result.get("_disambiguation_candidates")),
+            },
+        )
     
     emit_event(
         EventType.NODE_FINISHED,
@@ -100,17 +139,6 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
             "sub_intent": sub_intent,
             "answer_kind": answer_kind,
             "needs_disambiguation": result.get("_needs_disambiguation", False),
-        },
-    )
-    
-    # Emit route selection event
-    emit_event(
-        EventType.SUPERVISOR_ROUTE_SELECTED,
-        actor="supervisor",
-        outputs={
-            "selected_route": "diagnosis" if intent == "analyze" else "summarize",
-            "intent": intent,
-            "sub_intent": sub_intent,
         },
     )
     
@@ -319,6 +347,11 @@ def should_run_diagnosis(state: SupervisorState) -> str:
     if state.get("error_message"):
         return "summarize"
     
+    # Disambiguation: repo 필요하지만 없음 → 전문가 노드 진입 금지
+    if state.get("_needs_disambiguation"):
+        logger.debug(f"[route] Disambiguation: {intent}.{sub_intent} → summarize")
+        return "summarize"
+    
     # Fast path: smalltalk/help/overview → never diagnosis
     if intent in ("smalltalk", "help", "overview", "general_qa"):
         logger.debug(f"[route] Fast path: {intent}.{sub_intent} → summarize")
@@ -330,8 +363,9 @@ def should_run_diagnosis(state: SupervisorState) -> str:
     
     meta = get_intent_meta(intent, sub_intent)
     
-    # Check if repo is required but missing
+    # Entity guard: repo 필요하지만 없음 → disambiguation 강제
     if meta["requires_repo"] and not state.get("repo"):
+        logger.debug(f"[route] Entity guard: no repo → summarize")
         return "summarize"
     
     # Compare/Onepager → expert_node

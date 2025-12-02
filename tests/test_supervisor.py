@@ -2453,6 +2453,62 @@ class TestFollowupContext:
         assert _detect_followup("왜 그래?", has_prev_artifacts=False) is False
 
 
+class TestKeywordCandidates:
+    """키워드 후보 추출 테스트."""
+    
+    def test_extract_keyword_candidates_react(self):
+        """react 키워드에서 후보 추출."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_keyword_candidates
+        
+        keyword, candidates = _extract_keyword_candidates("react 분석해줘")
+        
+        assert keyword == "react"
+        assert len(candidates) >= 2
+        assert any(c["owner"] == "facebook" and c["name"] == "react" for c in candidates)
+    
+    def test_extract_keyword_candidates_vue(self):
+        """vue 키워드에서 후보 추출."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_keyword_candidates
+        
+        keyword, candidates = _extract_keyword_candidates("vue 건강도 확인해줘")
+        
+        assert keyword == "vue"
+        assert len(candidates) >= 1
+    
+    def test_extract_keyword_candidates_none(self):
+        """알 수 없는 키워드는 None."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_keyword_candidates
+        
+        keyword, candidates = _extract_keyword_candidates("분석해줘")
+        
+        assert keyword is None
+        assert len(candidates) == 0
+    
+    def test_disambiguation_with_candidates(self):
+        """키워드 있으면 후보 템플릿 사용."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "react 분석해줘"}
+        result = classify_node(state)
+        
+        assert result.get("_needs_disambiguation") is True
+        assert result.get("_disambiguation_candidates") is not None
+        assert "facebook/react" in result.get("_disambiguation_template", "")
+    
+    def test_disambiguation_blocks_expert_node(self):
+        """disambiguation 시 전문가 노드 진입 차단."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "health",
+            "_needs_disambiguation": True,
+        }
+        
+        route = should_run_diagnosis(state)
+        assert route == "summarize"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

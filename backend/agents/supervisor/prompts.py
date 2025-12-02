@@ -222,6 +222,17 @@ MISSING_REPO_TEMPLATE = """어떤 저장소를 분석할까요?
 
 MISSING_REPO_SOURCE_ID = "SYS:TEMPLATES:MISSING_REPO"
 
+# Disambiguation with Candidates Template (후보 제시)
+DISAMBIGUATION_CANDIDATES_TEMPLATE = """**{keyword}**로 검색된 저장소가 여러 개 있습니다.
+
+어떤 저장소를 분석할까요?
+
+{candidates}
+
+원하는 저장소를 선택하거나, 정확한 이름을 입력해 주세요."""
+
+DISAMBIGUATION_SOURCE_ID = "SYS:DISAMBIGUATION:CANDIDATES"
+
 
 # Overview LLM Prompt (아티팩트 기반 3-6문장 개요)
 SYSTEM_OVERVIEW = """당신은 GitHub 저장소를 간결하게 소개하는 전문가입니다.

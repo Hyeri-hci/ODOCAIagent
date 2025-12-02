@@ -581,6 +581,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         OVERVIEW_FALLBACK_TEMPLATE,
         MISSING_REPO_TEMPLATE,
         MISSING_REPO_SOURCE_ID,
+        DISAMBIGUATION_SOURCE_ID,
         build_health_report_prompt,
         build_score_explain_prompt,
         build_overview_prompt,
@@ -605,8 +606,9 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     # 0.5. Disambiguation: repo required but missing
     if safe_get(state, "_needs_disambiguation"):
         template = safe_get(state, "_disambiguation_template", MISSING_REPO_TEMPLATE)
+        source_id = safe_get(state, "_disambiguation_source", DISAMBIGUATION_SOURCE_ID)
         return _build_lightweight_response(
-            state, template, "chat", MISSING_REPO_SOURCE_ID
+            state, template, "chat", source_id
         )
     
     # 1. Check V1 support

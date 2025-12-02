@@ -96,6 +96,44 @@ REFINE_PATTERNS = [
 ANALYSIS_KEYWORDS = {"분석", "진단", "건강", "온보딩", "기여", "점수", "상태", "어때", "analyze", "health"}
 CHITCHAT_KEYWORDS = {"고마워", "감사", "thanks", "ㅋㅋ", "ㅎㅎ", "좋아", "굿", "ok", "알겠어", "ㅇㅋ"}
 
+# 잘 알려진 저장소 후보 (키워드 → 후보 리스트)
+KNOWN_REPO_CANDIDATES = {
+    "react": [
+        {"owner": "facebook", "name": "react", "desc": "UI 라이브러리"},
+        {"owner": "reactjs", "name": "react.dev", "desc": "React 공식 문서"},
+    ],
+    "vue": [
+        {"owner": "vuejs", "name": "core", "desc": "Vue 3 코어"},
+        {"owner": "vuejs", "name": "vue", "desc": "Vue 2"},
+    ],
+    "angular": [
+        {"owner": "angular", "name": "angular", "desc": "Angular 프레임워크"},
+    ],
+    "next": [
+        {"owner": "vercel", "name": "next.js", "desc": "Next.js 프레임워크"},
+    ],
+    "vscode": [
+        {"owner": "microsoft", "name": "vscode", "desc": "VS Code 에디터"},
+    ],
+    "typescript": [
+        {"owner": "microsoft", "name": "TypeScript", "desc": "TypeScript 컴파일러"},
+    ],
+    "python": [
+        {"owner": "python", "name": "cpython", "desc": "Python 인터프리터"},
+    ],
+}
+
+
+def _extract_keyword_candidates(query: str) -> Tuple[Optional[str], list]:
+    """Extract keyword and repo candidates from query."""
+    q = query.lower().strip()
+    
+    for keyword, candidates in KNOWN_REPO_CANDIDATES.items():
+        if keyword in q:
+            return keyword, candidates
+    
+    return None, []
+
 
 @dataclass
 class ClassifyResult:
