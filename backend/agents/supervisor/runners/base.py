@@ -6,7 +6,7 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, TypeVar
+from typing import Any, Callable, Dict, List, Literal, Optional, TypeVar
 
 from backend.agents.shared.contracts import (
     AnswerContract,
@@ -20,6 +20,28 @@ from backend.agents.shared.contracts import (
 from backend.common.events import EventType, emit_event
 
 logger = logging.getLogger(__name__)
+
+# Standardized failure reason codes
+FailureReason = Literal["not_found", "forbidden", "rate_limit", "timeout", "unknown"]
+
+
+@dataclass
+class FailedRepo:
+    """Standardized failure info for a repository."""
+    owner: str
+    repo: str
+    reason: FailureReason
+    http_status: int
+    detail: str
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "owner": self.owner,
+            "repo": self.repo,
+            "reason": self.reason,
+            "http_status": self.http_status,
+            "detail": self.detail,
+        }
 
 T = TypeVar("T")
 
@@ -76,6 +98,28 @@ class RunnerResult:
         return cls(
             success=False,
             error_message=error_message,
+        )
+    
+    @classmethod
+    def partial_ok(
+        cls,
+        answer: AnswerContract,
+        artifacts_out: List[str],
+        failed_repos: List["FailedRepo"],
+        reason: str,
+    ) -> "RunnerResult":
+        """Returns partial success when some repos failed."""
+        return cls(
+            success=True,
+            answer=answer,
+            artifacts_out=artifacts_out,
+            degraded=True,
+            meta={
+                "status": "partial",
+                "degrade_reason": reason,
+                "incomplete_compare": True,
+                "failed_repos": [fr.to_dict() for fr in failed_repos],
+            },
         )
 
 

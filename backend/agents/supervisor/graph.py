@@ -374,6 +374,7 @@ def expert_node(state: SupervisorState) -> Dict[str, Any]:
             "status": "success" if result.success else "error",
             "degraded": result.degraded,
             "runner": runner.runner_name,
+            "incomplete_compare": result.meta.get("incomplete_compare", False),
         },
     )
     
@@ -395,8 +396,17 @@ def expert_node(state: SupervisorState) -> Dict[str, Any]:
             "text_length": len(answer.text or "") if answer else 0,
             "source_count": len(answer.sources or []) if answer else 0,
             "degraded": result.degraded,
+            "incomplete_compare": result.meta.get("incomplete_compare", False),
         },
     )
+    
+    # Pass runner meta to state for summarize validation
+    runner_meta = {
+        "status": result.meta.get("status", "ok"),
+        "incomplete_compare": result.meta.get("incomplete_compare", False),
+        "failed_repos": result.meta.get("failed_repos", []),
+        "degrade_reason": result.meta.get("degrade_reason"),
+    }
     
     return {
         "llm_summary": answer.text if answer else "",
@@ -404,6 +414,7 @@ def expert_node(state: SupervisorState) -> Dict[str, Any]:
         "answer_contract": answer.model_dump() if answer else {},
         "last_brief": _generate_last_brief(answer.text if answer else ""),
         "last_answer_kind": answer_kind,
+        "_runner_meta": runner_meta,
     }
 
 

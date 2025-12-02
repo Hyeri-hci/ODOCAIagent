@@ -303,6 +303,20 @@ ACCESS_ERROR_RATE_LIMIT_TEMPLATE = """GitHub API 호출 한도에 도달했습�
 ACCESS_ERROR_SOURCE_ID = "SYS:ACCESS_GUARD:ERROR"
 
 
+# Incomplete Compare Warning Templates (불완전 비교 경고)
+INCOMPLETE_COMPARE_WARNING_TEMPLATE = """**※ 불완전 비교**: `{failed_repo}` 처리 중 {reason_message}(HTTP {http_status}). 성공한 `{success_repo}` 기준으로 요약을 제공합니다."""
+
+INCOMPLETE_COMPARE_FAILURE_REASONS = {
+    "not_found": "레포지토리가 존재하지 않습니다",
+    "forbidden": "접근 권한이 없습니다",
+    "rate_limit": "API 제한에 도달했습니다",
+    "timeout": "응답 지연(타임아웃)입니다",
+    "unknown": "알 수 없는 오류입니다",
+}
+
+INCOMPLETE_COMPARE_SOURCE_ID = "SYS:INCOMPLETE_COMPARE:WARNING"
+
+
 # Overview LLM Prompt (아티팩트 기반 3-6문장 개요)
 SYSTEM_OVERVIEW = """당신은 GitHub 저장소를 간결하게 소개하는 전문가입니다.
 

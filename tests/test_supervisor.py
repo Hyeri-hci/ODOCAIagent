@@ -3381,5 +3381,326 @@ class TestAccessGuard:
         assert route in ("expert", "diagnosis")  # 둘 다 diagnosis 실행을 의미
 
 
+class TestIncompleteCompare:
+    """Incomplete Compare (불완전 비교) 테스트."""
+    
+    def test_failed_repo_dataclass(self):
+        """FailedRepo dataclass 구조 검증."""
+        from backend.agents.supervisor.runners import FailedRepo
+        
+        fr = FailedRepo(
+            owner="osd",
+            repo="cofre",
+            reason="not_found",
+            http_status=404,
+            detail="Repository not found"
+        )
+        
+        assert fr.owner == "osd"
+        assert fr.repo == "cofre"
+        assert fr.reason == "not_found"
+        assert fr.http_status == 404
+        
+        d = fr.to_dict()
+        assert d["owner"] == "osd"
+        assert d["reason"] == "not_found"
+    
+    def test_failure_reason_types(self):
+        """FailureReason 타입이 5종인지 확인."""
+        from backend.agents.supervisor.runners.base import FailureReason
+        from typing import get_args
+        
+        valid_reasons = get_args(FailureReason)
+        assert "not_found" in valid_reasons
+        assert "forbidden" in valid_reasons
+        assert "rate_limit" in valid_reasons
+        assert "timeout" in valid_reasons
+        assert "unknown" in valid_reasons
+        assert len(valid_reasons) == 5
+    
+    def test_normalize_error_reason_404(self):
+        """404 에러 정규화."""
+        from backend.agents.supervisor.runners.compare_runner import _normalize_error_reason
+        
+        class MockError(Exception):
+            pass
+        
+        reason, status, detail = _normalize_error_reason(MockError("Not found"), 404)
+        assert reason == "not_found"
+        assert status == 404
+    
+    def test_normalize_error_reason_403(self):
+        """403 에러 정규화."""
+        from backend.agents.supervisor.runners.compare_runner import _normalize_error_reason
+        
+        class MockError(Exception):
+            pass
+        
+        reason, status, detail = _normalize_error_reason(MockError("Forbidden"), 403)
+        assert reason == "forbidden"
+        assert status == 403
+    
+    def test_normalize_error_reason_rate_limit(self):
+        """429 에러 정규화."""
+        from backend.agents.supervisor.runners.compare_runner import _normalize_error_reason
+        
+        class MockError(Exception):
+            pass
+        
+        reason, status, detail = _normalize_error_reason(MockError("Rate limit exceeded"), 429)
+        assert reason == "rate_limit"
+        assert status == 429
+    
+    def test_runner_result_partial_ok(self):
+        """RunnerResult.partial_ok 메서드 검증."""
+        from backend.agents.supervisor.runners import RunnerResult, FailedRepo
+        from backend.agents.shared.contracts import AnswerContract
+        
+        fr = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        answer = AnswerContract(
+            text="test",
+            sources=["ARTIFACT:OVERVIEW:facebook/react"],
+            source_kinds=["overview"],
+        )
+        
+        result = RunnerResult.partial_ok(
+            answer=answer,
+            artifacts_out=["ARTIFACT:OVERVIEW:facebook/react"],
+            failed_repos=[fr],
+            reason="repo_b_failed",
+        )
+        
+        assert result.success is True
+        assert result.degraded is True
+        assert result.meta.get("status") == "partial"
+        assert result.meta.get("incomplete_compare") is True
+        assert len(result.meta.get("failed_repos", [])) == 1
+        assert result.meta["failed_repos"][0]["reason"] == "not_found"
+    
+    def test_incomplete_compare_warning_in_text(self):
+        """불완전 비교 시 경고 문구 포함 확인."""
+        from backend.agents.supervisor.runners import CompareRunner, FailedRepo
+        from unittest.mock import patch, MagicMock
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="osd/cofre",
+        )
+        
+        # Mock: A 성공, B 실패
+        runner._repo_a_error = None
+        runner._repo_b_error = "Not found"
+        runner._failed_repo_b = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        
+        mock_overview = {
+            "full_name": "facebook/react",
+            "stargazers_count": 200000,
+            "forks_count": 40000,
+            "description": "A declarative, efficient, and flexible JavaScript library",
+        }
+        runner.collector.add("repo_a_overview", mock_overview, "ARTIFACT:OVERVIEW:facebook/react")
+        
+        result = runner._fallback_execute()
+        
+        # 검증
+        assert result.success is True
+        assert result.meta.get("incomplete_compare") is True
+        assert "불완전 비교" in result.answer.text
+        assert "osd/cofre" in result.answer.text
+        assert "레포지토리가 존재하지 않습니다" in result.answer.text
+        assert "HTTP 404" in result.answer.text
+    
+    def test_incomplete_compare_sources_exclude_failed(self):
+        """불완전 비교 시 실패한 레포 아티팩트 미포함."""
+        from backend.agents.supervisor.runners import CompareRunner, FailedRepo
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="osd/cofre",
+        )
+        
+        runner._repo_a_error = None
+        runner._repo_b_error = "Not found"
+        runner._failed_repo_b = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        
+        mock_overview = {
+            "full_name": "facebook/react",
+            "stargazers_count": 200000,
+            "forks_count": 40000,
+            "description": "A declarative, efficient, and flexible JavaScript library",
+        }
+        runner.collector.add("repo_a_overview", mock_overview, "ARTIFACT:OVERVIEW:facebook/react")
+        
+        result = runner._fallback_execute()
+        
+        # sources에 실패한 osd/cofre 아티팩트 없음
+        for source in result.answer.sources:
+            assert "osd/cofre" not in source
+        
+        # 성공한 facebook/react 아티팩트만 포함
+        assert any("facebook/react" in s for s in result.answer.sources)
+    
+    def test_incomplete_compare_failure_messages(self):
+        """실패 사유별 메시지 매핑."""
+        from backend.agents.supervisor.runners.compare_runner import FAILURE_REASON_MESSAGES
+        
+        assert "not_found" in FAILURE_REASON_MESSAGES
+        assert "forbidden" in FAILURE_REASON_MESSAGES
+        assert "rate_limit" in FAILURE_REASON_MESSAGES
+        assert "timeout" in FAILURE_REASON_MESSAGES
+        assert "unknown" in FAILURE_REASON_MESSAGES
+        
+        # 한국어 메시지
+        assert "존재하지 않습니다" in FAILURE_REASON_MESSAGES["not_found"]
+        assert "권한" in FAILURE_REASON_MESSAGES["forbidden"]
+        assert "제한" in FAILURE_REASON_MESSAGES["rate_limit"]
+    
+    def test_incomplete_compare_next_actions_not_found(self):
+        """not_found 시 다음 행동 제안."""
+        from backend.agents.supervisor.runners import CompareRunner, FailedRepo
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="osd/cofre",
+        )
+        
+        failed_info = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        
+        actions = runner._build_next_actions("osd/cofre", "facebook/react", failed_info)
+        
+        assert "오타" in actions or "이름" in actions
+        assert "facebook/react" in actions
+    
+    def test_incomplete_compare_next_actions_forbidden(self):
+        """forbidden 시 권한 관련 제안."""
+        from backend.agents.supervisor.runners import CompareRunner, FailedRepo
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="private/repo",
+        )
+        
+        failed_info = FailedRepo(
+            owner="private", repo="repo", reason="forbidden",
+            http_status=403, detail="Forbidden"
+        )
+        
+        actions = runner._build_next_actions("private/repo", "facebook/react", failed_info)
+        
+        assert "권한" in actions or "토큰" in actions
+    
+    def test_runner_meta_passed_to_state(self):
+        """expert_node가 _runner_meta를 state에 전달."""
+        from backend.agents.supervisor.graph import expert_node
+        from unittest.mock import patch, MagicMock
+        from backend.agents.supervisor.runners import RunnerResult, FailedRepo
+        from backend.agents.shared.contracts import AnswerContract
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+            "compare_repo": {"owner": "osd", "name": "cofre", "url": ""},
+        }
+        
+        # Mock runner result
+        fr = FailedRepo(
+            owner="osd", repo="cofre", reason="not_found",
+            http_status=404, detail="Not found"
+        )
+        mock_answer = AnswerContract(
+            text="**※ 불완전 비교**: `osd/cofre` 처리 중 레포지토리가 존재하지 않습니다(HTTP 404).",
+            sources=["ARTIFACT:OVERVIEW:facebook/react"],
+            source_kinds=["overview"],
+        )
+        mock_result = RunnerResult.partial_ok(
+            answer=mock_answer,
+            artifacts_out=["ARTIFACT:OVERVIEW:facebook/react"],
+            failed_repos=[fr],
+            reason="repo_b_failed",
+        )
+        
+        with patch("backend.agents.supervisor.runners.CompareRunner") as MockRunner:
+            instance = MagicMock()
+            instance.run.return_value = mock_result
+            instance.runner_name = "compare"
+            MockRunner.return_value = instance
+            
+            result = expert_node(state)
+        
+        # _runner_meta 전달 확인
+        assert "_runner_meta" in result
+        assert result["_runner_meta"]["incomplete_compare"] is True
+        assert len(result["_runner_meta"]["failed_repos"]) == 1
+    
+    def test_summarize_validates_incomplete_compare(self):
+        """summarize_node가 incomplete_compare 시 경고 검증."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        # incomplete_compare + 경고 포함 상태
+        state = {
+            "user_query": "facebook/react랑 osd/cofre 비교해줘",
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "answer_contract": {
+                "text": "**※ 불완전 비교**: `osd/cofre` 처리 중 레포지토리가 존재하지 않습니다(HTTP 404).",
+                "sources": ["ARTIFACT:OVERVIEW:facebook/react"],
+                "source_kinds": ["overview"],
+            },
+            "answer_kind": "compare",
+            "_runner_meta": {
+                "incomplete_compare": True,
+                "failed_repos": [{"owner": "osd", "repo": "cofre", "reason": "not_found", "http_status": 404}],
+            },
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # 통과 (경고 포함됨)
+        assert result.get("answer_kind") == "compare"
+        assert "불완전 비교" in result.get("llm_summary", "")
+    
+    def test_summarize_removes_failed_repo_from_sources(self):
+        """summarize_node가 실패한 레포 아티팩트 제거."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        # 실패한 레포 아티팩트가 sources에 잘못 포함된 경우
+        state = {
+            "user_query": "facebook/react랑 osd/cofre 비교해줘",
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "answer_contract": {
+                "text": "**※ 불완전 비교**: `osd/cofre` 처리 중 레포지토리가 존재하지 않습니다(HTTP 404).",
+                "sources": ["ARTIFACT:OVERVIEW:facebook/react", "ARTIFACT:OVERVIEW:osd/cofre"],  # 잘못된 상태
+                "source_kinds": ["overview", "overview"],
+            },
+            "answer_kind": "compare",
+            "_runner_meta": {
+                "incomplete_compare": True,
+                "failed_repos": [{"owner": "osd", "repo": "cofre", "reason": "not_found", "http_status": 404}],
+            },
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # osd/cofre 아티팩트 제거됨
+        contract = result.get("answer_contract", {})
+        sources = contract.get("sources", [])
+        for source in sources:
+            assert "osd/cofre" not in source
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

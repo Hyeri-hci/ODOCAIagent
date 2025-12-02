@@ -8,9 +8,48 @@ from backend.agents.diagnosis.service import run_diagnosis
 from backend.common.github_client import fetch_repo_overview, GitHubClientError
 from backend.agents.shared.contracts import AnswerContract, safe_get
 
-from .base import ExpertRunner, RunnerResult
+from .base import ExpertRunner, RunnerResult, FailedRepo, FailureReason
 
 logger = logging.getLogger(__name__)
+
+
+# Standardized failure reason messages (Korean)
+FAILURE_REASON_MESSAGES: Dict[FailureReason, str] = {
+    "not_found": "레포지토리가 존재하지 않습니다",
+    "forbidden": "접근 권한이 없습니다",
+    "rate_limit": "API 제한에 도달했습니다",
+    "timeout": "응답 지연(타임아웃)입니다",
+    "unknown": "알 수 없는 오류입니다",
+}
+
+
+def _normalize_error_reason(error: Exception, http_status: Optional[int] = None) -> Tuple[FailureReason, int, str]:
+    """Normalizes exception to standard failure reason code."""
+    error_str = str(error).lower()
+    detail = str(error)
+    
+    # Extract HTTP status from GitHubClientError if available
+    status = http_status or 0
+    if hasattr(error, "status_code"):
+        status = error.status_code
+    elif "404" in error_str:
+        status = 404
+    elif "403" in error_str:
+        status = 403
+    elif "429" in error_str:
+        status = 429
+    
+    # Map to standard reason codes
+    if status == 404 or "not found" in error_str:
+        return "not_found", status or 404, detail
+    elif status == 403 or "forbidden" in error_str or "access" in error_str:
+        return "forbidden", status or 403, detail
+    elif status == 429 or "rate" in error_str or "limit" in error_str:
+        return "rate_limit", status or 429, detail
+    elif "timeout" in error_str or "timed out" in error_str:
+        return "timeout", status or 408, detail
+    else:
+        return "unknown", status or 500, detail
 
 
 class CompareRunner(ExpertRunner):
@@ -33,6 +72,9 @@ class CompareRunner(ExpertRunner):
         self.repo_b = repo_b
         self._diagnosis_a: Optional[Dict[str, Any]] = None
         self._diagnosis_b: Optional[Dict[str, Any]] = None
+        # Structured error info
+        self._failed_repo_a: Optional[FailedRepo] = None
+        self._failed_repo_b: Optional[FailedRepo] = None
     
     def _collect_artifacts(self) -> None:
         """Collects artifacts for both repositories."""
@@ -52,9 +94,19 @@ class CompareRunner(ExpertRunner):
                 )
             except GitHubClientError as e:
                 self._repo_a_error = str(e)
+                reason, status, detail = _normalize_error_reason(e)
+                self._failed_repo_a = FailedRepo(
+                    owner=owner_a, repo=repo_a, reason=reason,
+                    http_status=status, detail=detail
+                )
                 self.collector.add_error("repo_a_overview", str(e))
         else:
             self._repo_a_error = f"Invalid format: {self.repo_a}"
+            owner_a, repo_a = self.repo_a.split("/") if "/" in self.repo_a else (self.repo_a, "")
+            self._failed_repo_a = FailedRepo(
+                owner=owner_a, repo=repo_a, reason="unknown",
+                http_status=400, detail=self._repo_a_error
+            )
             self.collector.add_error("repo_a_overview", self._repo_a_error)
         
         # Repo B
@@ -70,9 +122,19 @@ class CompareRunner(ExpertRunner):
                 )
             except GitHubClientError as e:
                 self._repo_b_error = str(e)
+                reason, status, detail = _normalize_error_reason(e)
+                self._failed_repo_b = FailedRepo(
+                    owner=owner_b, repo=repo_b, reason=reason,
+                    http_status=status, detail=detail
+                )
                 self.collector.add_error("repo_b_overview", str(e))
         else:
             self._repo_b_error = f"Invalid format: {self.repo_b}"
+            owner_b, repo_b = self.repo_b.split("/") if "/" in self.repo_b else (self.repo_b, "")
+            self._failed_repo_b = FailedRepo(
+                owner=owner_b, repo=repo_b, reason="unknown",
+                http_status=400, detail=self._repo_b_error
+            )
             self.collector.add_error("repo_b_overview", self._repo_b_error)
     
     def _parse_repo(self, repo_id: str) -> Tuple[Optional[str], Optional[str]]:
@@ -153,6 +215,12 @@ class CompareRunner(ExpertRunner):
         
         # Both failed
         if not overview_a and not overview_b:
+            failed_repos = []
+            if self._failed_repo_a:
+                failed_repos.append(self._failed_repo_a)
+            if self._failed_repo_b:
+                failed_repos.append(self._failed_repo_b)
+            
             error_msg = "두 저장소 모두 접근할 수 없습니다."
             if self._repo_a_error:
                 error_msg += f"\n- {self.repo_a}: {self._repo_a_error}"
@@ -160,22 +228,23 @@ class CompareRunner(ExpertRunner):
                 error_msg += f"\n- {self.repo_b}: {self._repo_b_error}"
             return RunnerResult.fail(error_msg)
         
-        # One repo failed - return single repo info + warning
+        # One repo failed - return partial success with structured failure info
         if overview_a and not overview_b:
             text = self._build_partial_comparison(
                 success_repo=self.repo_a,
                 success_overview=overview_a,
                 failed_repo=self.repo_b,
-                failed_reason=self._repo_b_error or "접근 불가",
+                failed_info=self._failed_repo_b,
             )
             answer = AnswerContract(
                 text=text,
-                sources=self.collector.get_ids() or [f"PARTIAL:{self.repo_a}"],
+                sources=self.collector.get_ids() or [f"ARTIFACT:OVERVIEW:{self.repo_a}"],
                 source_kinds=["partial_compare"],
             )
-            return RunnerResult.degraded_ok(
+            return RunnerResult.partial_ok(
                 answer=answer,
                 artifacts_out=self.collector.get_ids(),
+                failed_repos=[self._failed_repo_b] if self._failed_repo_b else [],
                 reason=f"repo_b_failed:{self._repo_b_error}",
             )
         
@@ -184,16 +253,17 @@ class CompareRunner(ExpertRunner):
                 success_repo=self.repo_b,
                 success_overview=overview_b,
                 failed_repo=self.repo_a,
-                failed_reason=self._repo_a_error or "접근 불가",
+                failed_info=self._failed_repo_a,
             )
             answer = AnswerContract(
                 text=text,
-                sources=self.collector.get_ids() or [f"PARTIAL:{self.repo_b}"],
+                sources=self.collector.get_ids() or [f"ARTIFACT:OVERVIEW:{self.repo_b}"],
                 source_kinds=["partial_compare"],
             )
-            return RunnerResult.degraded_ok(
+            return RunnerResult.partial_ok(
                 answer=answer,
                 artifacts_out=self.collector.get_ids(),
+                failed_repos=[self._failed_repo_a] if self._failed_repo_a else [],
                 reason=f"repo_a_failed:{self._repo_a_error}",
             )
         
@@ -217,19 +287,29 @@ class CompareRunner(ExpertRunner):
         success_repo: str,
         success_overview: Dict,
         failed_repo: str,
-        failed_reason: str,
+        failed_info: Optional[FailedRepo],
     ) -> str:
-        """Builds text when one repo is not accessible."""
+        """Builds text when one repo is not accessible with structured warning."""
         stars = success_overview.get("stargazers_count", 0)
         forks = success_overview.get("forks_count", 0)
         desc = success_overview.get("description", "설명 없음")
         
-        text = f"""### 비교 불가 안내
+        # Build standardized failure reason message
+        if failed_info:
+            reason_msg = FAILURE_REASON_MESSAGES.get(failed_info.reason, "알 수 없는 오류입니다.")
+            http_code = failed_info.http_status
+            warning_block = f"**※ 불완전 비교**: `{failed_repo}` 처리 중 {reason_msg}(HTTP {http_code}). 성공한 `{success_repo}` 기준으로 요약을 제공합니다."
+        else:
+            warning_block = f"**※ 불완전 비교**: `{failed_repo}` 저장소에 접근할 수 없습니다. 성공한 `{success_repo}` 기준으로 요약을 제공합니다."
+        
+        # Build next actions based on failure reason
+        next_actions = self._build_next_actions(failed_repo, success_repo, failed_info)
+        
+        text = f"""{warning_block}
 
-**{failed_repo}** 저장소에 접근할 수 없습니다.
-- 원인: {failed_reason}
+### {success_repo} 단일 정보
 
-비교 대신 **{success_repo}**의 정보만 제공합니다:
+비교 대상인 **{failed_repo}**에 접근 불가하여 **{success_repo}**의 정보만 제공합니다.
 
 | 지표 | 값 |
 |------|-----|
@@ -238,11 +318,41 @@ class CompareRunner(ExpertRunner):
 | Forks | {forks:,} |
 
 **다음 행동**
-1. `{failed_repo}` 저장소 이름이 올바른지 확인해 주세요
-2. 비공개 저장소라면 접근 권한이 필요합니다
-3. `{success_repo} 분석해줘`로 단일 저장소 분석을 받아보세요"""
+{next_actions}"""
         
         return text
+    
+    def _build_next_actions(
+        self,
+        failed_repo: str,
+        success_repo: str,
+        failed_info: Optional[FailedRepo],
+    ) -> str:
+        """Builds context-aware next action suggestions."""
+        actions = []
+        
+        if failed_info:
+            if failed_info.reason == "not_found":
+                actions.append(f"1. `{failed_repo}` 저장소 이름/오타를 확인해 주세요")
+                actions.append(f"2. 올바른 저장소명으로 다시 비교해 보세요")
+            elif failed_info.reason == "forbidden":
+                actions.append("1. GitHub 토큰에 해당 저장소 접근 권한이 있는지 확인해 주세요")
+                actions.append("2. 비공개 저장소라면 Personal Access Token에 `repo` 스코프가 필요합니다")
+                actions.append(f"3. 공개 대체 저장소를 찾아 비교해 보세요")
+            elif failed_info.reason == "rate_limit":
+                actions.append("1. GitHub API 제한에 도달했습니다. 잠시 후 다시 시도해 주세요")
+                actions.append("2. 인증된 토큰을 사용하면 제한이 완화됩니다")
+            elif failed_info.reason == "timeout":
+                actions.append("1. 네트워크 상태를 확인해 주세요")
+                actions.append("2. 잠시 후 다시 시도해 주세요")
+            else:
+                actions.append(f"1. `{failed_repo}` 저장소 상태를 확인해 주세요")
+        else:
+            actions.append(f"1. `{failed_repo}` 저장소 이름이 올바른지 확인해 주세요")
+        
+        actions.append(f"- `{success_repo} 분석해줘`로 단일 저장소 분석을 받아보세요")
+        
+        return "\n".join(actions)
     
     def _build_comparison_text(self) -> str:
         """Builds full comparison text with diagnosis data."""

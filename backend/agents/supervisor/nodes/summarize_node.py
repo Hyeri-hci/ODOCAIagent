@@ -805,6 +805,33 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     # 0.3. Expert node already generated response (compare/onepager)
     existing_contract = safe_get(state, "answer_contract")
     if existing_contract and isinstance(existing_contract, dict) and existing_contract.get("text"):
+        # Check for incomplete_compare and validate warning presence
+        runner_meta = safe_get(state, "_runner_meta", {})
+        if runner_meta.get("incomplete_compare"):
+            existing_text = existing_contract.get("text", "")
+            # Validation: incomplete_compare must have warning block
+            if "불완전 비교" not in existing_text and "※" not in existing_text:
+                # Warning missing - this should not happen, log error
+                logger.warning(
+                    "[summarize] incomplete_compare but warning missing in text"
+                )
+            
+            # Ensure failed repo artifacts are NOT in sources
+            failed_repos = runner_meta.get("failed_repos", [])
+            failed_repo_ids = {f"{fr.get('owner')}/{fr.get('repo')}" for fr in failed_repos}
+            
+            sources = existing_contract.get("sources", [])
+            clean_sources = [
+                s for s in sources 
+                if not any(fid in s for fid in failed_repo_ids)
+            ]
+            if clean_sources != sources:
+                existing_contract["sources"] = clean_sources
+                logger.info(
+                    "[summarize] Removed failed repo artifacts from sources: %s",
+                    [s for s in sources if s not in clean_sources]
+                )
+        
         # Already have a valid answer from expert_node, pass through
         return {
             "llm_summary": existing_contract.get("text", ""),
