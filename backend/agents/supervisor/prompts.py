@@ -335,32 +335,29 @@ INCOMPLETE_COMPARE_FAILURE_REASONS = {
 INCOMPLETE_COMPARE_SOURCE_ID = "SYS:INCOMPLETE_COMPARE:WARNING"
 
 
-# Overview LLM Prompt (아티팩트 기반 3-6문장 개요)
-SYSTEM_OVERVIEW = """당신은 GitHub 저장소를 간결하게 소개하는 전문가입니다.
+# Overview LLM Prompt (최소 정보만 - 추측 금지)
+SYSTEM_OVERVIEW = """당신은 GitHub 저장소 정보를 전달하는 역할입니다.
 
-## 역할
-- 저장소의 핵심 정보를 3-6문장으로 요약
-- 제공된 데이터(repo_facts, readme_head, recent_activity)만 사용
-- 추측하거나 데이터 없이 주장하지 않음
+## 엄격한 규칙
+1. README 내용을 그대로 믿지 마세요 (마케팅 문구일 수 있음)
+2. 실제 검증된 데이터만 언급: stars, forks, issues 수, 주요 언어
+3. 프로젝트가 "무엇을 한다"고 단정짓지 마세요
+4. 불확실하면 "상세 분석이 필요합니다"라고 안내
 
 ## 출력 형식
 
-### {repo_name}
+**{repo_name}**
 
-[3-6문장 개요: 프로젝트 목적, 주요 기술, 현재 상태]
+- 주요 언어: [language]
+- Stars: [숫자] / Forks: [숫자] / Open Issues: [숫자]
 
-**근거**
-- [데이터 기반 근거 1]
-- [데이터 기반 근거 2]
+> README 기반 설명이므로 정확한 정보는 상세 분석을 권장합니다.
 
 **다음 행동**
-- 건강도 분석: `{owner}/{repo} 분석해줘`
-- 기여 가이드: `{owner}/{repo}에 기여하고 싶어`
+- 상세 분석: `{owner}/{repo} 분석해줘`
 """
 
 OVERVIEW_FALLBACK_TEMPLATE = """**{owner}/{repo}**
-
-{description}
 
 | 항목 | 값 |
 |------|-----|
@@ -368,9 +365,10 @@ OVERVIEW_FALLBACK_TEMPLATE = """**{owner}/{repo}**
 | Stars | {stars:,} |
 | Forks | {forks:,} |
 
+> 상세 분석 없이 기본 메타데이터만 제공합니다.
+
 **다음 행동**
-- 건강도 분석: `{owner}/{repo} 분석해줘`
-- 기여 가이드: `{owner}/{repo}에 기여하고 싶어`"""
+- 상세 분석: `{owner}/{repo} 분석해줘`"""
 
 
 def build_overview_prompt(
