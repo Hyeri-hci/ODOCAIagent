@@ -184,6 +184,10 @@ class EventStore:
     def add_listener(self, listener: Callable[[Event], None]) -> None:
         self._listeners.append(listener)
     
+    def remove_listener(self, listener: Callable[[Event], None]) -> None:
+        if listener in self._listeners:
+            self._listeners.remove(listener)
+    
     def clear(self) -> None:
         self._events.clear()
 

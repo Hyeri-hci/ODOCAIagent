@@ -175,6 +175,88 @@ with st.sidebar:
                 st.rerun()
         else:
             st.caption("이벤트 없음")
+    
+    # 빠른 문제 추적 체크리스트
+    st.divider()
+    st.markdown("**빠른 문제 추적**")
+    
+    last_result = st.session_state.get("last_result")
+    if last_result:
+        # 1. AnswerContract 검증
+        answer_contract = last_result.get("answer_contract", {})
+        has_answer_contract = bool(answer_contract and answer_contract.get("text"))
+        if has_answer_contract:
+            st.caption(":green[1. AnswerContract 정상]")
+        else:
+            st.caption(":red[1. AnswerContract 누락]")
+        
+        # 2. sources[] 검증
+        sources = answer_contract.get("sources", [])
+        has_valid_sources = bool(sources and len(sources) > 0)
+        if has_valid_sources:
+            st.caption(f":green[2. sources: {len(sources)}개]")
+        else:
+            st.caption(":red[2. sources 비어있음]")
+        
+        # 3. 이벤트 타임라인 검증 (5종)
+        debug_events = st.session_state.get("debug_events", [])
+        event_types = [e.get("type", "") for e in debug_events[-10:]]
+        required_events = ["init", "classify", "diagnosis", "summarize", "turn_complete"]
+        found_events = sum(1 for req in required_events if any(req in et for et in event_types))
+        if found_events >= 3:
+            st.caption(f":green[3. 이벤트 {found_events}/5종]")
+        else:
+            st.caption(f":orange[3. 이벤트 {found_events}/5종]")
+        
+        # 4. 라우팅 2단계 검증
+        classification_method = last_result.get("_classification_method", "unknown")
+        if classification_method in ("heuristic", "llm"):
+            st.caption(f":green[4. 라우팅: {classification_method}]")
+        else:
+            st.caption(f":orange[4. 라우팅: {classification_method}]")
+        
+        # 5. 러너 출력 계약 검증
+        expert_result = last_result.get("_expert_result")
+        diagnosis_result = last_result.get("diagnosis_result")
+        if expert_result or diagnosis_result:
+            has_status = bool(expert_result and hasattr(expert_result, "success"))
+            st.caption(f":green[5. 러너 출력 있음]")
+        else:
+            # smalltalk/help 등은 러너 없음
+            intent = last_result.get("intent", "")
+            if intent in ("smalltalk", "help", "overview"):
+                st.caption(f":gray[5. 러너 불필요 ({intent})]")
+            else:
+                st.caption(":orange[5. 러너 출력 없음]")
+        
+        # 6. 디그레이드/재계획 발동 여부
+        errors = last_result.get("_errors", [])
+        retries = last_result.get("_retries", [])
+        needs_disambiguation = last_result.get("_needs_disambiguation", False)
+        
+        if errors or retries:
+            st.caption(f":orange[6. 재계획: {len(retries)}회]")
+        elif needs_disambiguation:
+            st.caption(":orange[6. Disambiguation 발동]")
+        else:
+            st.caption(":green[6. 정상 경로 실행]")
+        
+        # 상세 보기 버튼
+        with st.expander("검증 상세"):
+            st.json({
+                "has_answer_contract": has_answer_contract,
+                "sources_count": len(sources),
+                "sources_sample": sources[:3] if sources else [],
+                "classification_method": classification_method,
+                "intent": last_result.get("intent"),
+                "sub_intent": last_result.get("sub_intent"),
+                "answer_kind": last_result.get("answer_kind"),
+                "needs_disambiguation": needs_disambiguation,
+                "error_count": len(errors),
+                "retry_count": len(retries),
+            })
+    else:
+        st.caption(":gray[결과 없음 - 먼저 질문하세요]")
 
 
 # ============================================================================
@@ -293,8 +375,23 @@ if prompt:
     
     # 에이전트 실행
     from backend.agents.supervisor.graph import build_supervisor_graph
+    from backend.common.events import get_event_store, EventType
     
     log_handler = capture_agent_logs()
+    
+    # 이벤트 캡처를 위한 리스너 설정
+    captured_events = []
+    def event_listener(event):
+        captured_events.append({
+            "type": event.type.value if hasattr(event.type, "value") else str(event.type),
+            "actor": event.actor,
+            "timestamp": event.timestamp,
+            "inputs": event.inputs,
+            "outputs": event.outputs,
+        })
+    
+    event_store = get_event_store()
+    event_store.add_listener(event_listener)
     
     with chat_container:
         with st.chat_message("assistant"):
@@ -527,13 +624,29 @@ if prompt:
                             st.caption(f"Sources: {len(sources)}개")
                         else:
                             st.caption(":red[Sources: 없음 (검증 실패)]")
-                    
-                    # 디버그 이벤트 저장
+                        
+                        # 캡처된 이벤트 타임라인
+                        if captured_events:
+                            st.markdown("**이벤트 타임라인**")
+                            for evt in captured_events:
+                                evt_type = evt.get("type", "unknown")
+                                evt_actor = evt.get("actor", "unknown")
+                                st.caption(f"- `{evt_type}` ({evt_actor})")
+                
+                # 캡처된 이벤트를 디버그 이벤트에 저장
+                for evt in captured_events:
                     st.session_state.debug_events.append({
-                        "type": f"turn_complete:{metadata['intent']}/{metadata['sub_intent']}",
-                        "timestamp": time.time(),
-                        "latency_ms": elapsed * 1000,
+                        "type": evt.get("type", "unknown"),
+                        "actor": evt.get("actor", "unknown"),
+                        "timestamp": evt.get("timestamp", time.time()),
                     })
+                
+                # 턴 완료 이벤트 추가
+                st.session_state.debug_events.append({
+                    "type": f"turn_complete:{metadata['intent']}/{metadata['sub_intent']}",
+                    "timestamp": time.time(),
+                    "latency_ms": elapsed * 1000,
+                })
                 
                 # 턴 메트릭 저장
                 st.session_state.turn_metrics.append({
@@ -610,5 +723,9 @@ if prompt:
                     "content": error_msg,
                     "metadata": {"error": error_type}
                 })
+            
+            finally:
+                # 이벤트 리스너 정리
+                event_store.remove_listener(event_listener)
     
     st.rerun()
