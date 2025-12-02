@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 
@@ -11,9 +12,16 @@ class DiagnosisLabels:
     onboarding_level: str  # easy | normal | hard
     docs_issues: List[str] = field(default_factory=list)
     activity_issues: List[str] = field(default_factory=list)
+    data_quality_issues: List[str] = field(default_factory=list)  # 데이터 부족 경고
+    insufficient_data: bool = False  # 점수표 숨김 플래그
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
+    
+    @property
+    def has_low_confidence(self) -> bool:
+        """점수 신뢰도가 낮은지 여부 (데이터 부족 시)."""
+        return len(self.data_quality_issues) > 0
 
 
 def compute_health_level(health_score: int) -> str:
@@ -87,6 +95,73 @@ def compute_activity_issues(
     return issues
 
 
+def compute_data_quality_issues(
+    repo_info: Optional[Dict[str, Any]] = None,
+    activity_data: Optional[Dict[str, Any]] = None,
+) -> tuple[List[str], bool]:
+    """데이터 품질/부족 이슈 감지 - 신뢰도 경고 및 점수표 숨김 여부 반환."""
+    issues: List[str] = []
+    insufficient_data = False
+    
+    stars = 0
+    forks = 0
+    created_at = None
+    
+    if repo_info:
+        stars = repo_info.get("stargazers_count") or 0
+        forks = repo_info.get("forks_count") or 0
+        created_at = repo_info.get("created_at")
+        
+        # Stars/Forks 0 → 신규 또는 테스트 프로젝트
+        if stars == 0 and forks == 0:
+            issues.append("no_community_engagement")
+    
+    total_commits = 0
+    if activity_data:
+        # activity_data 구조: {"commit": {...}, "issue": {...}, "pr": {...}}
+        commit_data = activity_data.get("commit", {})
+        total_commits = commit_data.get("total_commits") or 0
+        
+        # 최근 커밋 0 → 활동 없음
+        if total_commits == 0:
+            issues.append("no_recent_activity")
+        
+        # 이슈/PR 데이터 없음 (키는 "issue", "pr" - 단수형)
+        issues_data = activity_data.get("issue", {})
+        prs_data = activity_data.get("pr", {})
+        if not issues_data and not prs_data:
+            issues.append("insufficient_activity_data")
+    
+    # 신규 프로젝트 감지 (30일 미만)
+    is_new_project = False
+    if created_at:
+        try:
+            if isinstance(created_at, str):
+                created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            else:
+                created_dt = created_at
+            days_since_creation = (datetime.now(timezone.utc) - created_dt).days
+            if days_since_creation < 30:
+                issues.append("new_project")
+                is_new_project = True
+        except (ValueError, TypeError):
+            pass
+    
+    # 점수표 숨김 조건:
+    # 1. 활동 없음: Stars=0, Forks=0, 최근 커밋=0
+    # 2. 신규 프로젝트: 30일 미만
+    # 3. 활동 미미: 총 커밋 10개 미만
+    no_activity = (stars == 0 and forks == 0 and total_commits == 0)
+    minimal_activity = (total_commits > 0 and total_commits < 10)
+    
+    if no_activity or is_new_project or minimal_activity:
+        insufficient_data = True
+        if minimal_activity and "minimal_activity" not in issues:
+            issues.append("minimal_activity")
+    
+    return issues, insufficient_data
+
+
 def create_diagnosis_labels(
     health_score: int,
     onboarding_score: int,
@@ -94,11 +169,17 @@ def create_diagnosis_labels(
     activity_score: int,
     readme_categories: Optional[Dict[str, Any]] = None,
     activity_scores: Optional[Dict[str, float]] = None,
+    repo_info: Optional[Dict[str, Any]] = None,
+    activity_data: Optional[Dict[str, Any]] = None,
 ) -> DiagnosisLabels:
     """진단 점수들로부터 구조적 라벨 생성."""
+    data_quality_issues, insufficient_data = compute_data_quality_issues(repo_info, activity_data)
+    
     return DiagnosisLabels(
         health_level=compute_health_level(health_score),
         onboarding_level=compute_onboarding_level(onboarding_score),
         docs_issues=compute_docs_issues(doc_score, readme_categories),
         activity_issues=compute_activity_issues(activity_score, activity_scores),
+        data_quality_issues=data_quality_issues,
+        insufficient_data=insufficient_data,
     )

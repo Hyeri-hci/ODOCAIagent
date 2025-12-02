@@ -1045,6 +1045,29 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
                 degraded=True
             )
         
+        # insufficient_data 체크: 점수표 없이 기본 정보만 반환 (LLM 스킵)
+        labels = diagnosis_result.get("labels", {})
+        if labels.get("insufficient_data", False):
+            repo_info = diagnosis_result.get("details", {}).get("repo_info", {})
+            data_quality_issues = labels.get("data_quality_issues", [])
+            reason = ", ".join(data_quality_issues) if data_quality_issues else "활동 데이터 부족"
+            
+            insufficient_response = f"""**{repo_info.get('full_name', 'Unknown')}**
+
+| 항목 | 값 |
+|------|-----|
+| 언어 | {repo_info.get('primary_language', repo_info.get('language', 'N/A'))} |
+| Stars | {repo_info.get('stargazers_count', 0)} |
+| Forks | {repo_info.get('forks_count', 0)} |
+
+> **데이터 부족**: 이 저장소는 활동 데이터가 충분하지 않아 점수 산정이 어렵습니다.
+> (이유: {reason})
+
+**권장 행동**
+- 활성화된 프로젝트로 다시 시도해 보세요
+- 예: `facebook/react 분석해줘`"""
+            return _build_response(state, insufficient_response, "report", diagnosis_result)
+        
         system_prompt, user_prompt = build_health_report_prompt(diagnosis_result)
         llm_params = get_llm_params("health_report")
         

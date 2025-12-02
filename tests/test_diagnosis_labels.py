@@ -7,6 +7,7 @@ from backend.agents.diagnosis.tools.scoring.diagnosis_labels import (
     compute_onboarding_level,
     compute_docs_issues,
     compute_activity_issues,
+    compute_data_quality_issues,
     create_diagnosis_labels,
 )
 
@@ -156,4 +157,55 @@ class TestCreateDiagnosisLabels:
         assert isinstance(d["activity_issues"], list)
 
 
+class TestInsufficientData:
+    """insufficient_data 플래그 테스트: 점수표 숨김 여부 결정"""
+
+    def test_no_activity_insufficient(self):
+        """Stars=0, Forks=0, 커밋=0 -> insufficient_data=True"""
+        repo_info = {"stargazers_count": 0, "forks_count": 0}
+        activity_data = {"commit": {"total_commits": 0}}
+        issues, insufficient = compute_data_quality_issues(repo_info, activity_data)
+        assert insufficient is True
+        assert "no_community_engagement" in issues
+
+    def test_new_project_insufficient(self):
+        """30일 미만 신규 프로젝트 -> insufficient_data=True"""
+        from datetime import datetime, timezone, timedelta
+        recent_date = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+        repo_info = {"stargazers_count": 100, "forks_count": 10, "created_at": recent_date}
+        activity_data = {"commit": {"total_commits": 50}}
+        issues, insufficient = compute_data_quality_issues(repo_info, activity_data)
+        assert insufficient is True
+        assert "new_project" in issues
+
+    def test_minimal_activity_insufficient(self):
+        """커밋 10개 미만 -> insufficient_data=True"""
+        repo_info = {"stargazers_count": 5, "forks_count": 1, "created_at": "2020-01-01T00:00:00Z"}
+        activity_data = {"commit": {"total_commits": 5}}
+        issues, insufficient = compute_data_quality_issues(repo_info, activity_data)
+        assert insufficient is True
+        assert "minimal_activity" in issues
+
+    def test_active_project_sufficient(self):
+        """활성 프로젝트 -> insufficient_data=False"""
+        repo_info = {"stargazers_count": 1000, "forks_count": 100, "created_at": "2020-01-01T00:00:00Z"}
+        activity_data = {"commit": {"total_commits": 100}}
+        issues, insufficient = compute_data_quality_issues(repo_info, activity_data)
+        assert insufficient is False
+
+    def test_labels_include_insufficient_data(self):
+        """create_diagnosis_labels에서 insufficient_data 포함 확인"""
+        repo_info = {"stargazers_count": 0, "forks_count": 0}
+        activity_data = {"commit": {"total_commits": 0}}
+        labels = create_diagnosis_labels(
+            health_score=85,
+            onboarding_score=80,
+            doc_score=90,
+            activity_score=0,
+            repo_info=repo_info,
+            activity_data=activity_data,
+        )
+        assert labels.insufficient_data is True
+        d = labels.to_dict()
+        assert d["insufficient_data"] is True
 

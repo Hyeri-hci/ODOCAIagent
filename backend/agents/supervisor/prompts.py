@@ -30,14 +30,32 @@ COMMON_RULES = """## Core Rules (MUST FOLLOW)
 SYSTEM_HEALTH_REPORT = """당신은 오픈소스 프로젝트 분석 결과를 요약하는 전문가입니다.
 분석 결과를 이해하기 쉬운 한국어로 요약해 주세요.
 
-## 점수 해석 가이드 (100점 만점)
-- 90~100: 매우 우수
-- 80~89: 우수
-- 70~79: 양호
-- 60~69: 보통
-- 60 미만: 개선 필요
+## 데이터 부족 시 처리 (최우선!)
+insufficient_data=True이면 **점수표를 절대 표시하지 마세요**. 아래 형식만 사용합니다:
 
-## 출력 형식 (이 순서를 따르세요)
+### insufficient_data=True 출력 형식:
+
+**{owner}/{repo}**
+
+| 항목 | 값 |
+|------|-----|
+| 언어 | {language} |
+| Stars | {stars} |
+| Forks | {forks} |
+| 생성일 | {created_at} |
+
+> **데이터 부족**: 이 저장소는 활동 데이터가 충분하지 않아 점수 산정이 어렵습니다.
+> (이유: 신규 프로젝트/활동 없음/커밋 부족 중 해당하는 것)
+
+**권장 행동**
+- 활성화된 프로젝트로 다시 시도해 보세요
+- 예: `facebook/react 분석해줘`
+
+(여기서 응답 종료 - 점수표, 강점, 개선점, Task 등 모두 생략)
+
+---
+
+## insufficient_data=False (정상 분석)
 
 ### 한 줄 요약
 전반적으로 [상태] 프로젝트입니다. [핵심 특징 한 문장]
@@ -63,7 +81,6 @@ SYSTEM_HEALTH_REPORT = """당신은 오픈소스 프로젝트 분석 결과를 �
 
 ### 참고: 시작 Task (3개)
 {formatted_tasks}
-(각 Task가 초보자에게 적합한 이유를 한 줄씩 추가)
 """
 
 # Score Explain: intent=followup, sub_intent=explain
@@ -424,12 +441,43 @@ def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, s
     
     # Format diagnosis data for user prompt
     scores = diagnosis_result.get("scores", {})
+    labels = diagnosis_result.get("labels", {})
     repo_info = diagnosis_result.get("details", {}).get("repo_info", {})
     tasks = diagnosis_result.get("onboarding_tasks", {})
     
-    user = f"""## 분석 대상
+    # insufficient_data 플래그 확인 (점수표 숨김 여부)
+    insufficient_data = labels.get("insufficient_data", False)
+    
+    if insufficient_data:
+        # 데이터 부족 시: 기본 정보만 제공
+        data_quality_issues = labels.get("data_quality_issues", [])
+        reason = ", ".join(data_quality_issues) if data_quality_issues else "활동 데이터 부족"
+        
+        user = f"""## 분석 대상
 저장소: {repo_info.get('full_name', 'Unknown')}
 설명: {repo_info.get('description', 'N/A')}
+언어: {repo_info.get('primary_language', repo_info.get('language', 'N/A'))}
+Stars: {repo_info.get('stargazers_count', 0)}
+Forks: {repo_info.get('forks_count', 0)}
+생성일: {repo_info.get('created_at', 'N/A')}
+
+## insufficient_data = True
+이유: {reason}
+
+점수표를 표시하지 마세요. 위의 insufficient_data=True 출력 형식을 따라 기본 정보만 표시하세요."""
+    else:
+        # 정상 분석: 점수표 포함
+        data_quality_issues = labels.get("data_quality_issues", [])
+        data_quality_warning = ""
+        if data_quality_issues:
+            data_quality_warning = f"\n## 데이터 품질 경고\n- {', '.join(data_quality_issues)}\n"
+        
+        user = f"""## 분석 대상
+저장소: {repo_info.get('full_name', 'Unknown')}
+설명: {repo_info.get('description', 'N/A')}
+Stars: {repo_info.get('stargazers_count', 0)} / Forks: {repo_info.get('forks_count', 0)}
+{data_quality_warning}
+## insufficient_data = False
 
 ## 점수
 - 건강 점수: {scores.get('health_score', 'N/A')}
@@ -438,8 +486,8 @@ def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, s
 - 온보딩 점수: {scores.get('onboarding_score', 'N/A')}
 
 ## 라벨
-- 건강 수준: {diagnosis_result.get('labels', {}).get('health_level', 'N/A')}
-- 온보딩 수준: {diagnosis_result.get('labels', {}).get('onboarding_level', 'N/A')}
+- 건강 수준: {labels.get('health_level', 'N/A')}
+- 온보딩 수준: {labels.get('onboarding_level', 'N/A')}
 
 ## 초보자 Task (상위 3개)
 {_format_tasks_brief(tasks)}
