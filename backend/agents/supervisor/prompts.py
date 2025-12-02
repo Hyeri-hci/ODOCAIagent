@@ -90,6 +90,40 @@ SYSTEM_SCORE_EXPLAIN = """당신은 오픈소스 프로젝트 분석의 특정 �
 더 자세한 내용이 궁금하시면 "{metric_name} 더 설명해줘" 또는 "다른 지표는 뭐가 있어?"라고 물어보세요.
 """
 
+
+# Follow-up Evidence: 직전 턴 결과에 대한 근거 설명
+SYSTEM_FOLLOWUP_EVIDENCE = """당신은 직전 분석 결과의 근거를 설명하는 역할입니다.
+
+## 역할
+- 직전 턴에서 제공한 결과의 근거/출처를 설명
+- 제공된 아티팩트 데이터만 사용 (추측 금지)
+- 3-5문장으로 간결하게 설명
+
+## 출력 형식
+
+### 근거 설명
+
+[3-5문장: 직전 결과가 왜 그렇게 나왔는지 설명]
+
+**참조 데이터**
+- [아티팩트 출처 1]: [값/요약]
+- [아티팩트 출처 2]: [값/요약]
+- (필요시 추가)
+
+**다음 행동**
+- (관련 후속 질문 1-2개 제안)
+"""
+
+# Follow-up No Artifacts Template
+FOLLOWUP_NO_ARTIFACTS_TEMPLATE = """이전 분석 결과가 없어 근거를 설명하기 어렵습니다.
+
+**다음 행동**
+- 저장소 분석하기: `facebook/react 분석해줘`
+- 이전에 분석한 저장소가 있다면 다시 물어봐 주세요"""
+
+FOLLOWUP_SOURCE_ID = "SYS:TEMPLATES:FOLLOWUP"
+
+
 # General QA / Greeting: intent=general_qa or smalltalk
 SYSTEM_CHAT = """당신은 ODOC, 친절한 오픈소스 온보딩 도우미입니다.
 
@@ -134,6 +168,130 @@ NOT_READY_TEMPLATE = """죄송합니다. 해당 기능은 아직 개발 중입�
 - 일반 질문: "오픈소스 기여가 뭐야?"
 
 다른 것을 도와드릴까요?"""
+
+
+# Smalltalk/Help Templates (경량 경로: LLM 호출 없이 즉답)
+SMALLTALK_GREETING_TEMPLATE = """안녕하세요! ODOC입니다.
+
+오픈소스 프로젝트의 건강도를 진단하고, 기여에 적합한 Task를 추천해 드려요.
+
+**다음 행동**
+- 저장소 분석하기: `facebook/react 분석해줘`
+- 사용법 알아보기: `뭘 할 수 있어?`"""
+
+SMALLTALK_CHITCHAT_TEMPLATE = """네, 알겠습니다!
+
+**다음 행동**
+- 저장소 분석하기: `owner/repo 분석해줘`
+- 이전 분석 더 보기: `점수 자세히 설명해줘`"""
+
+HELP_GETTING_STARTED_TEMPLATE = """ODOC은 오픈소스 저장소 건강도 진단 도구입니다.
+
+**주요 기능**
+1. **건강 분석**: 저장소 활동성, 문서화, 커뮤니티를 진단합니다.
+2. **온보딩 추천**: 초보자에게 적합한 기여 Task를 찾아드립니다.
+3. **점수 설명**: 각 지표가 왜 그런 점수인지 설명합니다.
+
+**다음 행동**
+- 저장소 분석: `facebook/react 분석해줘`
+- 개념 질문: `Health Score가 뭐야?`"""
+
+OVERVIEW_REPO_TEMPLATE = """**{owner}/{repo}** 저장소입니다.
+
+상세한 건강도와 기여 가이드가 필요하시면 분석을 요청해 주세요.
+
+**다음 행동**
+- 건강도 분석: `{owner}/{repo} 분석해줘`
+- 온보딩 Task 추천: `{owner}/{repo} 기여하고 싶어`"""
+
+# Source constants for Smalltalk/Help
+SMALLTALK_SOURCE_ID = "SYS:TEMPLATES:SMALLTALK"
+HELP_SOURCE_ID = "SYS:TEMPLATES:HELP"
+OVERVIEW_SOURCE_ID = "SYS:TEMPLATES:OVERVIEW"
+
+
+# Overview LLM Prompt (아티팩트 기반 3-6문장 개요)
+SYSTEM_OVERVIEW = """당신은 GitHub 저장소를 간결하게 소개하는 전문가입니다.
+
+## 역할
+- 저장소의 핵심 정보를 3-6문장으로 요약
+- 제공된 데이터(repo_facts, readme_head, recent_activity)만 사용
+- 추측하거나 데이터 없이 주장하지 않음
+
+## 출력 형식
+
+### {repo_name}
+
+[3-6문장 개요: 프로젝트 목적, 주요 기술, 현재 상태]
+
+**근거**
+- [데이터 기반 근거 1]
+- [데이터 기반 근거 2]
+
+**다음 행동**
+- 건강도 분석: `{owner}/{repo} 분석해줘`
+- 기여 가이드: `{owner}/{repo}에 기여하고 싶어`
+"""
+
+OVERVIEW_FALLBACK_TEMPLATE = """**{owner}/{repo}**
+
+{description}
+
+| 항목 | 값 |
+|------|-----|
+| 언어 | {language} |
+| Stars | {stars:,} |
+| Forks | {forks:,} |
+
+**다음 행동**
+- 건강도 분석: `{owner}/{repo} 분석해줘`
+- 기여 가이드: `{owner}/{repo}에 기여하고 싶어`"""
+
+
+def build_overview_prompt(
+    owner: str,
+    repo: str,
+    repo_facts: Dict[str, Any],
+    readme_head: str,
+    recent_activity: Dict[str, Any],
+) -> tuple[str, str]:
+    """Builds prompt for Overview mode. Returns (system, user)."""
+    system = COMMON_RULES + "\n" + SYSTEM_OVERVIEW.format(
+        repo_name=f"{owner}/{repo}",
+        owner=owner,
+        repo=repo,
+    )
+    
+    user_parts = [f"## 저장소: {owner}/{repo}\n"]
+    
+    # repo_facts
+    user_parts.append("### repo_facts")
+    user_parts.append(f"- 설명: {repo_facts.get('description') or '(없음)'}")
+    user_parts.append(f"- 언어: {repo_facts.get('language') or '(없음)'}")
+    user_parts.append(f"- Stars: {repo_facts.get('stars', 0):,}")
+    user_parts.append(f"- Forks: {repo_facts.get('forks', 0):,}")
+    user_parts.append(f"- Open Issues: {repo_facts.get('open_issues', 0)}")
+    user_parts.append(f"- License: {repo_facts.get('license') or '(없음)'}")
+    user_parts.append(f"- Archived: {repo_facts.get('archived', False)}")
+    user_parts.append("")
+    
+    # readme_head
+    if readme_head:
+        user_parts.append("### readme_head (처음 ~2KB)")
+        user_parts.append("```")
+        user_parts.append(readme_head[:1500])  # 토큰 절약
+        user_parts.append("```")
+        user_parts.append("")
+    
+    # recent_activity
+    if recent_activity:
+        user_parts.append("### recent_activity (최근 30일)")
+        user_parts.append(f"- 커밋 수: {recent_activity.get('commit_count_30d', 0)}")
+        user_parts.append(f"- 기여자 수: {recent_activity.get('unique_authors_30d', 0)}")
+        user_parts.append(f"- Open PRs: {recent_activity.get('open_prs', 0)}")
+        user_parts.append(f"- 마지막 커밋: {recent_activity.get('last_commit_date') or '(없음)'}")
+    
+    return system, "\n".join(user_parts)
 
 
 # Helper Functions
@@ -206,6 +364,58 @@ def build_chat_prompt(user_query: str, repo_summary: str = "") -> tuple[str, str
     return system, user
 
 
+def build_followup_evidence_prompt(
+    user_query: str,
+    prev_intent: str,
+    prev_answer_kind: str,
+    repo_id: str,
+    artifacts: Dict[str, Any],
+) -> tuple[str, str]:
+    """Builds prompt for follow-up evidence explanation. Returns (system, user)."""
+    system = COMMON_RULES + "\n" + SYSTEM_FOLLOWUP_EVIDENCE
+    
+    user_parts = [f"## 사용자 질문\n{user_query}\n"]
+    
+    # 직전 턴 정보
+    user_parts.append(f"## 직전 턴 정보")
+    user_parts.append(f"- 저장소: {repo_id}")
+    user_parts.append(f"- 이전 intent: {prev_intent}")
+    user_parts.append(f"- 응답 유형: {prev_answer_kind}")
+    user_parts.append("")
+    
+    # 아티팩트 데이터
+    user_parts.append("## 참조 가능한 아티팩트")
+    
+    if "scores" in artifacts:
+        user_parts.append("### scores")
+        for k, v in artifacts["scores"].items():
+            user_parts.append(f"- {k}: {v}")
+        user_parts.append("")
+    
+    if "labels" in artifacts:
+        user_parts.append("### labels")
+        for k, v in artifacts["labels"].items():
+            if isinstance(v, list):
+                user_parts.append(f"- {k}: {', '.join(v) if v else '(없음)'}")
+            else:
+                user_parts.append(f"- {k}: {v}")
+        user_parts.append("")
+    
+    if "explain_context" in artifacts:
+        user_parts.append("### explain_context (주요 지표)")
+        ctx = artifacts["explain_context"]
+        for metric_key, metric_data in list(ctx.items())[:3]:
+            user_parts.append(f"- {metric_key}:")
+            if isinstance(metric_data, dict):
+                for k, v in list(metric_data.items())[:5]:
+                    user_parts.append(f"  - {k}: {v}")
+        user_parts.append("")
+    
+    user_parts.append("위 아티팩트를 기반으로 사용자의 질문에 답해 주세요.")
+    
+    return system, "\n".join(user_parts)
+
+
 def _format_tasks_brief(tasks: Dict[str, list]) -> str:
     """Formats top 3 beginner tasks for the prompt."""
     beginner_tasks = tasks.get("beginner", [])[:3]
@@ -240,7 +450,7 @@ def _format_explain_context(context: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-# LLM Parameters (kept for compatibility)
+# LLM Parameters
 LLM_PARAMS = {
     "health_report": {
         "temperature": 0.3,
@@ -250,6 +460,16 @@ LLM_PARAMS = {
     "score_explain": {
         "temperature": 0.25,
         "max_tokens": 512,
+        "top_p": 0.9,
+    },
+    "followup_evidence": {
+        "temperature": 0.2,
+        "max_tokens": 400,
+        "top_p": 0.9,
+    },
+    "overview": {
+        "temperature": 0.3,
+        "max_tokens": 400,
         "top_p": 0.9,
     },
     "chat": {

@@ -1,4 +1,4 @@
-"""Intent configuration for Supervisor V1."""
+"""Intent configuration for Supervisor V1 with hierarchical routing."""
 from __future__ import annotations
 
 from typing import Literal, TypedDict, Set, Tuple
@@ -13,7 +13,31 @@ from .models import (
 
 
 VALID_INTENTS: list[str] = ["analyze", "followup", "general_qa", "smalltalk", "help", "overview"]
-VALID_SUB_INTENTS: list[str] = ["health", "onboarding", "explain", "chat", "greeting", "chitchat", "getting_started", "concept", "repo"]
+VALID_SUB_INTENTS: list[str] = ["health", "onboarding", "explain", "evidence", "chat", "greeting", "chitchat", "getting_started", "concept", "repo"]
+
+
+# Confidence thresholds for hierarchical routing
+CONFIDENCE_THRESHOLDS: dict[str, float] = {
+    "smalltalk": 0.3,      # Low bar for greetings
+    "help": 0.4,           # Low bar for help requests
+    "overview": 0.4,       # Low bar for repo introductions
+    "general_qa": 0.5,     # Medium bar for general questions
+    "followup": 0.5,       # Medium bar for follow-ups
+    "analyze": 0.6,        # High bar for diagnosis (expensive operation)
+}
+
+DEFAULT_CONFIDENCE_THRESHOLD = 0.5
+
+
+def get_confidence_threshold(intent: str) -> float:
+    """Get required confidence threshold for an intent."""
+    return CONFIDENCE_THRESHOLDS.get(intent, DEFAULT_CONFIDENCE_THRESHOLD)
+
+
+def should_degrade_to_help(intent: str, confidence: float) -> bool:
+    """Check if low confidence should degrade to help.getting_started."""
+    threshold = get_confidence_threshold(intent)
+    return confidence < threshold
 
 
 # V1 Supported Intent combinations
@@ -21,11 +45,13 @@ V1_SUPPORTED_INTENTS: Set[Tuple[str, str]] = {
     ("analyze", "health"),
     ("analyze", "onboarding"),
     ("followup", "explain"),
+    ("followup", "evidence"),
     ("general_qa", "chat"),
     ("general_qa", "concept"),
     ("smalltalk", "greeting"),
     ("smalltalk", "chitchat"),
     ("help", "getting_started"),
+    ("overview", "repo"),
 }
 
 
@@ -44,6 +70,7 @@ INTENT_META: dict[Tuple[str, str], IntentMeta] = {
     ("analyze", "health"): {"requires_repo": True, "runs_diagnosis": True},
     ("analyze", "onboarding"): {"requires_repo": True, "runs_diagnosis": True},
     ("followup", "explain"): {"requires_repo": True, "runs_diagnosis": True},
+    ("followup", "evidence"): {"requires_repo": False, "runs_diagnosis": False},
     ("general_qa", "concept"): {"requires_repo": False, "runs_diagnosis": False},
     ("general_qa", "chat"): {"requires_repo": False, "runs_diagnosis": False},
     ("smalltalk", "greeting"): {"requires_repo": False, "runs_diagnosis": False},
@@ -59,6 +86,7 @@ ANSWER_KIND_MAP: dict[tuple[str, str], AnswerKind] = {
     ("analyze", "health"): "report",
     ("analyze", "onboarding"): "report",
     ("followup", "explain"): "explain",
+    ("followup", "evidence"): "explain",
     ("general_qa", "concept"): "chat",
     ("general_qa", "chat"): "chat",
     ("smalltalk", "greeting"): "greeting",

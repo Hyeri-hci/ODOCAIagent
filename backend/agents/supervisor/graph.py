@@ -249,14 +249,19 @@ def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
     return result
 
 
-# Routing: should_run_diagnosis
+# Routing: should_run_diagnosis (hierarchical routing)
 def should_run_diagnosis(state: SupervisorState) -> str:
-    """Determines whether to run diagnosis or skip to summarize."""
+    """Hierarchical routing: only run diagnosis for analyze intent with high confidence."""
     intent = state.get("intent", DEFAULT_INTENT)
     sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
     
     # Check for errors first
     if state.get("error_message"):
+        return "summarize"
+    
+    # Fast path: smalltalk/help/overview → never diagnosis
+    if intent in ("smalltalk", "help", "overview", "general_qa"):
+        logger.debug(f"[route] Fast path: {intent}.{sub_intent} → summarize")
         return "summarize"
     
     # Check V1 support
@@ -276,7 +281,6 @@ def should_run_diagnosis(state: SupervisorState) -> str:
     # followup/explain needs diagnosis_result but should NOT re-run diagnosis
     if intent == "followup" and sub_intent == "explain":
         if not state.get("diagnosis_result"):
-            # No previous diagnosis - need to inform user
             return "summarize"
     
     return "summarize"

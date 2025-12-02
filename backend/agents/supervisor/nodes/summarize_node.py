@@ -29,10 +29,7 @@ from ..models import (
 logger = logging.getLogger(__name__)
 
 
-# =============================================================================
 # Degrade Templates (아티팩트 부족/스키마 실패 시 응답)
-# =============================================================================
-
 DEGRADE_NO_ARTIFACT = """죄송합니다, 분석에 필요한 데이터를 가져오지 못했습니다.
 
 **다음 행동을 시도해 보세요:**
@@ -60,10 +57,7 @@ DEGRADE_SOURCE_ID = "system_degrade_template"
 DEGRADE_SOURCE_KIND = "system_template"
 
 
-# =============================================================================
 # Metric Constants
-# =============================================================================
-
 METRIC_ALIAS_MAP = get_all_aliases()
 SORTED_ALIASES = sorted(METRIC_ALIAS_MAP.keys(), key=len, reverse=True)
 METRIC_NAME_KR = {key: metric.name_ko for key, metric in METRIC_DEFINITIONS.items()}
@@ -76,10 +70,7 @@ METRIC_NOT_FOUND_MESSAGE = (
 )
 
 
-# =============================================================================
 # Helper Functions
-# =============================================================================
-
 def _extract_target_metrics(user_query: str) -> List[str]:
     """Extracts metric keywords from user query using alias mapping."""
     query_lower = user_query.lower()
@@ -159,10 +150,7 @@ def _generate_last_brief(summary: str, repo_id: str = "") -> str:
     return result
 
 
-# =============================================================================
 # LLM Call with Retry and Degrade
-# =============================================================================
-
 class LLMCallResult:
     """Result of LLM call with metadata."""
     def __init__(self, content: str, success: bool, retried: bool = False, degraded: bool = False):
@@ -226,10 +214,7 @@ def _call_llm(system_prompt: str, user_prompt: str, params: dict) -> str:
     return result.content
 
 
-# =============================================================================
 # Response Builder (with AnswerContract enforcement + Degrade support)
-# =============================================================================
-
 # Source kinds by answer_kind
 SOURCE_KIND_MAP = {
     "report": ["diagnosis_result"],
@@ -307,21 +292,301 @@ def _build_response(
     return result
 
 
-# =============================================================================
+# Lightweight response builder (no LLM, instant response)
+def _build_lightweight_response(
+    state: SupervisorState,
+    template: str,
+    answer_kind: str,
+    source_id: str,
+) -> Dict[str, Any]:
+    """Builds lightweight response without LLM call. For smalltalk/help/overview."""
+    repo = safe_get(state, "repo")
+    owner = safe_get(repo, "owner", "") if repo else ""
+    name = safe_get(repo, "name", "") if repo else ""
+    repo_id = f"{owner}/{name}" if owner or name else ""
+    
+    answer_contract = AnswerContract(
+        text=template,
+        sources=[source_id],
+        source_kinds=["system_template"],
+    )
+    
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": answer_kind, "lightweight": True},
+        outputs={
+            "text_length": len(template),
+            "source_id": source_id,
+            "latency_category": "instant",
+        },
+    )
+    
+    return {
+        "llm_summary": answer_contract.text,
+        "answer_kind": answer_kind,
+        "answer_contract": answer_contract.model_dump(),
+        "last_brief": f"{answer_kind} 응답 완료",
+        "last_answer_kind": answer_kind,
+    }
+
+
+# Overview handler (아티팩트 수집 + LLM 요약)
+def _handle_overview_mode(state: SupervisorState, repo: Optional[Dict]) -> Dict[str, Any]:
+    """Handles overview.repo mode with artifact collection and LLM summary."""
+    from ..prompts import (
+        build_overview_prompt,
+        OVERVIEW_FALLBACK_TEMPLATE,
+        get_llm_params,
+    )
+    from ..service import fetch_overview_artifacts
+    
+    owner = safe_get(repo, "owner", "") if repo else ""
+    name = safe_get(repo, "name", "") if repo else ""
+    repo_id = f"{owner}/{name}"
+    
+    if not owner or not name:
+        return _build_response(
+            state,
+            "저장소 정보가 없습니다. `owner/repo` 형식으로 알려주세요.",
+            "chat",
+            degraded=True
+        )
+    
+    # Fetch artifacts
+    artifacts = fetch_overview_artifacts(owner, name)
+    
+    # API 제한 시 fallback (repo_facts만으로 개요)
+    if artifacts.error or not artifacts.repo_facts:
+        logger.warning(f"Overview fallback for {repo_id}: {artifacts.error}")
+        return _build_response(
+            state,
+            f"저장소 정보를 가져오지 못했습니다: {artifacts.error or '알 수 없는 오류'}",
+            "chat",
+            degraded=True
+        )
+    
+    # sources >= 2 보장 (repo_facts + readme_head 또는 recent_activity)
+    if len(artifacts.sources) < 2:
+        # Fallback to template-based response
+        fallback = OVERVIEW_FALLBACK_TEMPLATE.format(
+            owner=owner,
+            repo=name,
+            description=artifacts.repo_facts.get("description") or "(설명 없음)",
+            language=artifacts.repo_facts.get("language") or "(없음)",
+            stars=artifacts.repo_facts.get("stars", 0),
+            forks=artifacts.repo_facts.get("forks", 0),
+        )
+        return _build_overview_response(state, fallback, artifacts.sources, repo_id)
+    
+    # Build prompt and call LLM
+    system_prompt, user_prompt = build_overview_prompt(
+        owner=owner,
+        repo=name,
+        repo_facts=artifacts.repo_facts,
+        readme_head=artifacts.readme_head,
+        recent_activity=artifacts.recent_activity,
+    )
+    
+    llm_params = get_llm_params("overview")
+    llm_result = _call_llm_with_retry(system_prompt, user_prompt, llm_params, max_retries=1)
+    
+    if llm_result.degraded:
+        # LLM 실패 시 fallback
+        fallback = OVERVIEW_FALLBACK_TEMPLATE.format(
+            owner=owner,
+            repo=name,
+            description=artifacts.repo_facts.get("description") or "(설명 없음)",
+            language=artifacts.repo_facts.get("language") or "(없음)",
+            stars=artifacts.repo_facts.get("stars", 0),
+            forks=artifacts.repo_facts.get("forks", 0),
+        )
+        return _build_overview_response(state, fallback, artifacts.sources, repo_id)
+    
+    return _build_overview_response(state, llm_result.content, artifacts.sources, repo_id)
+
+
+def _build_overview_response(
+    state: SupervisorState,
+    summary: str,
+    sources: List[str],
+    repo_id: str,
+) -> Dict[str, Any]:
+    """Builds response for overview mode with artifact sources."""
+    answer_contract = AnswerContract(
+        text=summary,
+        sources=sources if sources else ["ARTIFACT:REPO_FACTS:" + repo_id],
+        source_kinds=["github_artifact"] * len(sources) if sources else ["github_artifact"],
+    )
+    
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": "chat", "mode": "overview"},
+        outputs={
+            "text_length": len(summary),
+            "source_count": len(sources),
+            "sources": sources[:3],
+        },
+    )
+    
+    return {
+        "llm_summary": answer_contract.text,
+        "answer_kind": "chat",
+        "answer_contract": answer_contract.model_dump(),
+        "last_brief": f"{repo_id} 개요 완료",
+        "last_answer_kind": "chat",
+    }
+
+
+# Follow-up handler (직전 턴 아티팩트 기반 근거 설명)
+def _handle_followup_evidence_mode(
+    state: SupervisorState,
+    user_query: str,
+    diagnosis_result: Optional[Dict],
+) -> Dict[str, Any]:
+    """Handles follow-up evidence requests using previous turn artifacts."""
+    from ..prompts import (
+        build_followup_evidence_prompt,
+        FOLLOWUP_NO_ARTIFACTS_TEMPLATE,
+        FOLLOWUP_SOURCE_ID,
+        get_llm_params,
+    )
+    
+    # 직전 턴 정보 추출
+    repo = safe_get(state, "repo")
+    owner = safe_get(repo, "owner", "") if repo else ""
+    name = safe_get(repo, "name", "") if repo else ""
+    repo_id = f"{owner}/{name}" if owner or name else ""
+    
+    last_answer_kind = safe_get(state, "last_answer_kind", "")
+    last_intent = safe_get(state, "intent", "analyze")
+    
+    # 직전 아티팩트 없음 → 안내 + 선택지
+    if not diagnosis_result:
+        return _build_lightweight_response(
+            state,
+            FOLLOWUP_NO_ARTIFACTS_TEMPLATE,
+            "chat",
+            FOLLOWUP_SOURCE_ID,
+        )
+    
+    # 아티팩트 추출 (scores, labels, explain_context)
+    artifacts: Dict[str, Any] = {}
+    if "scores" in diagnosis_result:
+        artifacts["scores"] = diagnosis_result["scores"]
+    if "labels" in diagnosis_result:
+        artifacts["labels"] = diagnosis_result["labels"]
+    if "explain_context" in diagnosis_result:
+        artifacts["explain_context"] = diagnosis_result["explain_context"]
+    
+    # 아티팩트가 비어있으면 안내
+    if not artifacts:
+        return _build_lightweight_response(
+            state,
+            FOLLOWUP_NO_ARTIFACTS_TEMPLATE,
+            "chat",
+            FOLLOWUP_SOURCE_ID,
+        )
+    
+    # LLM 호출로 근거 설명 생성
+    system_prompt, user_prompt = build_followup_evidence_prompt(
+        user_query=user_query,
+        prev_intent=last_intent,
+        prev_answer_kind=last_answer_kind or "report",
+        repo_id=repo_id,
+        artifacts=artifacts,
+    )
+    
+    llm_params = get_llm_params("followup_evidence")
+    llm_result = _call_llm_with_retry(system_prompt, user_prompt, llm_params, max_retries=1)
+    
+    # 응답 빌드 (sources에 직전 아티팩트 참조)
+    artifact_sources = [
+        f"PREV:{repo_id}:{key}" for key in artifacts.keys()
+    ]
+    
+    return _build_followup_response(
+        state,
+        llm_result.content,
+        artifact_sources,
+        repo_id,
+        diagnosis_result,
+    )
+
+
+def _build_followup_response(
+    state: SupervisorState,
+    summary: str,
+    sources: List[str],
+    repo_id: str,
+    diagnosis_result: Optional[Dict],
+) -> Dict[str, Any]:
+    """Builds response for follow-up mode with artifact sources."""
+    answer_contract = AnswerContract(
+        text=summary,
+        sources=sources if sources else [f"PREV:{repo_id}"],
+        source_kinds=["prev_turn_artifact"] * len(sources) if sources else ["prev_turn_artifact"],
+    )
+    
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": "explain", "mode": "followup_evidence"},
+        outputs={
+            "text_length": len(summary),
+            "source_count": len(sources),
+            "sources": sources[:3],
+        },
+    )
+    
+    result: Dict[str, Any] = {
+        "llm_summary": answer_contract.text,
+        "answer_kind": "explain",
+        "answer_contract": answer_contract.model_dump(),
+        "last_brief": f"{repo_id} 근거 설명 완료",
+        "last_answer_kind": "explain",
+    }
+    
+    # 후속 질문용 Task 리스트 유지
+    if diagnosis_result:
+        onboarding_tasks = diagnosis_result.get("onboarding_tasks", {})
+        if onboarding_tasks:
+            task_list = []
+            for difficulty in ["beginner", "intermediate", "advanced"]:
+                for task in onboarding_tasks.get(difficulty, []):
+                    task_copy = dict(task)
+                    if "difficulty" not in task_copy:
+                        task_copy["difficulty"] = difficulty
+                    task_list.append(task_copy)
+            result["last_task_list"] = task_list
+    
+    return result
+
+
 # V1 Summarize Node (Main Entry Point)
-# =============================================================================
 
 def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     """V1 summarize node: routes to appropriate prompt based on (intent, sub_intent)."""
     from ..prompts import (
         GREETING_TEMPLATE,
         NOT_READY_TEMPLATE,
+        SMALLTALK_GREETING_TEMPLATE,
+        SMALLTALK_CHITCHAT_TEMPLATE,
+        HELP_GETTING_STARTED_TEMPLATE,
+        OVERVIEW_REPO_TEMPLATE,
+        SMALLTALK_SOURCE_ID,
+        HELP_SOURCE_ID,
+        OVERVIEW_SOURCE_ID,
+        OVERVIEW_FALLBACK_TEMPLATE,
         build_health_report_prompt,
         build_score_explain_prompt,
+        build_overview_prompt,
         build_chat_prompt,
         get_llm_params,
     )
     from ..intent_config import is_v1_supported
+    from ..service import fetch_overview_artifacts
     
     # Null-safe state access
     intent = safe_get(state, "intent", DEFAULT_INTENT)
@@ -329,6 +594,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     user_query = safe_get(state, "user_query", "")
     diagnosis_result = safe_get(state, "diagnosis_result")
     error_message = safe_get(state, "error_message")
+    repo = safe_get(state, "repo")
     
     # 0. Error message takes priority
     if error_message:
@@ -340,7 +606,31 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     
     mode = (intent, sub_intent)
     
-    # 2. Route by mode
+    # 2. Fast path: Smalltalk/Help (LLM 호출 없이 즉답)
+    if intent == "smalltalk":
+        if sub_intent == "greeting":
+            return _build_lightweight_response(
+                state, SMALLTALK_GREETING_TEMPLATE, "greeting", SMALLTALK_SOURCE_ID
+            )
+        else:  # chitchat
+            return _build_lightweight_response(
+                state, SMALLTALK_CHITCHAT_TEMPLATE, "greeting", SMALLTALK_SOURCE_ID
+            )
+    
+    if intent == "help":
+        return _build_lightweight_response(
+            state, HELP_GETTING_STARTED_TEMPLATE, "chat", HELP_SOURCE_ID
+        )
+    
+    # 3. Overview path (아티팩트 수집 + LLM 요약)
+    if intent == "overview" and sub_intent == "repo":
+        return _handle_overview_mode(state, repo)
+    
+    # 3.5. Follow-up Evidence path (직전 턴 아티팩트 기반 근거 설명)
+    if mode == ("followup", "evidence"):
+        return _handle_followup_evidence_mode(state, user_query, diagnosis_result)
+    
+    # 4. Route by mode (LLM required)
     
     # --- Health Report Mode ---
     if mode in [("analyze", "health"), ("analyze", "onboarding")]:
@@ -415,13 +705,8 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         
         return _build_response(state, llm_result.content, "explain", diagnosis_result)
     
-    # --- Greeting Mode ---
-    elif intent == "smalltalk":
-        return _build_response(state, GREETING_TEMPLATE, "greeting")
-    
     # --- Chat Mode ---
     elif intent == "general_qa":
-        repo = safe_get(state, "repo")
         repo_summary = ""
         if repo and diagnosis_result:
             scores = safe_get(diagnosis_result, "scores", {})
@@ -446,10 +731,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         return _build_response(state, NOT_READY_TEMPLATE, "chat")
 
 
-# =============================================================================
-# Legacy Alias (for backward compatibility)
-# =============================================================================
-
+# Legacy Alias
 def summarize_node(state: SupervisorState) -> Dict[str, Any]:
     """Legacy alias for summarize_node_v1."""
     return summarize_node_v1(state)
