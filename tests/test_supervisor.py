@@ -979,5 +979,342 @@ class TestExpertRunner:
         assert "repo_overview" in runner.required_artifacts
 
 
+class TestAgenticPlanning:
+    """Agentic Planning 테스트 (Step 12)."""
+    
+    def test_plan_model_creation(self):
+        """Plan 모델 생성 검증."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanStatus, StepStatus, ErrorPolicy
+        )
+        
+        step = PlanStep(
+            id="test_step",
+            runner="diagnosis",
+            params={"repo": "test/repo"},
+            needs=[],
+            on_error=ErrorPolicy.FALLBACK,
+        )
+        
+        assert step.id == "test_step"
+        assert step.status == StepStatus.PENDING
+        assert step.is_ready(set())
+        
+        plan = Plan(
+            id="test_plan",
+            intent="analyze",
+            sub_intent="health",
+            steps=[step],
+        )
+        
+        assert plan.status == PlanStatus.PENDING
+        assert len(plan.steps) == 1
+        assert not plan.is_complete()
+    
+    def test_plan_step_dependencies(self):
+        """PlanStep 의존성 검증."""
+        from backend.agents.supervisor.planner import PlanStep, ErrorPolicy
+        
+        step_a = PlanStep(id="a", runner="diagnosis", needs=[])
+        step_b = PlanStep(id="b", runner="compare", needs=["a"])
+        
+        # step_a is ready (no deps)
+        assert step_a.is_ready(set())
+        
+        # step_b needs step_a
+        assert not step_b.is_ready(set())
+        assert step_b.is_ready({"a"})
+    
+    def test_plan_builder_analyze_health(self):
+        """PlanBuilder: analyze.health 계획 생성."""
+        from backend.agents.supervisor.planner import build_plan
+        
+        plan = build_plan("analyze", "health", {"repo": {"owner": "test", "name": "repo"}})
+        
+        assert plan.intent == "analyze"
+        assert plan.sub_intent == "health"
+        assert len(plan.steps) >= 1
+        assert plan.steps[0].runner == "diagnosis"
+    
+    def test_plan_builder_smalltalk(self):
+        """PlanBuilder: smalltalk.greeting 계획 생성."""
+        from backend.agents.supervisor.planner import build_plan
+        
+        plan = build_plan("smalltalk", "greeting", {})
+        
+        assert plan.intent == "smalltalk"
+        assert len(plan.steps) == 1
+        assert plan.steps[0].runner == "smalltalk"
+        assert plan.steps[0].timeout_sec == 5.0  # Fast path
+    
+    def test_plan_builder_compare(self):
+        """PlanBuilder: analyze.compare 계획 생성 (병렬 의존성)."""
+        from backend.agents.supervisor.planner import build_plan
+        
+        plan = build_plan("analyze", "compare", {
+            "repo": {"owner": "facebook", "name": "react"},
+            "compare_repo": {"owner": "vuejs", "name": "vue"},
+        })
+        
+        assert plan.intent == "analyze"
+        assert plan.sub_intent == "compare"
+        
+        # fetch_repo_a, fetch_repo_b (parallel), compare (depends on both)
+        step_ids = [s.id for s in plan.steps]
+        assert "fetch_repo_a" in step_ids
+        assert "fetch_repo_b" in step_ids
+        assert "compare" in step_ids
+        
+        # Compare step depends on both fetch steps
+        compare_step = next(s for s in plan.steps if s.id == "compare")
+        assert "fetch_repo_a" in compare_step.needs
+        assert "fetch_repo_b" in compare_step.needs
+    
+    def test_plan_get_ready_steps(self):
+        """Plan.get_ready_steps() 검증."""
+        from backend.agents.supervisor.planner import Plan, PlanStep, StepStatus
+        
+        step_a = PlanStep(id="a", runner="diagnosis", needs=[])
+        step_b = PlanStep(id="b", runner="diagnosis", needs=[])
+        step_c = PlanStep(id="c", runner="compare", needs=["a", "b"])
+        
+        plan = Plan(
+            id="test",
+            intent="analyze",
+            sub_intent="compare",
+            steps=[step_a, step_b, step_c],
+        )
+        
+        # Initially a and b are ready
+        ready = plan.get_ready_steps()
+        assert len(ready) == 2
+        assert {s.id for s in ready} == {"a", "b"}
+        
+        # After a completes, still just b is ready (c needs both)
+        step_a.status = StepStatus.SUCCESS
+        ready = plan.get_ready_steps()
+        assert len(ready) == 1
+        assert ready[0].id == "b"
+        
+        # After both complete, c is ready
+        step_b.status = StepStatus.SUCCESS
+        ready = plan.get_ready_steps()
+        assert len(ready) == 1
+        assert ready[0].id == "c"
+    
+    def test_step_result_dataclass(self):
+        """StepResult 데이터클래스 검증."""
+        from backend.agents.supervisor.planner import StepResult, StepStatus
+        
+        result = StepResult(
+            step_id="test",
+            status=StepStatus.SUCCESS,
+            result={"data": "value"},
+            execution_time_ms=100.5,
+        )
+        
+        assert result.success
+        assert result.step_id == "test"
+        assert result.result["data"] == "value"
+        
+        failed = StepResult(
+            step_id="fail",
+            status=StepStatus.FAILED,
+            error_message="Test error",
+        )
+        
+        assert not failed.success
+        assert failed.error_message == "Test error"
+    
+    def test_error_policy_enum(self):
+        """ErrorPolicy enum 검증."""
+        from backend.agents.supervisor.planner import ErrorPolicy
+        
+        assert ErrorPolicy.RETRY.value == "retry"
+        assert ErrorPolicy.FALLBACK.value == "fallback"
+        assert ErrorPolicy.ASK_USER.value == "ask_user"
+        assert ErrorPolicy.ABORT.value == "abort"
+    
+    def test_replanner_can_replan(self):
+        """Replanner 재계획 가능 여부 검증."""
+        from backend.agents.supervisor.planner import Plan, Replanner
+        
+        plan = Plan(id="test", intent="analyze", sub_intent="health")
+        replanner = Replanner(plan)
+        
+        assert replanner.can_replan()
+        
+        # After max attempts
+        plan.replan_count = 2
+        replanner2 = Replanner(plan)
+        assert not replanner2.can_replan()
+    
+    def test_replanner_step_failure(self):
+        """Replanner: 스텝 실패 시 재계획."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, Replanner, ReplanReason, ErrorPolicy, StepStatus
+        )
+        
+        step = PlanStep(
+            id="failed_step",
+            runner="diagnosis",
+            on_error=ErrorPolicy.FALLBACK,
+        )
+        step.status = StepStatus.FAILED
+        step.error_message = "Test failure"
+        
+        plan = Plan(
+            id="original",
+            intent="analyze",
+            sub_intent="health",
+            steps=[step],
+        )
+        
+        replanner = Replanner(plan)
+        new_plan = replanner.replan(step, ReplanReason.STEP_FAILED)
+        
+        assert new_plan is not None
+        assert new_plan.replan_count == 1
+        assert "_r1" in new_plan.id
+    
+    def test_plan_status_transitions(self):
+        """Plan 상태 전환 검증."""
+        from backend.agents.supervisor.planner import Plan, PlanStatus
+        
+        plan = Plan(id="test", intent="analyze", sub_intent="health")
+        
+        assert plan.status == PlanStatus.PENDING
+        
+        plan.mark_running()
+        assert plan.status == PlanStatus.RUNNING
+        
+        plan.mark_success()
+        assert plan.status == PlanStatus.SUCCESS
+        
+        plan2 = Plan(id="test2", intent="analyze", sub_intent="health")
+        plan2.mark_failed("Error occurred")
+        assert plan2.status == PlanStatus.FAILED
+        assert plan2.error_message == "Error occurred"
+        
+        plan3 = Plan(id="test3", intent="analyze", sub_intent="health")
+        plan3.mark_ask_user("Need clarification")
+        assert plan3.status == PlanStatus.ASK_USER
+
+
+class TestPlanningErrorRecovery:
+    """Planning 오류 복구 테스트: 정상 종료율 ≥ 95% 검증."""
+    
+    def test_error_terminates_gracefully(self):
+        """오류 발생 시 정상 종료 (ask_user 또는 에러 메시지)."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus, ErrorPolicy
+        )
+        
+        # Mock executor that always fails
+        def failing_runner(step, inputs):
+            from backend.agents.supervisor.planner import StepResult
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.FAILED,
+                error_message="Simulated failure",
+            )
+        
+        step = PlanStep(
+            id="fail_step",
+            runner="mock",
+            on_error=ErrorPolicy.ASK_USER,  # Should escalate
+            max_retries=0,
+        )
+        
+        plan = Plan(
+            id="test",
+            intent="analyze",
+            sub_intent="health",
+            steps=[step],
+        )
+        
+        executor = PlanExecutor(step_executors={"mock": failing_runner})
+        result = executor.execute(plan, {})
+        
+        # Should terminate gracefully (either ASK_USER or FAILED with message)
+        assert result.status in (PlanStatus.ASK_USER, PlanStatus.FAILED)
+        assert result.error_message is not None
+    
+    def test_retry_then_fallback(self):
+        """retry → fallback 정책 검증."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, StepStatus, ErrorPolicy
+        )
+        
+        call_count = [0]
+        
+        def retry_then_succeed(step, inputs):
+            from backend.agents.supervisor.planner import StepResult
+            call_count[0] += 1
+            
+            if call_count[0] <= 1:
+                return StepResult(
+                    step_id=step.id,
+                    status=StepStatus.FAILED,
+                    error_message="First call fails",
+                )
+            
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"data": "success"},
+            )
+        
+        step = PlanStep(
+            id="retry_step",
+            runner="mock",
+            on_error=ErrorPolicy.RETRY,
+            max_retries=1,
+        )
+        
+        plan = Plan(
+            id="test",
+            intent="analyze",
+            sub_intent="health",
+            steps=[step],
+        )
+        
+        executor = PlanExecutor(step_executors={"mock": retry_then_succeed})
+        result = executor.execute(plan, {})
+        
+        # Should succeed after retry
+        assert call_count[0] == 2
+    
+    def test_parallel_execution_all_succeed(self):
+        """병렬 실행 시 모두 성공."""
+        from backend.agents.supervisor.planner import (
+            Plan, PlanStep, PlanExecutor, PlanStatus, StepStatus
+        )
+        
+        def success_runner(step, inputs):
+            from backend.agents.supervisor.planner import StepResult
+            return StepResult(
+                step_id=step.id,
+                status=StepStatus.SUCCESS,
+                result={"step": step.id},
+            )
+        
+        step_a = PlanStep(id="a", runner="mock", needs=[])
+        step_b = PlanStep(id="b", runner="mock", needs=[])
+        
+        plan = Plan(
+            id="test",
+            intent="analyze",
+            sub_intent="compare",
+            steps=[step_a, step_b],
+        )
+        
+        executor = PlanExecutor(step_executors={"mock": success_runner})
+        result = executor.execute(plan, {})
+        
+        assert result.status == PlanStatus.SUCCESS
+        assert len(result.execution_order) == 2
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

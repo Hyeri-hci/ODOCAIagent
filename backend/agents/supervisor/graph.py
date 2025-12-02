@@ -376,3 +376,184 @@ def build_supervisor_graph():
 def get_supervisor_graph():
     """Returns the V1 supervisor graph."""
     return build_supervisor_graph()
+
+
+# V2 Agentic Planning Graph
+
+def plan_node(state: SupervisorState) -> Dict[str, Any]:
+    """Builds execution plan based on intent classification."""
+    from backend.agents.supervisor.planner import build_plan, PlanStatus
+    
+    intent = state.get("intent", DEFAULT_INTENT)
+    sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
+    
+    emit_event(
+        EventType.NODE_STARTED,
+        actor="plan_node",
+        inputs={"intent": intent, "sub_intent": sub_intent},
+    )
+    
+    # Build plan from intent
+    context = {
+        "repo": state.get("repo"),
+        "user_context": state.get("user_context", {}),
+        "compare_repo": state.get("compare_repo"),
+        "user_query": state.get("user_query", ""),
+    }
+    
+    plan = build_plan(intent, sub_intent, context)
+    
+    emit_event(
+        EventType.SUPERVISOR_PLAN_BUILT,
+        actor="plan_node",
+        outputs={
+            "plan_id": plan.id,
+            "step_count": len(plan.steps),
+            "artifacts_required": plan.artifacts_required,
+        },
+    )
+    
+    return {
+        "_plan": plan.id,
+        "_plan_steps": [s.id for s in plan.steps],
+        "_plan_object": plan,
+    }
+
+
+def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
+    """Executes the plan with error handling and re-planning."""
+    from backend.agents.supervisor.planner import (
+        execute_plan,
+        PlanStatus,
+        replan_on_failure,
+        ReplanReason,
+    )
+    
+    plan = state.get("_plan_object")
+    if not plan:
+        return {"error_message": "실행할 계획이 없습니다."}
+    
+    emit_event(
+        EventType.NODE_STARTED,
+        actor="execute_plan_node",
+        inputs={"plan_id": plan.id, "step_count": len(plan.steps)},
+    )
+    
+    # Execute plan
+    executed_plan = execute_plan(plan, dict(state))
+    
+    # Handle re-planning on failure
+    if executed_plan.status == PlanStatus.FAILED:
+        failed_steps = executed_plan.get_failed_steps()
+        if failed_steps:
+            failed_step = failed_steps[0]
+            # Try re-planning
+            new_plan = replan_on_failure(
+                executed_plan,
+                failed_step,
+                ReplanReason.STEP_FAILED,
+            )
+            if new_plan:
+                executed_plan = execute_plan(new_plan, dict(state))
+    
+    emit_event(
+        EventType.NODE_FINISHED,
+        actor="execute_plan_node",
+        outputs={
+            "plan_id": executed_plan.id,
+            "status": executed_plan.status.value,
+            "execution_time_ms": executed_plan.total_execution_time_ms,
+            "replan_count": executed_plan.replan_count,
+        },
+    )
+    
+    # Extract results from plan execution
+    result: Dict[str, Any] = {
+        "_executed_plan": executed_plan.id,
+        "_plan_status": executed_plan.status.value,
+    }
+    
+    # Collect step outputs
+    for step_id, step_result in executed_plan.step_results.items():
+        if step_result.success and step_result.result:
+            # Merge results into state
+            result.update(step_result.result)
+    
+    # Handle ask_user status
+    if executed_plan.status == PlanStatus.ASK_USER:
+        result["error_message"] = executed_plan.error_message
+    elif executed_plan.status == PlanStatus.FAILED:
+        result["error_message"] = executed_plan.error_message or "계획 실행 중 오류가 발생했습니다."
+    
+    return result
+
+
+def should_use_planning(state: SupervisorState) -> str:
+    """Determines whether to use V1 direct path or V2 planning path."""
+    intent = state.get("intent", DEFAULT_INTENT)
+    
+    # Fast paths: never use planning
+    if intent in ("smalltalk", "help", "general_qa"):
+        return "summarize"
+    
+    # Error path
+    if state.get("error_message"):
+        return "summarize"
+    
+    # V2 Planning for complex intents
+    if intent in ("analyze",) and state.get("_use_planning"):
+        return "plan"
+    
+    # Default to V1 direct routing
+    return "direct"
+
+
+def build_supervisor_graph_v2():
+    """Builds V2 Supervisor Graph with Agentic Planning support."""
+    graph = StateGraph(SupervisorState)
+
+    # Add nodes
+    graph.add_node("init", init_node)
+    graph.add_node("classify", classify_node)
+    graph.add_node("plan", plan_node)
+    graph.add_node("execute_plan", execute_plan_node)
+    graph.add_node("diagnosis", diagnosis_node)
+    graph.add_node("summarize", summarize_node_wrapper)
+
+    # Set entry point
+    graph.set_entry_point("init")
+
+    # Linear flow: init → classify
+    graph.add_edge("init", "classify")
+    
+    # Conditional: classify → plan OR diagnosis OR summarize
+    graph.add_conditional_edges(
+        "classify",
+        should_use_planning,
+        {
+            "plan": "plan",
+            "direct": "diagnosis",
+            "summarize": "summarize",
+        },
+    )
+    
+    # V2 Planning path
+    graph.add_edge("plan", "execute_plan")
+    graph.add_edge("execute_plan", "summarize")
+    
+    # V1 Direct path (fallback)
+    graph.add_conditional_edges(
+        "diagnosis",
+        lambda s: "summarize",
+        {"summarize": "summarize"},
+    )
+    
+    graph.add_edge("summarize", END)
+
+    logger.info("Built V2 Supervisor Graph with Planning (6 nodes)")
+    return graph.compile()
+
+
+def get_supervisor_graph_v2():
+    """Returns the V2 supervisor graph with planning."""
+    return build_supervisor_graph_v2()

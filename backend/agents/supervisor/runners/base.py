@@ -160,6 +160,10 @@ class ExpertRunner(ABC):
         self.collector = ArtifactCollector(repo_id)
         self._start_time: float = 0
     
+    def set_artifact(self, kind: str, data: Any) -> None:
+        """Sets an artifact directly (for pre-fetched data injection)."""
+        self.collector.add(kind, data, required=True)
+    
     def run(self) -> RunnerResult:
         """Main execution entry point with error handling."""
         self._start_time = time.time()
