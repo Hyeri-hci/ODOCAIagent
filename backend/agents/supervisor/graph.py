@@ -69,6 +69,7 @@ def init_node(state: SupervisorState) -> Dict[str, Any]:
 def classify_node(state: SupervisorState) -> Dict[str, Any]:
     """Classifies user intent using simple rules or LLM."""
     from backend.agents.supervisor.nodes.intent_classifier import classify_intent_node
+    from backend.agents.supervisor.prompts import MISSING_REPO_TEMPLATE
     
     emit_event(
         EventType.NODE_STARTED,
@@ -85,6 +86,12 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
     answer_kind = _get_default_answer_kind(intent, sub_intent)
     result["answer_kind"] = answer_kind
     
+    # Check if repo is required but missing (disambiguation)
+    meta = get_intent_meta(intent, sub_intent)
+    if meta["requires_repo"] and not result.get("repo"):
+        result["_needs_disambiguation"] = True
+        result["_disambiguation_template"] = MISSING_REPO_TEMPLATE
+    
     emit_event(
         EventType.NODE_FINISHED,
         actor="classify_node",
@@ -92,6 +99,7 @@ def classify_node(state: SupervisorState) -> Dict[str, Any]:
             "intent": intent,
             "sub_intent": sub_intent,
             "answer_kind": answer_kind,
+            "needs_disambiguation": result.get("_needs_disambiguation", False),
         },
     )
     

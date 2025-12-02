@@ -579,6 +579,8 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         HELP_SOURCE_ID,
         OVERVIEW_SOURCE_ID,
         OVERVIEW_FALLBACK_TEMPLATE,
+        MISSING_REPO_TEMPLATE,
+        MISSING_REPO_SOURCE_ID,
         build_health_report_prompt,
         build_score_explain_prompt,
         build_overview_prompt,
@@ -599,6 +601,13 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     # 0. Error message takes priority
     if error_message:
         return _build_response(state, error_message, "chat")
+    
+    # 0.5. Disambiguation: repo required but missing
+    if safe_get(state, "_needs_disambiguation"):
+        template = safe_get(state, "_disambiguation_template", MISSING_REPO_TEMPLATE)
+        return _build_lightweight_response(
+            state, template, "chat", MISSING_REPO_SOURCE_ID
+        )
     
     # 1. Check V1 support
     if not is_v1_supported(intent, sub_intent):

@@ -2375,6 +2375,84 @@ class TestOperationalMetrics:
         assert not missing, f"누락된 SLO 키: {missing}"
 
 
+class TestDisambiguation:
+    """Disambiguation (저장소 미지정) 테스트."""
+    
+    def test_missing_repo_triggers_disambiguation(self):
+        """repo 미지정 시 disambiguation 플래그 설정."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "분석해줘"}
+        result = classify_node(state)
+        
+        # analyze.health는 requires_repo=True이므로 disambiguation 필요
+        assert result.get("intent") == "analyze"
+        assert result.get("_needs_disambiguation") is True
+    
+    def test_disambiguation_shows_guidance(self):
+        """disambiguation 시 안내 메시지 표시."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        state = {
+            "user_query": "분석해줘",
+            "intent": "analyze",
+            "sub_intent": "health",
+            "_needs_disambiguation": True,
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # 안내 메시지 포함
+        summary = result.get("llm_summary", "")
+        assert "owner/repo" in summary or "저장소" in summary
+        assert result.get("answer_kind") == "chat"
+    
+    def test_with_repo_no_disambiguation(self):
+        """repo 지정 시 disambiguation 없음."""
+        from backend.agents.supervisor.graph import classify_node
+        
+        state = {"user_query": "facebook/react 분석해줘"}
+        result = classify_node(state)
+        
+        # repo가 있으므로 disambiguation 불필요
+        assert result.get("repo") is not None
+        assert result.get("_needs_disambiguation") is not True
+
+
+class TestFollowupContext:
+    """Follow-up 맥락 유지 테스트."""
+    
+    def test_build_followup_state_preserves_diagnosis(self):
+        """build_followup_state가 diagnosis_result 유지."""
+        from backend.agents.supervisor.service import build_followup_state
+        
+        prev_state = {
+            "user_query": "facebook/react 분석해줘",
+            "repo": {"owner": "facebook", "name": "react", "url": "https://github.com/facebook/react"},
+            "diagnosis_result": {"scores": {"health_score": 85}},
+            "answer_kind": "report",
+            "_session_id": "test-session",
+        }
+        
+        new_state = build_followup_state("왜 이 점수야?", prev_state)
+        
+        assert new_state.get("diagnosis_result") == prev_state["diagnosis_result"]
+        assert new_state.get("repo") == prev_state["repo"]
+        assert new_state.get("_session_id") == prev_state["_session_id"]
+        assert new_state.get("last_answer_kind") == "report"
+    
+    def test_followup_detection_with_artifacts(self):
+        """이전 아티팩트가 있을 때 followup 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_followup
+        
+        # 이전 아티팩트 있음
+        assert _detect_followup("왜 그래?", has_prev_artifacts=True) is True
+        assert _detect_followup("근거가 뭐야?", has_prev_artifacts=True) is True
+        
+        # 이전 아티팩트 없음 - followup 감지 안됨
+        assert _detect_followup("왜 그래?", has_prev_artifacts=False) is False
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

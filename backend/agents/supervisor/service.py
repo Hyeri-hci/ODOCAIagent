@@ -154,9 +154,10 @@ def build_followup_state(
     if prev_state.get("_session_id"):
         state["_session_id"] = prev_state["_session_id"]
     
-    # Preserve follow-up context
-    if prev_state.get("last_answer_kind"):
-        state["last_answer_kind"] = prev_state["last_answer_kind"]
+    # Preserve follow-up context (answer_kind → last_answer_kind)
+    last_answer = prev_state.get("last_answer_kind") or prev_state.get("answer_kind")
+    if last_answer:
+        state["last_answer_kind"] = last_answer
     if prev_state.get("last_task_list"):
         state["last_task_list"] = prev_state["last_task_list"]
     if prev_state.get("last_brief"):

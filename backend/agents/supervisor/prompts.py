@@ -210,6 +210,19 @@ HELP_SOURCE_ID = "SYS:TEMPLATES:HELP"
 OVERVIEW_SOURCE_ID = "SYS:TEMPLATES:OVERVIEW"
 
 
+# Missing Repo Template (저장소 미지정 시)
+MISSING_REPO_TEMPLATE = """어떤 저장소를 분석할까요?
+
+저장소 이름을 `owner/repo` 형식으로 알려주세요.
+
+**예시**
+- `facebook/react 분석해줘`
+- `vuejs/core 건강도 확인해줘`
+- `microsoft/vscode 기여하고 싶어`"""
+
+MISSING_REPO_SOURCE_ID = "SYS:TEMPLATES:MISSING_REPO"
+
+
 # Overview LLM Prompt (아티팩트 기반 3-6문장 개요)
 SYSTEM_OVERVIEW = """당신은 GitHub 저장소를 간결하게 소개하는 전문가입니다.
 
