@@ -109,6 +109,7 @@ with st.sidebar:
     debug_mode = st.checkbox("디버그 모드", value=False, help="이벤트, 에러, 재계획 정보 표시")
     developer_mode = st.checkbox("개발자 모드", value=False, help="answer_kind, last_brief 등 내부 정보 표시")
     show_metrics = st.checkbox("운영 지표 대시보드", value=False, help="SLO, 레이턴시, 에러율 표시")
+    show_graph = st.checkbox("그래프 구조 시각화", value=False, help="실행 경로 및 노드 상태 표시")
     
     st.divider()
     
@@ -257,6 +258,137 @@ with st.sidebar:
             })
     else:
         st.caption(":gray[결과 없음 - 먼저 질문하세요]")
+    
+    # 그래프 구조 시각화
+    if show_graph:
+        st.divider()
+        st.markdown("**그래프 구조**")
+        render_graph_visualization(last_result)
+
+
+# 그래프 시각화 함수
+def render_graph_visualization(result: dict | None):
+    """Mermaid.js로 그래프 실행 경로를 시각화"""
+    if not result:
+        st.caption("실행 결과 없음")
+        return
+    
+    intent = result.get("intent", "")
+    sub_intent = result.get("sub_intent", "")
+    answer_kind = result.get("answer_kind", "chat")
+    has_diagnosis = bool(result.get("diagnosis_result"))
+    has_expert = bool(result.get("answer_contract") and sub_intent in ("compare", "onepager"))
+    needs_disambiguation = result.get("_needs_disambiguation", False)
+    
+    # 실행된 경로 결정
+    if needs_disambiguation:
+        path = "disambiguation"
+    elif intent == "smalltalk" or intent == "help":
+        path = "fast"
+    elif intent == "overview":
+        path = "overview"
+    elif sub_intent in ("compare", "onepager"):
+        path = "expert"
+    elif has_diagnosis:
+        path = "diagnosis"
+    else:
+        path = "summarize"
+    
+    # 노드 스타일 정의
+    styles = {
+        "active": "fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff",
+        "inactive": "fill:#f5f5f5,stroke:#ddd,stroke-width:1px,color:#999",
+        "current": "fill:#2196F3,stroke:#333,stroke-width:3px,color:#fff",
+    }
+    
+    # Mermaid 다이어그램 생성
+    mermaid_code = f'''
+```mermaid
+flowchart TD
+    subgraph Input
+        START((Query))
+    end
+    
+    subgraph Routing
+        INIT[init]
+        CLASSIFY[classify<br/>{intent}.{sub_intent}]
+    end
+    
+    subgraph Processing
+        DIAG[diagnosis]
+        EXPERT[expert<br/>compare/onepager]
+        FAST[fast path<br/>smalltalk/help]
+    end
+    
+    subgraph Output
+        SUMMARIZE[summarize]
+        DISAMB[disambiguation]
+        ANSWER((Answer<br/>{answer_kind}))
+    end
+    
+    START --> INIT
+    INIT --> CLASSIFY
+'''
+    
+    # 경로별 화살표 추가
+    if path == "fast":
+        mermaid_code += '''
+    CLASSIFY --> FAST
+    FAST --> ANSWER
+    
+    style FAST fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
+'''
+    elif path == "disambiguation":
+        mermaid_code += '''
+    CLASSIFY --> DISAMB
+    DISAMB --> ANSWER
+    
+    style DISAMB fill:#FF9800,stroke:#333,stroke-width:2px,color:#fff
+'''
+    elif path == "expert":
+        mermaid_code += '''
+    CLASSIFY --> EXPERT
+    EXPERT --> SUMMARIZE
+    SUMMARIZE --> ANSWER
+    
+    style EXPERT fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
+'''
+    elif path == "diagnosis":
+        mermaid_code += '''
+    CLASSIFY --> DIAG
+    DIAG --> SUMMARIZE
+    SUMMARIZE --> ANSWER
+    
+    style DIAG fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
+'''
+    else:
+        mermaid_code += '''
+    CLASSIFY --> SUMMARIZE
+    SUMMARIZE --> ANSWER
+'''
+    
+    # 공통 스타일
+    mermaid_code += f'''
+    style START fill:#9C27B0,stroke:#333,stroke-width:2px,color:#fff
+    style INIT fill:#2196F3,stroke:#333,stroke-width:2px,color:#fff
+    style CLASSIFY fill:#2196F3,stroke:#333,stroke-width:2px,color:#fff
+    style SUMMARIZE fill:#4CAF50,stroke:#333,stroke-width:2px,color:#fff
+    style ANSWER fill:#E91E63,stroke:#333,stroke-width:2px,color:#fff
+```
+'''
+    
+    st.markdown(mermaid_code)
+    
+    # 실행 경로 텍스트 설명
+    path_desc = {
+        "fast": "경량 경로 (LLM 호출 없음)",
+        "disambiguation": "엔티티 확인 필요",
+        "expert": "전문 러너 실행",
+        "diagnosis": "진단 에이전트 실행",
+        "overview": "저장소 개요 조회",
+        "summarize": "직접 요약",
+    }
+    st.caption(f"실행 경로: **{path_desc.get(path, path)}**")
 
 
 # ============================================================================
