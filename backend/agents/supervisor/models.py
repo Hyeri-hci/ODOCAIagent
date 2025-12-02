@@ -47,6 +47,45 @@ class RepoContext(TypedDict, total=False):
     default_branch: str
     accessible: bool
 
+
+# Recommendation Context (추천 맥락 명시화)
+PersonaType = Literal["newcomer", "contributor", "maintainer"]
+RecommendationGoal = Literal["onboarding", "quality", "speed", "security"]
+
+
+class TaskScoring(TypedDict, total=False):
+    """Task priority scoring weights."""
+    impact: float       # 0.0-1.0
+    feasibility: float  # 0.0-1.0
+    readiness: float    # 0.0-1.0
+    formula: str        # "0.5*impact + 0.3*feasibility + 0.2*readiness"
+
+
+class RecommendationContext(TypedDict, total=False):
+    """Recommendation context for transparent scoring."""
+    who: PersonaType                    # "newcomer" | "contributor" | "maintainer"
+    goal: RecommendationGoal            # "onboarding" | "quality" | "speed" | "security"
+    constraints: List[str]              # ["python_only", "docs_focus"]
+    based_on: List[str]                 # ["onboarding_tasks", "readme_analysis"]
+    scoring: TaskScoring                # Priority formula
+    context_label: str                  # "신규 기여자 · 온보딩 속도"
+
+
+# Default recommendation context
+DEFAULT_RECOMMENDATION_CONTEXT: RecommendationContext = {
+    "who": "newcomer",
+    "goal": "onboarding",
+    "constraints": [],
+    "based_on": ["onboarding_tasks"],
+    "scoring": {
+        "impact": 0.5,
+        "feasibility": 0.3,
+        "readiness": 0.2,
+        "formula": "0.5*impact + 0.3*feasibility + 0.2*readiness",
+    },
+    "context_label": "신규 기여자 · 온보딩 속도 기준",
+}
+
 # V1 Explain target types
 ExplainTarget = Literal[
     "metric",              # Explain scores/metrics

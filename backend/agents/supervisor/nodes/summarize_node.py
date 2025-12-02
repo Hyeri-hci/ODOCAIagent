@@ -660,8 +660,27 @@ def _build_refine_response(
     selected_tasks: List[Dict],
     all_tasks: List[Dict],
 ) -> Dict[str, Any]:
-    """Builds response for refine mode with task sources."""
-    from ..prompts import REFINE_TASKS_SOURCE_KIND
+    """Builds response for refine mode with task sources and recommendation context."""
+    from ..prompts import (
+        REFINE_TASKS_SOURCE_KIND,
+        REFINE_CONTEXT_HEADER,
+        REFINE_SCORING_FORMULA,
+    )
+    from ..models import DEFAULT_RECOMMENDATION_CONTEXT, RecommendationContext
+    
+    # Build recommendation context
+    rec_context: RecommendationContext = dict(DEFAULT_RECOMMENDATION_CONTEXT)
+    
+    # Detect based_on from task sources
+    based_on = ["onboarding_tasks"]
+    if any(t.get("source_id", "").startswith("readme") for t in selected_tasks):
+        based_on.append("readme_analysis")
+    rec_context["based_on"] = based_on
+    
+    # Add context header to summary if not present
+    context_label = rec_context.get("context_label", "신규 기여자 · 온보딩 속도 기준")
+    if "기준:" not in summary:
+        summary = REFINE_CONTEXT_HEADER.format(context_label=context_label) + summary
     
     # sources: onboarding_tasks(필수) + 선택된 task IDs
     sources = ["onboarding_tasks"]
@@ -669,7 +688,8 @@ def _build_refine_response(
     
     for task in selected_tasks:
         task_id = task.get("id") or task.get("title", "unknown")[:20]
-        sources.append(f"task:{task_id}")
+        source_id = task.get("source_id", f"task:meta:{task_id}")
+        sources.append(source_id)
         source_kinds.append("task_item")
     
     answer_contract = AnswerContract(
@@ -677,6 +697,14 @@ def _build_refine_response(
         sources=sources,
         source_kinds=source_kinds,
     )
+    
+    # Add recommendation_context to answer_contract meta
+    contract_dict = answer_contract.model_dump()
+    contract_dict["meta"] = {
+        "recommendation_context": rec_context,
+        "scoring_formula": REFINE_SCORING_FORMULA,
+        "persona_options": ["newcomer", "contributor", "maintainer"],
+    }
     
     emit_event(
         event_type=EventType.ANSWER_GENERATED,
@@ -687,16 +715,19 @@ def _build_refine_response(
             "selected_count": len(selected_tasks),
             "total_tasks": len(all_tasks),
             "sources": sources[:5],
+            "recommendation_who": rec_context.get("who"),
+            "recommendation_goal": rec_context.get("goal"),
         },
     )
     
     return {
         "llm_summary": answer_contract.text,
         "answer_kind": "refine",
-        "answer_contract": answer_contract.model_dump(),
+        "answer_contract": contract_dict,
         "last_brief": f"Task {len(selected_tasks)}개 추천 완료",
         "last_answer_kind": "refine",
         "last_task_list": all_tasks,  # 전체 Task 목록 유지
+        "_recommendation_context": rec_context,  # State에도 저장 (역할 전환용)
     }
 
 
@@ -706,23 +737,44 @@ def _build_refine_fallback_response(
     requested_count: int,
 ) -> Dict[str, Any]:
     """Builds fallback response when LLM fails in refine mode."""
-    from ..prompts import REFINE_TASKS_SOURCE_KIND
+    from ..prompts import (
+        REFINE_TASKS_SOURCE_KIND,
+        REFINE_CONTEXT_HEADER,
+        REFINE_SCORING_FORMULA,
+    )
+    from ..models import DEFAULT_RECOMMENDATION_CONTEXT, RecommendationContext
     
-    # 규칙 기반 응답 생성
-    lines = [f"### 추천 Task {len(selected_tasks)}개", ""]
+    # Build recommendation context
+    rec_context: RecommendationContext = dict(DEFAULT_RECOMMENDATION_CONTEXT)
+    context_label = rec_context.get("context_label", "신규 기여자 · 온보딩 속도 기준")
+    
+    # 규칙 기반 응답 생성 with context header
+    lines = [
+        REFINE_CONTEXT_HEADER.format(context_label=context_label).strip(),
+        "",
+        f"### 추천 Task {len(selected_tasks)}개",
+        "",
+    ]
     
     for i, task in enumerate(selected_tasks, 1):
         title = task.get("title", "제목 없음")
         difficulty = task.get("difficulty", "unknown")
         priority = task.get("priority", 99)
         rationale = task.get("rationale", "")
+        source_id = task.get("source_id", "")
         
         lines.append(f"**{i}. {title}**")
         lines.append(f"- 난이도: {difficulty}, 우선순위: {priority}")
         if rationale:
             lines.append(f"- {rationale[:100]}")
+        if source_id:
+            lines.append(f"- 근거: `{source_id}`")
         lines.append("")
     
+    # Add scoring formula
+    lines.append("**선정 기준**")
+    lines.append(f"- 우선순위 산식: `{REFINE_SCORING_FORMULA}`")
+    lines.append("")
     lines.append("**다음 행동**")
     lines.append("- 더 쉬운 Task: `더 쉬운 거 없어?`")
     lines.append("- 상세 분석: `{Task 제목} 자세히 알려줘`")
@@ -734,7 +786,8 @@ def _build_refine_fallback_response(
     
     for task in selected_tasks:
         task_id = task.get("id") or task.get("title", "unknown")[:20]
-        sources.append(f"task:{task_id}")
+        source_id = task.get("source_id", f"task:meta:{task_id}")
+        sources.append(source_id)
         source_kinds.append("task_item")
     
     answer_contract = AnswerContract(
@@ -743,6 +796,14 @@ def _build_refine_fallback_response(
         source_kinds=source_kinds,
     )
     
+    # Add recommendation_context to answer_contract meta
+    contract_dict = answer_contract.model_dump()
+    contract_dict["meta"] = {
+        "recommendation_context": rec_context,
+        "scoring_formula": REFINE_SCORING_FORMULA,
+        "persona_options": ["newcomer", "contributor", "maintainer"],
+    }
+    
     emit_event(
         event_type=EventType.ANSWER_GENERATED,
         actor="summarize_node",
@@ -750,16 +811,18 @@ def _build_refine_fallback_response(
         outputs={
             "text_length": len(summary),
             "selected_count": len(selected_tasks),
+            "recommendation_who": rec_context.get("who"),
         },
     )
     
     return {
         "llm_summary": answer_contract.text,
         "answer_kind": "refine",
-        "answer_contract": answer_contract.model_dump(),
+        "answer_contract": contract_dict,
         "last_brief": f"Task {len(selected_tasks)}개 추천 완료",
         "last_answer_kind": "refine",
         "degraded": True,
+        "_recommendation_context": rec_context,
     }
 
 

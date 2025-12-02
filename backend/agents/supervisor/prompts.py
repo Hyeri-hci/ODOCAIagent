@@ -134,17 +134,26 @@ SYSTEM_REFINE = """당신은 온보딩 Task 목록을 사용자 요청에 맞게
 
 ## 출력 형식
 
-### 추천 Task {count}개
+> **기준**: 신규 기여자 · 온보딩 속도 기준
 
-{task_list}
+### 추천 Task {{count}}개
+
+{{task_list}}
 
 **선정 기준**
-- (선정 이유 1-2줄)
+- 우선순위가 가장 낮은(숫자가 가장 큰) Task부터 선별하였습니다.
+- 우선순위 산식: `0.5×impact + 0.3×feasibility + 0.2×readiness`
 
 **다음 행동**
 - 더 쉬운 Task: `더 쉬운 거 없어?`
-- 상세 분석: `{task_title} 자세히 알려줘`
+- 상세 분석: `{{task_title}} 자세히 알려줘`
 """
+
+# Refine context header template
+REFINE_CONTEXT_HEADER = "> **기준**: {context_label}\n\n"
+
+# Default scoring formula display
+REFINE_SCORING_FORMULA = "0.5×impact + 0.3×feasibility + 0.2×readiness"
 
 REFINE_NO_TASKS_TEMPLATE = """이전 분석에서 추천된 Task가 없습니다.
 
@@ -594,7 +603,7 @@ def build_refine_prompt(
         "priority가 낮을수록 높은 우선순위입니다.",
     ]
     
-    return system.format(count=requested_count, task_list="{결과}", task_title="{Task 제목}"), "\n".join(user_parts)
+    return system, "\n".join(user_parts)
 
 
 def extract_requested_count(query: str) -> int:
