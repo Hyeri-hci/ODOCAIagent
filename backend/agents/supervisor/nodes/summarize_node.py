@@ -307,15 +307,59 @@ def _build_response(
     return result
 
 
-# =============================================================================
+# Lightweight response builder (no LLM, instant response)
+def _build_lightweight_response(
+    state: SupervisorState,
+    template: str,
+    answer_kind: str,
+    source_id: str,
+) -> Dict[str, Any]:
+    """Builds lightweight response without LLM call. For smalltalk/help/overview."""
+    repo = safe_get(state, "repo")
+    owner = safe_get(repo, "owner", "") if repo else ""
+    name = safe_get(repo, "name", "") if repo else ""
+    repo_id = f"{owner}/{name}" if owner or name else ""
+    
+    answer_contract = AnswerContract(
+        text=template,
+        sources=[source_id],
+        source_kinds=["system_template"],
+    )
+    
+    emit_event(
+        event_type=EventType.ANSWER_GENERATED,
+        actor="summarize_node",
+        inputs={"answer_kind": answer_kind, "lightweight": True},
+        outputs={
+            "text_length": len(template),
+            "source_id": source_id,
+            "latency_category": "instant",
+        },
+    )
+    
+    return {
+        "llm_summary": answer_contract.text,
+        "answer_kind": answer_kind,
+        "answer_contract": answer_contract.model_dump(),
+        "last_brief": f"{answer_kind} 응답 완료",
+        "last_answer_kind": answer_kind,
+    }
+
+
 # V1 Summarize Node (Main Entry Point)
-# =============================================================================
 
 def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     """V1 summarize node: routes to appropriate prompt based on (intent, sub_intent)."""
     from ..prompts import (
         GREETING_TEMPLATE,
         NOT_READY_TEMPLATE,
+        SMALLTALK_GREETING_TEMPLATE,
+        SMALLTALK_CHITCHAT_TEMPLATE,
+        HELP_GETTING_STARTED_TEMPLATE,
+        OVERVIEW_REPO_TEMPLATE,
+        SMALLTALK_SOURCE_ID,
+        HELP_SOURCE_ID,
+        OVERVIEW_SOURCE_ID,
         build_health_report_prompt,
         build_score_explain_prompt,
         build_chat_prompt,
@@ -329,6 +373,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     user_query = safe_get(state, "user_query", "")
     diagnosis_result = safe_get(state, "diagnosis_result")
     error_message = safe_get(state, "error_message")
+    repo = safe_get(state, "repo")
     
     # 0. Error message takes priority
     if error_message:
@@ -340,7 +385,29 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     
     mode = (intent, sub_intent)
     
-    # 2. Route by mode
+    # 2. Fast path: Smalltalk/Help/Overview (LLM 호출 없이 즉답)
+    if intent == "smalltalk":
+        if sub_intent == "greeting":
+            return _build_lightweight_response(
+                state, SMALLTALK_GREETING_TEMPLATE, "greeting", SMALLTALK_SOURCE_ID
+            )
+        else:  # chitchat
+            return _build_lightweight_response(
+                state, SMALLTALK_CHITCHAT_TEMPLATE, "greeting", SMALLTALK_SOURCE_ID
+            )
+    
+    if intent == "help":
+        return _build_lightweight_response(
+            state, HELP_GETTING_STARTED_TEMPLATE, "chat", HELP_SOURCE_ID
+        )
+    
+    if intent == "overview" and sub_intent == "repo":
+        owner = safe_get(repo, "owner", "owner") if repo else "owner"
+        name = safe_get(repo, "name", "repo") if repo else "repo"
+        template = OVERVIEW_REPO_TEMPLATE.format(owner=owner, repo=name)
+        return _build_lightweight_response(state, template, "chat", OVERVIEW_SOURCE_ID)
+    
+    # 3. Route by mode (LLM required)
     
     # --- Health Report Mode ---
     if mode in [("analyze", "health"), ("analyze", "onboarding")]:
@@ -415,13 +482,8 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         
         return _build_response(state, llm_result.content, "explain", diagnosis_result)
     
-    # --- Greeting Mode ---
-    elif intent == "smalltalk":
-        return _build_response(state, GREETING_TEMPLATE, "greeting")
-    
     # --- Chat Mode ---
     elif intent == "general_qa":
-        repo = safe_get(state, "repo")
         repo_summary = ""
         if repo and diagnosis_result:
             scores = safe_get(diagnosis_result, "scores", {})
@@ -446,10 +508,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         return _build_response(state, NOT_READY_TEMPLATE, "chat")
 
 
-# =============================================================================
-# Legacy Alias (for backward compatibility)
-# =============================================================================
-
+# Legacy Alias
 def summarize_node(state: SupervisorState) -> Dict[str, Any]:
     """Legacy alias for summarize_node_v1."""
     return summarize_node_v1(state)

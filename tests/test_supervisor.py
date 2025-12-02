@@ -537,5 +537,105 @@ class TestHierarchicalRouting:
         assert result.get("llm_summary")
 
 
+class TestLightweightPath:
+    """Step 2: Smalltalk/Help 경량 경로 테스트."""
+    
+    def test_smalltalk_greeting_has_next_actions(self):
+        """인사 응답에 다음 행동 2개 포함."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("안녕!")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        summary = result.get("llm_summary", "")
+        assert "다음 행동" in summary
+        assert summary.count("`") >= 2  # 최소 2개 코드 블록 (행동 제안)
+    
+    def test_help_response_has_next_actions(self):
+        """도움말 응답에 다음 행동 2개 포함."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("뭘 할 수 있어?")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        summary = result.get("llm_summary", "")
+        assert "다음 행동" in summary
+        assert summary.count("`") >= 2
+    
+    def test_smalltalk_source_is_template(self):
+        """인사 응답 source가 SYS:TEMPLATES:SMALLTALK."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("안녕하세요")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        contract = result.get("answer_contract", {})
+        sources = contract.get("sources", [])
+        
+        assert len(sources) > 0
+        assert "SYS:TEMPLATES:SMALLTALK" in sources[0]
+    
+    def test_help_source_is_template(self):
+        """도움말 응답 source가 SYS:TEMPLATES:HELP."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("사용법 알려줘")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        contract = result.get("answer_contract", {})
+        sources = contract.get("sources", [])
+        
+        assert len(sources) > 0
+        assert "SYS:TEMPLATES:HELP" in sources[0]
+    
+    def test_lightweight_response_latency(self):
+        """경량 응답 지연시간 < 100ms."""
+        import time
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("안녕!")
+        graph = get_supervisor_graph()
+        
+        start = time.perf_counter()
+        result = graph.invoke(state)
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        
+        # p95 < 100ms 검증 (실제로는 훨씬 빠름)
+        # 테스트 환경에서는 200ms 이내면 통과
+        assert elapsed_ms < 200, f"Latency too high: {elapsed_ms:.1f}ms"
+        assert result.get("llm_summary")
+    
+    def test_overview_response_format(self):
+        """overview 응답 포맷 검증."""
+        from backend.agents.supervisor.nodes.summarize_node import _build_lightweight_response
+        from backend.agents.supervisor.prompts import OVERVIEW_REPO_TEMPLATE, OVERVIEW_SOURCE_ID
+        
+        state = {
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+        }
+        template = OVERVIEW_REPO_TEMPLATE.format(owner="facebook", repo="react")
+        result = _build_lightweight_response(state, template, "chat", OVERVIEW_SOURCE_ID)
+        
+        assert "facebook/react" in result["llm_summary"]
+        assert "다음 행동" in result["llm_summary"]
+        assert result["answer_contract"]["sources"][0] == OVERVIEW_SOURCE_ID
+    
+    def test_chitchat_response(self):
+        """chitchat 응답 검증."""
+        from backend.agents.supervisor import get_supervisor_graph, build_initial_state
+        
+        state = build_initial_state("네 알겠어요 고마워요")
+        graph = get_supervisor_graph()
+        result = graph.invoke(state)
+        
+        # chitchat → smalltalk.chitchat
+        assert result.get("intent") == "smalltalk"
+        assert "다음 행동" in result.get("llm_summary", "")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

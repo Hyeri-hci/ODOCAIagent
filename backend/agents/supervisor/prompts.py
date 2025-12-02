@@ -136,6 +136,46 @@ NOT_READY_TEMPLATE = """죄송합니다. 해당 기능은 아직 개발 중입�
 다른 것을 도와드릴까요?"""
 
 
+# Smalltalk/Help Templates (경량 경로: LLM 호출 없이 즉답)
+SMALLTALK_GREETING_TEMPLATE = """안녕하세요! ODOC입니다.
+
+오픈소스 프로젝트의 건강도를 진단하고, 기여에 적합한 Task를 추천해 드려요.
+
+**다음 행동**
+- 저장소 분석하기: `facebook/react 분석해줘`
+- 사용법 알아보기: `뭘 할 수 있어?`"""
+
+SMALLTALK_CHITCHAT_TEMPLATE = """네, 알겠습니다!
+
+**다음 행동**
+- 저장소 분석하기: `owner/repo 분석해줘`
+- 이전 분석 더 보기: `점수 자세히 설명해줘`"""
+
+HELP_GETTING_STARTED_TEMPLATE = """ODOC은 오픈소스 저장소 건강도 진단 도구입니다.
+
+**주요 기능**
+1. **건강 분석**: 저장소 활동성, 문서화, 커뮤니티를 진단합니다.
+2. **온보딩 추천**: 초보자에게 적합한 기여 Task를 찾아드립니다.
+3. **점수 설명**: 각 지표가 왜 그런 점수인지 설명합니다.
+
+**다음 행동**
+- 저장소 분석: `facebook/react 분석해줘`
+- 개념 질문: `Health Score가 뭐야?`"""
+
+OVERVIEW_REPO_TEMPLATE = """**{owner}/{repo}** 저장소입니다.
+
+상세한 건강도와 기여 가이드가 필요하시면 분석을 요청해 주세요.
+
+**다음 행동**
+- 건강도 분석: `{owner}/{repo} 분석해줘`
+- 온보딩 Task 추천: `{owner}/{repo} 기여하고 싶어`"""
+
+# Source constants for Smalltalk/Help
+SMALLTALK_SOURCE_ID = "SYS:TEMPLATES:SMALLTALK"
+HELP_SOURCE_ID = "SYS:TEMPLATES:HELP"
+OVERVIEW_SOURCE_ID = "SYS:TEMPLATES:OVERVIEW"
+
+
 # Helper Functions
 def build_health_report_prompt(diagnosis_result: Dict[str, Any]) -> tuple[str, str]:
     """Builds prompt for health report mode. Returns (system, user)."""
