@@ -112,49 +112,6 @@ with st.sidebar:
     
     st.divider()
     
-    # 예시 질문 버튼
-    st.markdown("**예시 질문**")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("상태 분석", use_container_width=True, help="facebook/react 상태 분석해줘"):
-            st.session_state.example_query = "facebook/react 상태 분석해줘"
-            st.rerun()
-    with col2:
-        if st.button("기여하기", use_container_width=True, help="초보자인데 vue에 기여하고 싶어요"):
-            st.session_state.example_query = "초보자인데 vuejs/vue에 기여하고 싶어요"
-            st.rerun()
-    
-    col3, col4 = st.columns(2)
-    with col3:
-        if st.button("개념 설명", use_container_width=True, help="온보딩 용이성이 뭐야?"):
-            st.session_state.example_query = "온보딩 용이성이 뭐야?"
-            st.rerun()
-    with col4:
-        if st.button("PR 가이드", use_container_width=True, help="PR은 어떻게 보내?"):
-            st.session_state.example_query = "PR은 어떻게 보내?"
-            st.rerun()
-    
-    st.divider()
-    
-    st.markdown("**지원 질문 유형**")
-    st.markdown("""
-**저장소 분석** (repo 필요)
-- :blue[Health]: "facebook/react 상태 분석해줘"
-- :green[온보딩]: "초보자인데 vue에 기여하고 싶어요"
-- :orange[비교]: "react와 vue를 비교해줘"
-
-**개념 Q&A** (repo 불필요)
-- :violet[지표 설명]: "온보딩 용이성이 뭐야?"
-- :violet[프로세스]: "PR은 어떻게 보내?"
-
-**후속 질문** (이전 결과 참조)
-- :gray[필터링]: "더 쉬운 거 없어?"
-- :gray[상세]: "이 점수는 어떻게 계산된 거야?"
-    """)
-    
-    st.divider()
-    
     if st.button("대화 초기화"):
         st.session_state.messages = []
         st.session_state.last_result = None
@@ -367,14 +324,19 @@ if prompt:
                     "_session_id": st.session_state.session_id,
                 }
                 
-                # 이전 결과가 있으면 컨텍스트 전달
+                # 이전 결과가 있으면 컨텍스트 전달 (Follow-up 지원 강화)
                 if st.session_state.last_result:
                     prev = st.session_state.last_result
+                    
+                    # 이전 저장소 정보 전달
                     if prev.get("repo"):
                         initial_state["last_repo"] = prev.get("repo")
-                    # diagnosis_result가 dict인 경우만 처리
+                    
+                    # diagnosis_result 직접 전달 (Follow-up 핵심)
                     diag = prev.get("diagnosis_result")
-                    if isinstance(diag, dict) and diag.get("onboarding_tasks"):
+                    if isinstance(diag, dict):
+                        initial_state["diagnosis_result"] = diag
+                        
                         # onboarding_tasks를 flat list로 변환
                         onboarding_tasks = diag.get("onboarding_tasks", {})
                         task_list = []
@@ -385,8 +347,14 @@ if prompt:
                                     task_copy["difficulty"] = difficulty
                                 task_list.append(task_copy)
                         initial_state["last_task_list"] = task_list
-                    if prev.get("task_type"):
-                        initial_state["last_intent"] = prev.get("task_type")
+                    
+                    # 이전 answer_kind 전달 (Follow-up 타입 결정)
+                    if prev.get("answer_kind"):
+                        initial_state["last_answer_kind"] = prev.get("answer_kind")
+                    if prev.get("last_brief"):
+                        initial_state["last_brief"] = prev.get("last_brief")
+                    if prev.get("intent"):
+                        initial_state["last_intent"] = prev.get("intent")
                 
                 # 분석 히스토리 전달 (이전에 분석한 저장소들)
                 if st.session_state.analysis_history:

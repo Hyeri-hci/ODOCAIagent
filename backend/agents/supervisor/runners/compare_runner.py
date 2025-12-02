@@ -36,6 +36,9 @@ class CompareRunner(ExpertRunner):
     
     def _collect_artifacts(self) -> None:
         """Collects artifacts for both repositories."""
+        self._repo_a_error = None
+        self._repo_b_error = None
+        
         # Repo A
         owner_a, repo_a = self._parse_repo(self.repo_a)
         if owner_a and repo_a:
@@ -48,9 +51,11 @@ class CompareRunner(ExpertRunner):
                     required=True,
                 )
             except GitHubClientError as e:
+                self._repo_a_error = str(e)
                 self.collector.add_error("repo_a_overview", str(e))
         else:
-            self.collector.add_error("repo_a_overview", f"Invalid format: {self.repo_a}")
+            self._repo_a_error = f"Invalid format: {self.repo_a}"
+            self.collector.add_error("repo_a_overview", self._repo_a_error)
         
         # Repo B
         owner_b, repo_b = self._parse_repo(self.repo_b)
@@ -64,9 +69,11 @@ class CompareRunner(ExpertRunner):
                     required=True,
                 )
             except GitHubClientError as e:
+                self._repo_b_error = str(e)
                 self.collector.add_error("repo_b_overview", str(e))
         else:
-            self.collector.add_error("repo_b_overview", f"Invalid format: {self.repo_b}")
+            self._repo_b_error = f"Invalid format: {self.repo_b}"
+            self.collector.add_error("repo_b_overview", self._repo_b_error)
     
     def _parse_repo(self, repo_id: str) -> Tuple[Optional[str], Optional[str]]:
         """Parses owner/repo format."""
@@ -140,13 +147,57 @@ class CompareRunner(ExpertRunner):
         )
     
     def _fallback_execute(self) -> RunnerResult:
-        """Fallback: compare using only overview data."""
+        """Fallback: handle partial failures - single repo analysis or overview only."""
         overview_a = self.collector.get("repo_a_overview")
         overview_b = self.collector.get("repo_b_overview")
         
+        # Both failed
         if not overview_a and not overview_b:
-            return RunnerResult.fail("No overview data available for comparison")
+            error_msg = "두 저장소 모두 접근할 수 없습니다."
+            if self._repo_a_error:
+                error_msg += f"\n- {self.repo_a}: {self._repo_a_error}"
+            if self._repo_b_error:
+                error_msg += f"\n- {self.repo_b}: {self._repo_b_error}"
+            return RunnerResult.fail(error_msg)
         
+        # One repo failed - return single repo info + warning
+        if overview_a and not overview_b:
+            text = self._build_partial_comparison(
+                success_repo=self.repo_a,
+                success_overview=overview_a,
+                failed_repo=self.repo_b,
+                failed_reason=self._repo_b_error or "접근 불가",
+            )
+            answer = AnswerContract(
+                text=text,
+                sources=self.collector.get_ids() or [f"PARTIAL:{self.repo_a}"],
+                source_kinds=["partial_compare"],
+            )
+            return RunnerResult.degraded_ok(
+                answer=answer,
+                artifacts_out=self.collector.get_ids(),
+                reason=f"repo_b_failed:{self._repo_b_error}",
+            )
+        
+        if overview_b and not overview_a:
+            text = self._build_partial_comparison(
+                success_repo=self.repo_b,
+                success_overview=overview_b,
+                failed_repo=self.repo_a,
+                failed_reason=self._repo_a_error or "접근 불가",
+            )
+            answer = AnswerContract(
+                text=text,
+                sources=self.collector.get_ids() or [f"PARTIAL:{self.repo_b}"],
+                source_kinds=["partial_compare"],
+            )
+            return RunnerResult.degraded_ok(
+                answer=answer,
+                artifacts_out=self.collector.get_ids(),
+                reason=f"repo_a_failed:{self._repo_a_error}",
+            )
+        
+        # Both available but diagnosis failed - use overview comparison
         text = self._build_overview_comparison(overview_a, overview_b)
         
         answer = AnswerContract(
@@ -160,6 +211,38 @@ class CompareRunner(ExpertRunner):
             artifacts_out=self.collector.get_ids(),
             reason="diagnosis_failed_using_overview",
         )
+    
+    def _build_partial_comparison(
+        self,
+        success_repo: str,
+        success_overview: Dict,
+        failed_repo: str,
+        failed_reason: str,
+    ) -> str:
+        """Builds text when one repo is not accessible."""
+        stars = success_overview.get("stargazers_count", 0)
+        forks = success_overview.get("forks_count", 0)
+        desc = success_overview.get("description", "설명 없음")
+        
+        text = f"""### 비교 불가 안내
+
+**{failed_repo}** 저장소에 접근할 수 없습니다.
+- 원인: {failed_reason}
+
+비교 대신 **{success_repo}**의 정보만 제공합니다:
+
+| 지표 | 값 |
+|------|-----|
+| 설명 | {desc[:100]} |
+| Stars | {stars:,} |
+| Forks | {forks:,} |
+
+**다음 행동**
+1. `{failed_repo}` 저장소 이름이 올바른지 확인해 주세요
+2. 비공개 저장소라면 접근 권한이 필요합니다
+3. `{success_repo} 분석해줘`로 단일 저장소 분석을 받아보세요"""
+        
+        return text
     
     def _build_comparison_text(self) -> str:
         """Builds full comparison text with diagnosis data."""

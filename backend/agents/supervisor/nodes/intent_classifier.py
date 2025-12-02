@@ -49,6 +49,8 @@ OVERVIEW_PATTERNS = [
     r"(뭐야|뭔가요|소개|정의|설명).*(저장소|레포|repo)",
     r"(저장소|레포|repo).*(뭐야|뭔가요|소개|정의|설명)",
     r"^([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*(뭐야|뭔가요|소개|정의|설명해|알려줘)[\s!?.]*$",
+    r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)\s*(가|이)\s*(뭐야|뭔가요|뭐|뭔)",
+    r"([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+).*(어떤|무슨).*(프로젝트|저장소|레포)",
 ]
 
 IDENTITY_PATTERNS = [
@@ -191,6 +193,11 @@ def _tier1_heuristic(query: str, has_prev_artifacts: bool = False) -> Optional[C
         if re.search(p, q):
             return ClassifyResult("overview", "repo", repo, 1.0, "heuristic")
     
+    # Repo with question mark but no analysis keywords -> overview
+    if repo and re.search(r"(뭐야|뭔가요|뭔데|뭐지|어때)[?\s]*$", q):
+        if not any(kw in q for kw in ANALYSIS_KEYWORDS):
+            return ClassifyResult("overview", "repo", repo, 0.9, "heuristic")
+    
     # Analysis keywords → delegate to LLM for sub_intent classification
     if any(kw in q for kw in ANALYSIS_KEYWORDS):
         return None  # LLM will classify
@@ -215,10 +222,13 @@ def _extract_repo(query: str) -> Optional[RepoInfo]:
             name = name[:-4]
         return {"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}"}
     
-    # owner/repo format
-    short_match = re.search(r"([a-zA-Z][a-zA-Z0-9_-]*)/([a-zA-Z0-9_.-]+)", query)
+    # owner/repo format (handle vue.js/core style - dots allowed in owner)
+    # More permissive: allow dots in both owner and name
+    short_match = re.search(r"([a-zA-Z][a-zA-Z0-9_.-]*)/([a-zA-Z0-9_.-]+)", query)
     if short_match:
         owner, name = short_match.groups()
+        # Clean trailing punctuation from name
+        name = re.sub(r'[\s,;:!?]+$', '', name)
         return {"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}"}
     
     return None
@@ -228,12 +238,14 @@ def _extract_two_repos(query: str) -> Tuple[Optional[RepoInfo], Optional[RepoInf
     """Extract two GitHub repos from query for comparison."""
     repos = []
     
-    # Find all owner/repo patterns
-    patterns = re.findall(r"([a-zA-Z][a-zA-Z0-9_-]*)/([a-zA-Z0-9_.-]+)", query)
+    # Find all owner/repo patterns (allow dots in owner like vue.js)
+    patterns = re.findall(r"([a-zA-Z][a-zA-Z0-9_.-]*)/([a-zA-Z0-9_.-]+)", query)
     for owner, name in patterns:
         # Skip common false positives
         if owner.lower() in ("http", "https", "www", "github"):
             continue
+        # Clean trailing punctuation
+        name = re.sub(r'[\s,;:!?]+$', '', name)
         repos.append({"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}"})
     
     if len(repos) >= 2:
