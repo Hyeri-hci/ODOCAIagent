@@ -217,6 +217,7 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
 def expert_node(state: SupervisorState) -> Dict[str, Any]:
     """Runs specialized expert runners (compare, onepager)."""
     from backend.agents.supervisor.runners import CompareRunner, OnepagerRunner
+    from backend.agents.supervisor.intent_config import COMPARE_ENABLED
     
     intent = state.get("intent", "analyze")
     sub_intent = state.get("sub_intent", "health")
@@ -236,10 +237,19 @@ def expert_node(state: SupervisorState) -> Dict[str, Any]:
     
     # Select appropriate runner
     if sub_intent == "compare":
-        # For compare, need second repo from query parsing
+        # Compare guard: check feature toggle
+        if not COMPARE_ENABLED:
+            return {
+                "error_message": "비교 기능은 현재 준비 중입니다. 개별 저장소 분석을 이용해 주세요."
+            }
+        
+        # Compare guard: need second repo
         repo_b = safe_get(state, "compare_repo")
         if not repo_b:
-            return {"error_message": "비교할 두 번째 저장소가 필요합니다."}
+            return {
+                "error_message": "비교할 두 번째 저장소를 찾지 못했습니다.\n"
+                    "예시: 'facebook/react랑 vuejs/core 비교해줘'"
+            }
         
         repo_b_id = f"{safe_get(repo_b, 'owner', '')}/{safe_get(repo_b, 'name', '')}"
         runner = CompareRunner(
@@ -275,10 +285,30 @@ def expert_node(state: SupervisorState) -> Dict[str, Any]:
     if not result.success:
         return {"error_message": result.error_message}
     
-    # Store expert result for summarize node
+    # Expert node returns final response directly (no summarize needed)
+    from backend.agents.supervisor.intent_config import ANSWER_KIND_MAP, DEFAULT_ANSWER_KIND
+    from backend.agents.supervisor.nodes.summarize_node import _generate_last_brief
+    
+    answer = result.answer
+    answer_kind = ANSWER_KIND_MAP.get((intent, sub_intent), DEFAULT_ANSWER_KIND)
+    
+    emit_event(
+        EventType.ANSWER_GENERATED,
+        actor="expert_node",
+        inputs={"answer_kind": answer_kind, "runner": runner.runner_name},
+        outputs={
+            "text_length": len(answer.text or "") if answer else 0,
+            "source_count": len(answer.sources or []) if answer else 0,
+            "degraded": result.degraded,
+        },
+    )
+    
     return {
-        "_expert_result": result,
-        "_expert_answer": result.answer.model_dump() if result.answer else None,
+        "llm_summary": answer.text if answer else "",
+        "answer_kind": answer_kind,
+        "answer_contract": answer.model_dump() if answer else {},
+        "last_brief": _generate_last_brief(answer.text if answer else ""),
+        "last_answer_kind": answer_kind,
     }
 
 

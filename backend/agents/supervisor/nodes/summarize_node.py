@@ -802,6 +802,18 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     if error_message:
         return _build_response(state, error_message, "chat")
     
+    # 0.3. Expert node already generated response (compare/onepager)
+    existing_contract = safe_get(state, "answer_contract")
+    if existing_contract and isinstance(existing_contract, dict) and existing_contract.get("text"):
+        # Already have a valid answer from expert_node, pass through
+        return {
+            "llm_summary": existing_contract.get("text", ""),
+            "answer_kind": safe_get(state, "answer_kind", "chat"),
+            "answer_contract": existing_contract,
+            "last_brief": safe_get(state, "last_brief", ""),
+            "last_answer_kind": safe_get(state, "answer_kind", "chat"),
+        }
+    
     # 0.5. Disambiguation: repo required but missing
     if safe_get(state, "_needs_disambiguation"):
         template = safe_get(state, "_disambiguation_template", MISSING_REPO_TEMPLATE)

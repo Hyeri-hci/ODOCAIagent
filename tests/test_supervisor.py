@@ -2894,5 +2894,215 @@ class TestOnepagerIntegration:
         assert result.sub_intent == "onepager"
 
 
+class TestCompareMVP:
+    """Compare MVP 테스트 (합격 기준)."""
+    
+    def test_compare_enabled_toggle(self):
+        """COMPARE_ENABLED 토글 확인."""
+        from backend.agents.supervisor.intent_config import COMPARE_ENABLED
+        
+        assert isinstance(COMPARE_ENABLED, bool)
+    
+    def test_compare_entity_extraction(self):
+        """두 레포 엔티티 추출."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_two_repos
+        
+        repo_a, repo_b = _extract_two_repos("facebook/react랑 vuejs/core 비교해줘")
+        
+        assert repo_a is not None
+        assert repo_b is not None
+        assert repo_a["owner"] == "facebook"
+        assert repo_a["name"] == "react"
+        assert repo_b["owner"] == "vuejs"
+        assert repo_b["name"] == "core"
+    
+    def test_compare_entity_one_missing(self):
+        """레포 하나만 있는 경우."""
+        from backend.agents.supervisor.nodes.intent_classifier import _extract_two_repos
+        
+        repo_a, repo_b = _extract_two_repos("facebook/react 비교해줘")
+        
+        assert repo_a is not None
+        assert repo_b is None
+    
+    def test_compare_detection(self):
+        """compare 패턴 감지 + 두 레포 추출."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_compare
+        
+        is_compare, repo_a, repo_b = _detect_compare("facebook/react랑 vuejs/core 비교해줘")
+        
+        assert is_compare is True
+        assert repo_a is not None
+        assert repo_b is not None
+    
+    def test_compare_routing_heuristic(self):
+        """compare → analyze/compare 라우팅."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        result = _tier1_heuristic("facebook/react랑 vuejs/core 비교해줘")
+        
+        assert result is not None
+        assert result.intent == "analyze"
+        assert result.sub_intent == "compare"
+        assert result.repo is not None
+        assert result.compare_repo is not None
+    
+    def test_compare_guard_no_repo_b(self):
+        """compare_guard: repo_b 없으면 에러."""
+        from backend.agents.supervisor.graph import expert_node
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+            # compare_repo 없음
+        }
+        
+        result = expert_node(state)
+        
+        assert "error_message" in result
+        assert "두 번째 저장소" in result["error_message"]
+    
+    def test_compare_runner_sources(self):
+        """CompareRunner sources 규칙: 양쪽 아티팩트 1개 이상."""
+        from backend.agents.supervisor.runners import CompareRunner
+        from unittest.mock import patch, MagicMock
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="vuejs/core",
+        )
+        
+        # Mock GitHub API
+        mock_overview = {
+            "full_name": "test/repo",
+            "stargazers_count": 1000,
+            "forks_count": 100,
+            "description": "Test",
+        }
+        
+        with patch("backend.agents.supervisor.runners.compare_runner.fetch_repo_overview") as mock_fetch:
+            mock_fetch.return_value = mock_overview
+            with patch("backend.agents.supervisor.runners.compare_runner.run_diagnosis") as mock_diag:
+                mock_diag.return_value = {"scores": {"health_score": 75}}
+                
+                result = runner.run()
+        
+        assert result.success or result.degraded
+        if result.answer:
+            # sources에 양쪽 레포 아티팩트 있어야 함
+            sources = result.answer.sources
+            assert len(sources) >= 2
+    
+    def test_compare_answer_kind(self):
+        """compare → answer_kind=compare."""
+        from backend.agents.supervisor.intent_config import ANSWER_KIND_MAP
+        
+        assert ANSWER_KIND_MAP.get(("analyze", "compare")) == "compare"
+    
+    def test_compare_partial_failure_b_plan(self):
+        """한쪽 실패 시 B안(불완전 비교) - 성공한 쪽만 결과 반환."""
+        from backend.agents.supervisor.runners import CompareRunner
+        from backend.common.github_client import GitHubClientError
+        from unittest.mock import patch
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="nonexistent/repo",
+        )
+        
+        mock_overview = {
+            "full_name": "facebook/react",
+            "stargazers_count": 1000,
+        }
+        
+        with patch("backend.agents.supervisor.runners.compare_runner.fetch_repo_overview") as mock_fetch:
+            def side_effect(owner, repo):
+                if repo == "react":
+                    return mock_overview
+                raise GitHubClientError("404 Not Found")
+            
+            mock_fetch.side_effect = side_effect
+            result = runner.run()
+        
+        # B안: 한쪽 성공 시에도 결과 반환 (success=True)
+        # sources에 성공한 쪽만 포함
+        assert result.success or result.degraded
+        if result.answer:
+            sources = result.answer.sources
+            # A 레포 아티팩트만 있어야 함
+            assert any("facebook/react" in s for s in sources)
+            # B 레포 아티팩트는 없어야 함
+            assert not any("nonexistent" in s for s in sources)
+
+
+class TestCompareIntegration:
+    """Compare 통합 테스트."""
+    
+    def test_compare_classify_to_expert(self):
+        """classify → expert 라우팅."""
+        from backend.agents.supervisor.nodes.intent_classifier import classify_intent_node
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {"user_query": "facebook/react랑 vuejs/core 비교해줘"}
+        classified = classify_intent_node(state)
+        
+        merged = {**state, **classified}
+        route = should_run_diagnosis(merged)
+        
+        assert route == "expert"
+    
+    def test_compare_expert_node_success(self):
+        """expert_node 성공 시 answer_contract 반환."""
+        from backend.agents.supervisor.graph import expert_node
+        from unittest.mock import patch
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+            "compare_repo": {"owner": "vuejs", "name": "core", "url": ""},
+        }
+        
+        mock_overview = {
+            "full_name": "test/repo",
+            "stargazers_count": 1000,
+            "forks_count": 100,
+        }
+        
+        with patch("backend.agents.supervisor.runners.compare_runner.fetch_repo_overview") as mock_fetch:
+            mock_fetch.return_value = mock_overview
+            with patch("backend.agents.supervisor.runners.compare_runner.run_diagnosis") as mock_diag:
+                mock_diag.return_value = {"scores": {"health_score": 75}}
+                
+                result = expert_node(state)
+        
+        assert "answer_contract" in result
+        assert result.get("answer_kind") == "compare"
+    
+    def test_compare_summarize_passthrough(self):
+        """summarize_node: expert 결과 pass-through."""
+        from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+        
+        # expert_node가 이미 answer_contract를 설정한 상태
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "answer_contract": {
+                "text": "비교 결과입니다.",
+                "sources": ["ARTIFACT:A", "ARTIFACT:B"],
+                "source_kinds": ["diagnosis", "diagnosis"],
+            },
+            "answer_kind": "compare",
+            "last_brief": "비교 완료",
+        }
+        
+        result = summarize_node_v1(state)
+        
+        # 기존 answer_contract 유지
+        assert result["answer_contract"]["text"] == "비교 결과입니다."
+        assert result["answer_kind"] == "compare"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

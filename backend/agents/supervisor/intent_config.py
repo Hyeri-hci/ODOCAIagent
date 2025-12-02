@@ -1,6 +1,7 @@
 """Intent configuration for Supervisor V1 with hierarchical routing."""
 from __future__ import annotations
 
+import os
 from typing import Literal, TypedDict, Set, Tuple
 
 from .models import (
@@ -10,6 +11,9 @@ from .models import (
     DEFAULT_INTENT,
     DEFAULT_SUB_INTENT,
 )
+
+# Feature toggles
+COMPARE_ENABLED = os.getenv("COMPARE_ENABLED", "true").lower() == "true"
 
 
 VALID_INTENTS: list[str] = ["analyze", "followup", "general_qa", "smalltalk", "help", "overview"]
