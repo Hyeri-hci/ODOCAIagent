@@ -121,10 +121,10 @@ def _get_default_answer_kind(intent: str, sub_intent: str) -> str:
         return "chat"
 
 
-# Node 3: diagnosis_node (conditional) with Normalization
+# Node 3: diagnosis_node (conditional) with ExpertRunner
 def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
-    """Runs diagnosis agent if needed. Applies output normalization."""
-    from backend.agents.supervisor.service import call_diagnosis_agent
+    """Runs diagnosis using DiagnosisRunner with error policy."""
+    from backend.agents.supervisor.runners import DiagnosisRunner
     
     repo = state.get("repo")
     if not repo:
@@ -134,64 +134,116 @@ def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     if state.get("diagnosis_result"):
         return {}
     
-    # Null-safe access to user_context
     user_context = safe_get(state, "user_context", {})
-    user_level = safe_get(user_context, "level", "beginner")
     repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
     
     emit_event(
         EventType.NODE_STARTED,
         actor="diagnosis_node",
-        inputs={"repo": repo_id, "user_level": user_level},
+        inputs={"repo": repo_id},
     )
     
-    try:
-        raw_result = call_diagnosis_agent(
-            owner=repo["owner"],
-            repo=repo["name"],
-            user_level=user_level,
-        )
-        
-        # Normalize runner output (single normalization point)
-        normalized = normalize_runner_output(raw_result)
-        
-        if normalized.status == RunnerStatus.ERROR:
-            logger.error(f"Diagnosis returned error: {normalized.error_message}")
-            emit_event(
-                EventType.NODE_FINISHED,
-                actor="diagnosis_node",
-                inputs={"repo": repo_id},
-                outputs={"status": "error", "error": normalized.error_message},
-            )
-            return {"error_message": normalized.error_message or "진단 중 오류가 발생했습니다."}
-        
-        # Extract diagnosis result (Null-safe)
-        diagnosis_result = normalized.result
-        health_score = safe_get_nested(diagnosis_result, "scores", "health_score")
-        
+    # Run diagnosis using ExpertRunner
+    runner = DiagnosisRunner(
+        repo_id=repo_id,
+        user_context=user_context,
+    )
+    result = runner.run()
+    
+    if not result.success:
         emit_event(
             EventType.NODE_FINISHED,
             actor="diagnosis_node",
-            inputs={"repo": repo_id},
-            outputs={
-                "health_score": health_score,
-                "status": normalized.status.value,
-            },
+            outputs={"status": "error", "error": result.error_message},
         )
+        return {"error_message": result.error_message or "진단 중 오류가 발생했습니다."}
+    
+    # Get raw diagnosis result for state
+    diagnosis_result = runner.get_diagnosis_result()
+    
+    emit_event(
+        EventType.NODE_FINISHED,
+        actor="diagnosis_node",
+        outputs={
+            "status": "success",
+            "degraded": result.degraded,
+            "artifact_count": len(result.artifacts_out),
+        },
+    )
+    
+    return {
+        "diagnosis_result": diagnosis_result,
+        "_expert_result": result,  # Store for summarize node if needed
+    }
+
+
+# Node 3b: expert_node (for compare/onepager)
+def expert_node(state: SupervisorState) -> Dict[str, Any]:
+    """Runs specialized expert runners (compare, onepager)."""
+    from backend.agents.supervisor.runners import CompareRunner, OnepagerRunner
+    
+    intent = state.get("intent", "analyze")
+    sub_intent = state.get("sub_intent", "health")
+    repo = state.get("repo")
+    user_context = safe_get(state, "user_context", {})
+    
+    if not repo:
+        return {"error_message": "저장소 정보가 없습니다."}
+    
+    repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
+    
+    emit_event(
+        EventType.NODE_STARTED,
+        actor="expert_node",
+        inputs={"intent": intent, "sub_intent": sub_intent, "repo": repo_id},
+    )
+    
+    # Select appropriate runner
+    if sub_intent == "compare":
+        # For compare, need second repo from query parsing
+        repo_b = safe_get(state, "compare_repo")
+        if not repo_b:
+            return {"error_message": "비교할 두 번째 저장소가 필요합니다."}
         
-        return {"diagnosis_result": diagnosis_result}
-        
-    except Exception as e:
-        logger.error(f"Diagnosis failed: {e}")
-        
-        emit_event(
-            EventType.NODE_FINISHED,
-            actor="diagnosis_node",
-            inputs={"repo": repo_id},
-            outputs={"status": "error", "error": str(e)},
+        repo_b_id = f"{safe_get(repo_b, 'owner', '')}/{safe_get(repo_b, 'name', '')}"
+        runner = CompareRunner(
+            repo_a=repo_id,
+            repo_b=repo_b_id,
+            user_context=user_context,
         )
-        
-        return {"error_message": f"진단 중 오류가 발생했습니다: {str(e)}"}
+    elif sub_intent == "onepager":
+        runner = OnepagerRunner(
+            repo_id=repo_id,
+            user_context=user_context,
+        )
+    else:
+        # Fallback to diagnosis
+        from backend.agents.supervisor.runners import DiagnosisRunner
+        runner = DiagnosisRunner(
+            repo_id=repo_id,
+            user_context=user_context,
+        )
+    
+    result = runner.run()
+    
+    emit_event(
+        EventType.NODE_FINISHED,
+        actor="expert_node",
+        outputs={
+            "status": "success" if result.success else "error",
+            "degraded": result.degraded,
+            "runner": runner.runner_name,
+        },
+    )
+    
+    if not result.success:
+        return {"error_message": result.error_message}
+    
+    # Store expert result for summarize node
+    return {
+        "_expert_result": result,
+        "_expert_answer": result.answer.model_dump() if result.answer else None,
+    }
 
 
 # Node 4: summarize_node (with idempotency)

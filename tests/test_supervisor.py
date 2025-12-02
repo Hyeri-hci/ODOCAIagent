@@ -818,5 +818,166 @@ class TestFollowupPlanner:
         assert get_answer_kind("followup", "evidence") == "explain"
 
 
+class TestExpertRunner:
+    """Expert Runner 테스트: sources 필수, 에러 정책, 디그레이드."""
+    
+    def test_runner_result_success(self):
+        """RunnerResult.ok 생성."""
+        from backend.agents.supervisor.runners.base import RunnerResult
+        from backend.agents.shared.contracts import AnswerContract
+        
+        answer = AnswerContract(
+            text="Test",
+            sources=["ARTIFACT:TEST:repo"],
+            source_kinds=["test"],
+        )
+        result = RunnerResult.ok(
+            answer=answer,
+            artifacts_out=["ARTIFACT:TEST:repo"],
+        )
+        
+        assert result.success is True
+        assert result.degraded is False
+        assert len(result.artifacts_out) == 1
+    
+    def test_runner_result_degraded(self):
+        """RunnerResult.degraded_ok 생성."""
+        from backend.agents.supervisor.runners.base import RunnerResult
+        from backend.agents.shared.contracts import AnswerContract
+        
+        answer = AnswerContract(
+            text="Degraded response",
+            sources=["FALLBACK:repo"],
+            source_kinds=["fallback"],
+        )
+        result = RunnerResult.degraded_ok(
+            answer=answer,
+            artifacts_out=["FALLBACK:repo"],
+            reason="test_degrade",
+        )
+        
+        assert result.success is True
+        assert result.degraded is True
+        assert result.meta.get("degrade_reason") == "test_degrade"
+    
+    def test_artifact_collector(self):
+        """ArtifactCollector 기능."""
+        from backend.agents.supervisor.runners.base import ArtifactCollector
+        
+        collector = ArtifactCollector("test/repo")
+        
+        # Add artifacts
+        aid = collector.add("overview", {"stars": 100})
+        assert "ARTIFACT:OVERVIEW:test/repo" in aid
+        
+        collector.add("readme", "# Title", required=False)
+        
+        # Get artifacts
+        assert collector.get("overview") == {"stars": 100}
+        assert collector.get("readme") == "# Title"
+        assert collector.get("missing") is None
+        
+        # IDs and kinds
+        assert len(collector.get_ids()) == 2
+        assert "overview" in collector.get_kinds()
+    
+    def test_artifact_collector_missing_required(self):
+        """필수 아티팩트 누락 감지."""
+        from backend.agents.supervisor.runners.base import ArtifactCollector
+        
+        collector = ArtifactCollector("test/repo")
+        collector.add("overview", None, required=True)  # None data
+        collector.add("readme", "content", required=False)
+        
+        assert not collector.has_required()
+        assert "overview" in collector.missing_required()
+    
+    def test_error_policy_mapping(self):
+        """에러 종류별 정책 매핑."""
+        from backend.agents.supervisor.runners.base import ExpertRunner, ErrorPolicy
+        
+        # Mock runner for testing
+        class TestRunner(ExpertRunner):
+            runner_name = "test"
+            def _collect_artifacts(self): pass
+            def _execute(self): pass
+        
+        runner = TestRunner("test/repo")
+        
+        assert runner._get_error_policy("rate limit exceeded") == ErrorPolicy.RETRY
+        assert runner._get_error_policy("timeout error") == ErrorPolicy.RETRY
+        assert runner._get_error_policy("not found") == ErrorPolicy.ASK_USER
+        assert runner._get_error_policy("permission denied") == ErrorPolicy.ASK_USER
+        assert runner._get_error_policy("no data available") == ErrorPolicy.FALLBACK
+    
+    def test_diagnosis_runner_builds_answer_with_sources(self):
+        """DiagnosisRunner가 sources 포함 AnswerContract 생성."""
+        from backend.agents.supervisor.runners.base import ArtifactCollector
+        from backend.agents.shared.contracts import AnswerContract
+        
+        # Test _build_answer method
+        collector = ArtifactCollector("test/repo")
+        collector.add("diagnosis_scores", {"health_score": 75})
+        collector.add("diagnosis_labels", {"health_level": "good"})
+        
+        # Build answer with sources
+        sources = collector.get_ids()
+        kinds = collector.get_kinds()
+        
+        answer = AnswerContract(
+            text="Test diagnosis",
+            sources=sources,
+            source_kinds=kinds,
+        )
+        
+        assert len(answer.sources) >= 2
+        assert "diagnosis_scores" in answer.source_kinds
+    
+    def test_runner_validates_empty_sources(self):
+        """Empty sources 검증 및 자동 채움."""
+        from backend.agents.supervisor.runners.base import ExpertRunner
+        from backend.agents.shared.contracts import AnswerContract
+        
+        class TestRunner(ExpertRunner):
+            runner_name = "test"
+            def _collect_artifacts(self):
+                self.collector.add("test_artifact", {"data": "value"})
+            def _execute(self):
+                pass
+        
+        runner = TestRunner("test/repo")
+        runner._collect_artifacts()
+        
+        # Empty sources answer
+        answer = AnswerContract(text="Test", sources=[], source_kinds=[])
+        runner._validate_answer_contract(answer)
+        
+        # Should auto-fill from collector
+        assert len(answer.sources) > 0
+    
+    def test_compare_runner_structure(self):
+        """CompareRunner 구조 검증."""
+        from backend.agents.supervisor.runners import CompareRunner
+        
+        runner = CompareRunner(
+            repo_a="facebook/react",
+            repo_b="vuejs/vue",
+        )
+        
+        assert runner.runner_name == "compare"
+        assert runner.repo_a == "facebook/react"
+        assert runner.repo_b == "vuejs/vue"
+        assert "repo_a_overview" in runner.required_artifacts
+    
+    def test_onepager_runner_structure(self):
+        """OnepagerRunner 구조 검증."""
+        from backend.agents.supervisor.runners import OnepagerRunner
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        
+        assert runner.runner_name == "onepager"
+        assert "repo_overview" in runner.required_artifacts
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

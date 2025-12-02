@@ -70,6 +70,10 @@ class EventType(str, Enum):
     NODE_STARTED = "node.started"
     NODE_FINISHED = "node.finished"
     
+    # Runner Level (Expert Runners)
+    RUNNER_STARTED = "runner.started"
+    RUNNER_FINISHED = "runner.finished"
+    
     # Artifact Level
     ARTIFACT_CREATED = "artifact.created"
     ARTIFACT_REFERENCED = "artifact.referenced"
