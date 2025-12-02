@@ -979,7 +979,7 @@ class TestExpertRunner:
         runner = OnepagerRunner(repo_id="test/repo")
         
         assert runner.runner_name == "onepager"
-        assert "repo_overview" in runner.required_artifacts
+        assert "repo_facts" in runner.required_artifacts
 
 
 class TestAgenticPlanning:
@@ -2704,6 +2704,194 @@ class TestRefineEventTracking:
         
         # text가 비어있지 않아야 함
         assert len(answer_contract.get("text", "")) > 0
+
+
+class TestOnepagerMVP:
+    """One-pager MVP 테스트: 4섹션, Tier 기반, 가드."""
+    
+    def test_onepager_tier_enum(self):
+        """Tier enum 정의."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerTier
+        
+        assert OnepagerTier.TIER_1.value == "tier_1"
+        assert OnepagerTier.TIER_2.value == "tier_2"
+        assert OnepagerTier.TIER_3.value == "tier_3"
+        assert OnepagerTier.NONE.value == "none"
+    
+    def test_onepager_artifacts_tier_detection(self):
+        """아티팩트 Tier 감지."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerArtifacts, OnepagerTier
+        
+        # NONE: 아무것도 없음
+        artifacts = OnepagerArtifacts()
+        assert artifacts.get_tier() == OnepagerTier.NONE
+        
+        # TIER_3: repo_facts만
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        assert artifacts.get_tier() == OnepagerTier.TIER_3
+        
+        # TIER_2: repo_facts + readme_head
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"}, readme_head="# README")
+        assert artifacts.get_tier() == OnepagerTier.TIER_2
+        
+        # TIER_1: repo_facts + python_metrics
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"}, python_metrics={"health_score": 80})
+        assert artifacts.get_tier() == OnepagerTier.TIER_1
+        
+        # TIER_1: repo_facts + diagnosis_raw
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"}, diagnosis_raw={"scores": {}})
+        assert artifacts.get_tier() == OnepagerTier.TIER_1
+    
+    def test_onepager_artifacts_source_ids(self):
+        """아티팩트 source ID 목록."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerArtifacts
+        
+        artifacts = OnepagerArtifacts(
+            repo_facts={"name": "test"},
+            readme_head="# README",
+            python_metrics={"health_score": 80},
+        )
+        
+        sources = artifacts.get_source_ids()
+        assert "repo_facts" in sources
+        assert "readme_head" in sources
+        assert "python_metrics" in sources
+        assert len(sources) == 3
+    
+    def test_onepager_guard_no_repo_facts(self):
+        """가드: repo_facts 없으면 실패."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        # _artifacts가 비어있음
+        can_proceed, error = runner._onepager_guard()
+        
+        assert can_proceed is False
+        assert "기본 정보" in error
+    
+    def test_onepager_guard_with_repo_facts(self):
+        """가드: repo_facts 있으면 통과."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        runner._artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        
+        can_proceed, error = runner._onepager_guard()
+        
+        assert can_proceed is True
+        assert error is None
+    
+    def test_onepager_guard_access_error(self):
+        """가드: 접근 오류 감지."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        runner._artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        runner.collector.add_error("repo_facts", "NOT_FOUND: Repository not found")
+        
+        can_proceed, error = runner._onepager_guard()
+        
+        assert can_proceed is False
+        assert "비공개" in error or "찾을 수 없" in error
+    
+    def test_onepager_sources_minimum_tier2(self):
+        """Tier 2/3: sources ≥ 2개."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerArtifacts, OnepagerTier
+        
+        # Tier 2
+        artifacts = OnepagerArtifacts(repo_facts={"name": "test"}, readme_head="# README")
+        sources = artifacts.get_source_ids()
+        
+        assert len(sources) >= 2
+        assert "repo_facts" in sources
+    
+    def test_onepager_sources_minimum_tier1(self):
+        """Tier 1: sources ≥ 3개."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerArtifacts, OnepagerTier
+        
+        # Tier 1 with all artifacts
+        artifacts = OnepagerArtifacts(
+            repo_facts={"name": "test"},
+            readme_head="# README",
+            python_metrics={"health_score": 80},
+            diagnosis_raw={"scores": {}},
+        )
+        sources = artifacts.get_source_ids()
+        
+        assert len(sources) >= 3
+        assert artifacts.get_tier() == OnepagerTier.TIER_1
+    
+    def test_onepager_fallback_template_has_4_sections(self):
+        """Fallback 템플릿: 4섹션 포함."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts
+        
+        runner = OnepagerRunner(repo_id="facebook/react")
+        runner._artifacts = OnepagerArtifacts(
+            repo_facts={
+                "description": "UI library",
+                "language": "JavaScript",
+                "stargazers_count": 200000,
+                "forks_count": 40000,
+            }
+        )
+        
+        text = runner._build_fallback_onepager()
+        
+        # 4섹션 확인
+        assert "1. 개요" in text or "개요" in text
+        assert "2. 장점" in text or "장점" in text
+        assert "3. 리스크" in text or "리스크" in text
+        assert "4. 즉시 행동" in text or "즉시 행동" in text or "Top-3" in text
+    
+    def test_onepager_tier3_disclaimer(self):
+        """Tier 3: 데이터 부족 경고 포함."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts, OnepagerTier
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        runner._artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        runner._tier = OnepagerTier.TIER_3
+        
+        text = runner._build_fallback_onepager()
+        
+        # Tier 3 disclaimer
+        assert "데이터 부족" in text or "상세 분석" in text
+    
+    def test_onepager_sources_never_empty(self):
+        """sources는 절대 빈 배열 금지."""
+        from backend.agents.supervisor.runners.onepager_runner import OnepagerRunner, OnepagerArtifacts
+        
+        runner = OnepagerRunner(repo_id="test/repo")
+        runner._artifacts = OnepagerArtifacts(repo_facts={"name": "test"})
+        runner._tier = runner._artifacts.get_tier()
+        
+        # _execute 호출 없이 sources 체크
+        sources = runner._artifacts.get_source_ids()
+        
+        # 최소 1개 이상
+        assert len(sources) >= 1
+        assert "repo_facts" in sources
+
+
+class TestOnepagerIntegration:
+    """One-pager 통합 테스트."""
+    
+    def test_onepager_pattern_detection(self):
+        """한 장 요약 패턴 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_onepager
+        
+        assert _detect_onepager("facebook/react 한 장 요약 만들어줘")
+        assert _detect_onepager("한페이지 요약해줘")
+        assert _detect_onepager("one-pager 만들어줘")
+    
+    def test_onepager_routing(self):
+        """onepager → analyze/onepager 라우팅."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        result = _tier1_heuristic("facebook/react 한 장 요약 만들어줘")
+        
+        assert result is not None
+        assert result.intent == "analyze"
+        assert result.sub_intent == "onepager"
 
 
 if __name__ == "__main__":
