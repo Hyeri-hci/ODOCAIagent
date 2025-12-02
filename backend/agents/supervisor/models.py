@@ -11,9 +11,13 @@ SupervisorIntent = Literal["analyze", "followup", "general_qa", "smalltalk", "he
 SubIntent = Literal[
     "health",          # analyze: repo health diagnosis
     "onboarding",      # analyze: onboarding-focused diagnosis
+    "compare",         # analyze: compare two repos
+    "onepager",        # analyze: one-page summary
     "explain",         # followup: explain scores/metrics
     "evidence",        # followup: explain evidence/reasoning
+    "refine",          # followup: refine/filter previous results
     "chat",            # general_qa: general conversation
+    "concept",         # general_qa: concept explanation
     "greeting",        # smalltalk: greeting response
     "chitchat",        # smalltalk: casual chat
     "getting_started", # help: usage guide
@@ -23,8 +27,12 @@ SubIntent = Literal[
 # V1 Answer kinds for UI badges
 AnswerKind = Literal[
     "report",    # analyze → health/onboarding
-    "explain",   # followup → explain
+    "compare",   # analyze → compare
+    "onepager",  # analyze → onepager
+    "explain",   # followup → explain/evidence
+    "refine",    # followup → refine tasks
     "chat",      # general_qa → chat
+    "concept",   # general_qa → concept
     "greeting",  # smalltalk → greeting
 ]
 
@@ -69,6 +77,7 @@ class SupervisorState(TypedDict, total=False):
     # === Input ===
     user_query: str
     repo: RepoInfo
+    compare_repo: RepoInfo  # Second repo for compare
     user_context: UserContext
     
     # === Routing/Meta ===

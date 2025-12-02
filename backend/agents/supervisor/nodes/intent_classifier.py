@@ -70,6 +70,27 @@ FOLLOWUP_PATTERNS = [
 # Follow-up 키워드 (부분 매칭)
 FOLLOWUP_KEYWORDS = {"근거", "이유", "왜", "출처", "어디서", "자세히", "더 설명", "방금"}
 
+# Compare 패턴 (두 개의 repo 비교)
+COMPARE_PATTERNS = [
+    r"(.+)(랑|와|과|vs|versus|compared?\s*to)\s*(.+)\s*(비교|compare)",
+    r"(비교|compare)\s*(.+)(랑|와|과|vs)\s*(.+)",
+    r"(.+)(이랑|하고)\s*(.+)\s*(비교)",
+]
+
+# One-pager/요약 패턴
+ONEPAGER_PATTERNS = [
+    r"(한\s*장|원페이저|one.?pager|요약|정리).*(만들어|생성|줘|해줘)",
+    r"(발표|보고|브리핑).*(자료|요약)",
+    r"(정리|요약).*(한\s*장|간단히)",
+]
+
+# Refine 패턴 (Task 재필터링)
+REFINE_PATTERNS = [
+    r"(급한|중요한|쉬운|어려운).*(것|거).*(정리|추려|골라|다시)",
+    r"(\d+)개.*(만|정리|다시|추려)",
+    r"(우선순위|priority).*(정렬|순서)",
+]
+
 ANALYSIS_KEYWORDS = {"분석", "진단", "건강", "온보딩", "기여", "점수", "상태", "어때", "analyze", "health"}
 CHITCHAT_KEYWORDS = {"고마워", "감사", "thanks", "ㅋㅋ", "ㅎㅎ", "좋아", "굿", "ok", "알겠어", "ㅇㅋ"}
 
@@ -82,6 +103,7 @@ class ClassifyResult:
     repo: Optional[RepoInfo]
     confidence: float
     method: str  # "heuristic" | "llm" | "degrade"
+    compare_repo: Optional[RepoInfo] = None  # Second repo for compare
 
 
 def _has_repo_pattern(query: str) -> bool:
@@ -123,6 +145,22 @@ def _is_short_or_emoji(query: str) -> bool:
 def _tier1_heuristic(query: str, has_prev_artifacts: bool = False) -> Optional[ClassifyResult]:
     """Tier-1: Rule-based classification (no LLM, high confidence)."""
     q = query.lower().strip()
+    
+    # Compare detection (두 개의 repo 비교)
+    is_compare, repo_a, repo_b = _detect_compare(query)
+    if is_compare and repo_a and repo_b:
+        result = ClassifyResult("analyze", "compare", repo_a, 1.0, "heuristic")
+        result.compare_repo = repo_b  # type: ignore
+        return result
+    
+    # Refine detection (직전 턴 아티팩트 있을 때만, one-pager보다 먼저 체크)
+    if _detect_refine(query, has_prev_artifacts):
+        return ClassifyResult("followup", "refine", None, 1.0, "heuristic")
+    
+    # One-pager detection
+    if _detect_onepager(query):
+        repo = _extract_repo(query)
+        return ClassifyResult("analyze", "onepager", repo, 1.0, "heuristic")
     
     # Follow-up detection (직전 턴 아티팩트 있을 때만)
     if _detect_followup(query, has_prev_artifacts):
@@ -184,6 +222,58 @@ def _extract_repo(query: str) -> Optional[RepoInfo]:
         return {"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}"}
     
     return None
+
+
+def _extract_two_repos(query: str) -> Tuple[Optional[RepoInfo], Optional[RepoInfo]]:
+    """Extract two GitHub repos from query for comparison."""
+    repos = []
+    
+    # Find all owner/repo patterns
+    patterns = re.findall(r"([a-zA-Z][a-zA-Z0-9_-]*)/([a-zA-Z0-9_.-]+)", query)
+    for owner, name in patterns:
+        # Skip common false positives
+        if owner.lower() in ("http", "https", "www", "github"):
+            continue
+        repos.append({"owner": owner, "name": name, "url": f"https://github.com/{owner}/{name}"})
+    
+    if len(repos) >= 2:
+        return repos[0], repos[1]
+    elif len(repos) == 1:
+        return repos[0], None
+    return None, None
+
+
+def _detect_compare(query: str) -> Tuple[bool, Optional[RepoInfo], Optional[RepoInfo]]:
+    """Detect compare intent and extract two repos."""
+    q = query.lower().strip()
+    
+    for p in COMPARE_PATTERNS:
+        if re.search(p, q, re.IGNORECASE):
+            repo_a, repo_b = _extract_two_repos(query)
+            if repo_a and repo_b:
+                return True, repo_a, repo_b
+    
+    return False, None, None
+
+
+def _detect_onepager(query: str) -> bool:
+    """Detect one-pager/summary request."""
+    q = query.lower().strip()
+    for p in ONEPAGER_PATTERNS:
+        if re.search(p, q, re.IGNORECASE):
+            return True
+    return False
+
+
+def _detect_refine(query: str, has_prev_artifacts: bool) -> bool:
+    """Detect refine/filter request for previous results."""
+    if not has_prev_artifacts:
+        return False
+    q = query.lower().strip()
+    for p in REFINE_PATTERNS:
+        if re.search(p, q, re.IGNORECASE):
+            return True
+    return False
 
 
 INTENT_SYSTEM_PROMPT = """당신은 OSS 온보딩 플랫폼 ODOC의 Intent 분류기입니다.
@@ -334,6 +424,8 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     new_state["sub_intent"] = result.sub_intent
     if result.repo:
         new_state["repo"] = result.repo
+    if result.compare_repo:
+        new_state["compare_repo"] = result.compare_repo
     
     # Store confidence for routing decisions
     new_state["_classification_confidence"] = result.confidence  # type: ignore

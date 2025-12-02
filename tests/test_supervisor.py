@@ -16,13 +16,16 @@ class TestIntentConfig:
         # V1 지원
         assert is_v1_supported("analyze", "health")
         assert is_v1_supported("analyze", "onboarding")
+        assert is_v1_supported("analyze", "compare")
+        assert is_v1_supported("analyze", "onepager")
         assert is_v1_supported("followup", "explain")
+        assert is_v1_supported("followup", "evidence")
+        assert is_v1_supported("followup", "refine")
         assert is_v1_supported("general_qa", "chat")
         assert is_v1_supported("smalltalk", "greeting")
         
         # V1 미지원
-        assert not is_v1_supported("analyze", "compare")
-        assert not is_v1_supported("followup", "refine")
+        assert not is_v1_supported("unknown", "unknown")
     
     def test_intent_meta(self):
         """Intent 메타데이터 검증."""
@@ -1847,6 +1850,148 @@ class TestWeeklyReport:
         assert "slo_status" in metrics
         assert "deployment" in metrics
         assert "all_passed" in metrics["slo_status"]
+
+
+# Compare/Onepager/Followup 테스트
+class TestCompareOnepagerFollowup:
+    """Compare, One-pager, Follow-up 경로 테스트."""
+    
+    def test_compare_pattern_detection(self):
+        """Compare 패턴 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import (
+            _detect_compare,
+            _tier1_heuristic,
+        )
+        
+        # 정상 compare 감지
+        is_compare, repo_a, repo_b = _detect_compare("facebook/react랑 vuejs/core 비교해줘")
+        assert is_compare is True
+        assert repo_a is not None
+        assert repo_b is not None
+        assert repo_a["owner"] == "facebook"
+        assert repo_b["owner"] == "vuejs"
+        
+        # heuristic에서도 compare로 분류
+        result = _tier1_heuristic("facebook/react랑 vuejs/core 비교해줘", False)
+        assert result is not None
+        assert result.intent == "analyze"
+        assert result.sub_intent == "compare"
+        assert result.compare_repo is not None
+    
+    def test_compare_various_patterns(self):
+        """다양한 compare 패턴."""
+        from backend.agents.supervisor.nodes.intent_classifier import _detect_compare
+        
+        patterns = [
+            ("facebook/react vs vuejs/core 비교", True),
+            ("react와 vue 비교해줘", False),  # repo 형식 아님
+            ("facebook/react랑 vuejs/core 비교해줘", True),
+            ("vuejs/core과 facebook/react 비교", True),
+        ]
+        
+        for query, expected in patterns:
+            is_compare, _, _ = _detect_compare(query)
+            assert is_compare == expected, f"Failed for: {query}"
+    
+    def test_onepager_pattern_detection(self):
+        """One-pager 패턴 감지."""
+        from backend.agents.supervisor.nodes.intent_classifier import (
+            _detect_onepager,
+            _tier1_heuristic,
+        )
+        
+        # One-pager 패턴
+        assert _detect_onepager("facebook/react 한 장 요약 만들어줘") is True
+        assert _detect_onepager("원페이저 만들어줘") is True
+        assert _detect_onepager("발표 자료 만들어줘") is True
+        
+        # heuristic에서 onepager로 분류
+        result = _tier1_heuristic("facebook/react 한 장 요약 만들어줘", False)
+        assert result is not None
+        assert result.intent == "analyze"
+        assert result.sub_intent == "onepager"
+    
+    def test_refine_pattern_detection(self):
+        """Refine 패턴 감지 (직전 아티팩트 있을 때만)."""
+        from backend.agents.supervisor.nodes.intent_classifier import (
+            _detect_refine,
+            _tier1_heuristic,
+        )
+        
+        # 아티팩트 없으면 감지 안 됨
+        assert _detect_refine("급한 거 3개만 정리해줘", False) is False
+        
+        # 아티팩트 있으면 감지
+        assert _detect_refine("급한 거 3개만 정리해줘", True) is True
+        assert _detect_refine("우선순위 정렬해줘", True) is True
+        
+        # heuristic (아티팩트 있을 때)
+        result = _tier1_heuristic("급한 거 3개만 정리해줘", True)
+        assert result is not None
+        assert result.intent == "followup"
+        assert result.sub_intent == "refine"
+    
+    def test_graph_routing_compare(self):
+        """Compare 경로가 expert로 라우팅."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "compare",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+            "compare_repo": {"owner": "vuejs", "name": "core", "url": ""},
+        }
+        
+        route = should_run_diagnosis(state)  # type: ignore
+        assert route == "expert"
+    
+    def test_graph_routing_onepager(self):
+        """Onepager 경로가 expert로 라우팅."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "analyze",
+            "sub_intent": "onepager",
+            "repo": {"owner": "facebook", "name": "react", "url": ""},
+        }
+        
+        route = should_run_diagnosis(state)  # type: ignore
+        assert route == "expert"
+    
+    def test_graph_routing_followup(self):
+        """Followup 경로가 summarize로 라우팅."""
+        from backend.agents.supervisor.graph import should_run_diagnosis
+        
+        state = {
+            "intent": "followup",
+            "sub_intent": "evidence",
+        }
+        
+        route = should_run_diagnosis(state)  # type: ignore
+        assert route == "summarize"
+    
+    def test_followup_evidence_detection(self):
+        """Followup evidence 감지 (직전 아티팩트 있을 때)."""
+        from backend.agents.supervisor.nodes.intent_classifier import _tier1_heuristic
+        
+        # 아티팩트 없으면 followup 아님
+        result = _tier1_heuristic("그 결과는 어디서 나온 거야?", False)
+        assert result is None or result.intent != "followup"
+        
+        # 아티팩트 있으면 followup
+        result = _tier1_heuristic("그 결과는 어디서 나온 거야?", True)
+        assert result is not None
+        assert result.intent == "followup"
+        assert result.sub_intent == "evidence"
+    
+    def test_answer_kind_mapping(self):
+        """새 sub_intent들의 answer_kind 매핑."""
+        from backend.agents.supervisor.intent_config import get_answer_kind
+        
+        assert get_answer_kind("analyze", "compare") == "compare"
+        assert get_answer_kind("analyze", "onepager") == "onepager"
+        assert get_answer_kind("followup", "refine") == "refine"
+        assert get_answer_kind("followup", "evidence") == "explain"
 
 
 if __name__ == "__main__":

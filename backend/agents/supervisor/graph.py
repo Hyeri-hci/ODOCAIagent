@@ -303,7 +303,7 @@ def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
 
 # Routing: should_run_diagnosis (hierarchical routing)
 def should_run_diagnosis(state: SupervisorState) -> str:
-    """Hierarchical routing: only run diagnosis for analyze intent with high confidence."""
+    """Hierarchical routing: route to appropriate node based on intent."""
     intent = state.get("intent", DEFAULT_INTENT)
     sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
     
@@ -326,27 +326,33 @@ def should_run_diagnosis(state: SupervisorState) -> str:
     if meta["requires_repo"] and not state.get("repo"):
         return "summarize"
     
+    # Compare/Onepager → expert_node
+    if sub_intent in ("compare", "onepager"):
+        logger.debug(f"[route] Expert path: {intent}.{sub_intent} → expert")
+        return "expert"
+    
     # Run diagnosis only for analyze intent
     if intent == "analyze" and not state.get("diagnosis_result"):
         return "diagnosis"
     
     # followup/explain needs diagnosis_result but should NOT re-run diagnosis
-    if intent == "followup" and sub_intent == "explain":
-        if not state.get("diagnosis_result"):
-            return "summarize"
+    if intent == "followup":
+        # evidence/explain → summarize (uses existing diagnosis_result)
+        return "summarize"
     
     return "summarize"
 
 
 # Graph Builder
 def build_supervisor_graph():
-    """Builds V1 Supervisor Graph: init → classify → diagnosis(conditional) → summarize."""
+    """Builds V1 Supervisor Graph: init → classify → diagnosis/expert(conditional) → summarize."""
     graph = StateGraph(SupervisorState)
 
-    # Add 4 nodes
+    # Add 5 nodes
     graph.add_node("init", init_node)
     graph.add_node("classify", classify_node)
     graph.add_node("diagnosis", diagnosis_node)
+    graph.add_node("expert", expert_node)
     graph.add_node("summarize", summarize_node_wrapper)
 
     # Set entry point
@@ -355,21 +361,24 @@ def build_supervisor_graph():
     # Linear flow: init → classify
     graph.add_edge("init", "classify")
     
-    # Conditional: classify → diagnosis OR summarize
+    # Conditional: classify → diagnosis OR expert OR summarize
     graph.add_conditional_edges(
         "classify",
         should_run_diagnosis,
         {
             "diagnosis": "diagnosis",
+            "expert": "expert",
             "summarize": "summarize",
         },
     )
 
     # diagnosis → summarize → END
     graph.add_edge("diagnosis", "summarize")
+    # expert → summarize → END
+    graph.add_edge("expert", "summarize")
     graph.add_edge("summarize", END)
 
-    logger.info("Built V1 Supervisor Graph (4 nodes)")
+    logger.info("Built V1 Supervisor Graph (5 nodes)")
     return graph.compile()
 
 

@@ -13,7 +13,14 @@ from .models import (
 
 
 VALID_INTENTS: list[str] = ["analyze", "followup", "general_qa", "smalltalk", "help", "overview"]
-VALID_SUB_INTENTS: list[str] = ["health", "onboarding", "explain", "evidence", "chat", "greeting", "chitchat", "getting_started", "concept", "repo"]
+VALID_SUB_INTENTS: list[str] = [
+    "health", "onboarding", "compare", "onepager",  # analyze
+    "explain", "evidence", "refine",                 # followup
+    "chat", "concept",                                # general_qa
+    "greeting", "chitchat",                           # smalltalk
+    "getting_started",                                # help
+    "repo",                                           # overview
+]
 
 
 # Confidence thresholds for hierarchical routing (Step 8: 의도별 임계)
@@ -71,8 +78,11 @@ def should_disambiguate(intent: str, confidence: float) -> bool:
 V1_SUPPORTED_INTENTS: Set[Tuple[str, str]] = {
     ("analyze", "health"),
     ("analyze", "onboarding"),
+    ("analyze", "compare"),
+    ("analyze", "onepager"),
     ("followup", "explain"),
     ("followup", "evidence"),
+    ("followup", "refine"),
     ("general_qa", "chat"),
     ("general_qa", "concept"),
     ("smalltalk", "greeting"),
@@ -96,8 +106,11 @@ class IntentMeta(TypedDict):
 INTENT_META: dict[Tuple[str, str], IntentMeta] = {
     ("analyze", "health"): {"requires_repo": True, "runs_diagnosis": True},
     ("analyze", "onboarding"): {"requires_repo": True, "runs_diagnosis": True},
+    ("analyze", "compare"): {"requires_repo": True, "runs_diagnosis": False},  # expert_node
+    ("analyze", "onepager"): {"requires_repo": True, "runs_diagnosis": False},  # expert_node
     ("followup", "explain"): {"requires_repo": True, "runs_diagnosis": True},
     ("followup", "evidence"): {"requires_repo": False, "runs_diagnosis": False},
+    ("followup", "refine"): {"requires_repo": False, "runs_diagnosis": False},
     ("general_qa", "concept"): {"requires_repo": False, "runs_diagnosis": False},
     ("general_qa", "chat"): {"requires_repo": False, "runs_diagnosis": False},
     ("smalltalk", "greeting"): {"requires_repo": False, "runs_diagnosis": False},
@@ -112,9 +125,12 @@ DEFAULT_INTENT_META: IntentMeta = {"requires_repo": False, "runs_diagnosis": Fal
 ANSWER_KIND_MAP: dict[tuple[str, str], AnswerKind] = {
     ("analyze", "health"): "report",
     ("analyze", "onboarding"): "report",
+    ("analyze", "compare"): "compare",
+    ("analyze", "onepager"): "onepager",
     ("followup", "explain"): "explain",
     ("followup", "evidence"): "explain",
-    ("general_qa", "concept"): "chat",
+    ("followup", "refine"): "refine",
+    ("general_qa", "concept"): "concept",
     ("general_qa", "chat"): "chat",
     ("smalltalk", "greeting"): "greeting",
     ("smalltalk", "chitchat"): "greeting",
