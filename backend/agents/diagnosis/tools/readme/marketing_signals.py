@@ -25,6 +25,7 @@ class MarketingSignals:
     
     # 배지 비율
     badge_counts: Dict[str, int] = field(default_factory=dict)
+    badge_urls: List[str] = field(default_factory=list)  # 배지 URL 목록
     promo_badge_ratio: float = 0.0
     
     # 템플릿 유사도 (3-gram Jaccard)
@@ -203,8 +204,10 @@ def extract_marketing_signals(readme_content: str, token_count: int = 0) -> Mark
     badges = BADGE_PATTERN.findall(readme_content)
     tech_count = 0
     promo_count = 0
+    badge_urls = []
     
     for alt_text, url in badges:
+        badge_urls.append(url)
         combined = (alt_text + " " + url).lower()
         
         is_tech = any(kw in combined for kw in TECH_BADGE_KEYWORDS)
@@ -216,6 +219,7 @@ def extract_marketing_signals(readme_content: str, token_count: int = 0) -> Mark
             promo_count += 1
     
     signals.badge_counts = {"tech": tech_count, "promo": promo_count, "total": len(badges)}
+    signals.badge_urls = badge_urls
     
     total_badges = tech_count + promo_count
     if total_badges > 0:

@@ -11,59 +11,87 @@ readme:
 
 # 마케팅 편향 설정
 marketing:
-  threshold: 0.6        # tech_ratio 임계값 (이하면 페널티)
-  penalty_cap: 0.4      # 페널티 상한
-  template_bonus: 0.05  # 템플릿 유사도 > 0.9 시 추가 페널티
+  threshold: 0.6 # tech_ratio 임계값 (이하면 페널티)
+  penalty_cap: 0.4 # 페널티 상한
+  template_bonus: 0.05 # 템플릿 유사도 > 0.9 시 추가 페널티
+  
+  # Phase 2 추가: 마케팅 페널티 세부 설정
+  max_penalty: 30 # 최대 페널티 점수
+  density_threshold: 0.08 # 마케팅 밀도 임계값
+  unlinked_bullet_threshold: 5 # 비연결 불릿 임계값
+  badge_threshold: 8 # 배지 과다 임계값
+  template_similarity_threshold: 0.6 # 템플릿 유사도 임계값
 
 # 템플릿 유사도
 templates:
-  similarity_threshold: 0.9  # 이 이상이면 템플릿 의심
-  allowlist: []              # 합법 템플릿 제외 목록 (sha256 해시)
+  similarity_threshold: 0.9 # 이 이상이면 템플릿 의심
+  allowlist: [] # 합법 템플릿 제외 목록 (sha256 해시)
 
 # 교차검증(consilience) 가중치
 consilience:
   weights:
-    path: 0.4       # 파일 경로 검증
-    workflow: 0.35  # 워크플로/배지 검증
-    link: 0.25      # 외부 링크 검증
+    path: 0.4 # 파일 경로 검증
+    workflow: 0.35 # 워크플로/배지 검증
+    link: 0.25 # 외부 링크 검증
   timeout_seconds: 2.0
   link_timeout_seconds: 1.5
   cache_ttl_hours: 24
 
 # 문서 최신성
 freshness:
-  tau: 60  # 감쇠 상수 (일)
+  tau: 60 # 감쇠 상수 (일)
 
 # 유효 문서 점수
 docs:
-  floor: 35  # 바닥값
+  floor: 35 # 바닥값
   weights:
     raw: 0.55
     consilience: 0.25
     freshness: 0.20
+  
+  # Phase 2 추가: docs_effective 계산용
+  tech_score_weights:
+    code_blocks: 25
+    commands: 20
+    path_refs: 15
+    platforms: 15
+    density: 25
+  
+  effective_weights:
+    raw: 0.3
+    tech: 0.4
+    consilience: 0.3
 
 # 지속성 게이트 (Sustainability Gate)
 gate:
   # 최근성
   recency_days: 90
+  commit_recency_days: 180 # 필수 게이트: 마지막 커밋 임계값
   
   # 활동량
   commit_rate_per_week_90d: 0.5
   issue_or_pr_rate_per_week_90d: 0.3
-  
+  min_commits: 10 # 최소 커밋 수
+  min_authors: 1 # 최소 기여자 수
+
   # 반응성
   median_first_response_days: 14
-  
+
   # 릴리스
   last_release_days: 180
-  
+
   # 커뮤니티 (절대값 대신 상대적 지표)
   unique_contributors_90d: 1
   stars_delta_180d: 0
-  
+
   # 특수 케이스
   early_stage_days: 60
   archived_fail: true
+  
+  # 레벨 임계값
+  active_threshold_days: 30
+  maintained_threshold_days: 90
+  stale_threshold_days: 180
 
 # 기술 신호 패턴 (정규식)
 tech_patterns:
@@ -80,7 +108,7 @@ tech_patterns:
     - "poetry (install|add)"
     - "cargo (build|run)"
     - "go (build|run|get)"
-  
+
   paths:
     - "src/"
     - "app/"
