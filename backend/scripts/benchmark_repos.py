@@ -1,26 +1,10 @@
 """
 다중 레포지토리 벤치마크 실행 스크립트.
 
-이 스크립트는 여러 GitHub 레포지토리의 문서 점수, 활동성 점수, Health/Onboarding 레벨,
-그리고 의존성 복잡도 점수(dependency_complexity_score)의 분포를 수집하기 위한 도구입니다.
-
-수집된 데이터는 다음 목적으로 사용될 예정입니다:
-1. Health Level (Good/Warning/Bad) 임계값 검증 및 튜닝
-2. Onboarding Level (Easy/Normal/Hard) 임계값 검증 및 튜닝
-3. Dependency Complexity Score의 기준값(Low/Medium/High) 설정
-
-Note:
-- dependency_complexity_score는 NVD/취약점 리스크가 아니라,
-  "의존성 개수, 버전 고정 비율 등 구조적 복잡도 및 관리 난이도"를 반영하는 지표입니다.
-
 Usage:
     python backend/scripts/benchmark_repos.py
     python backend/scripts/benchmark_repos.py --preset oss_eval --output-format json
     python backend/scripts/benchmark_repos.py --output-path my_results.csv
-
-repos.txt Example:
-    Hyeri-hci/ODOCAIagent
-    someorg/somerepo@develop
 """
 import argparse
 import csv
@@ -132,7 +116,7 @@ def run_benchmark(repos: List[Tuple[str, str, str]]) -> List[Dict[str, Any]]:
                 entry["onboarding_score"] = result.onboarding_score
                 entry["onboarding_level"] = result.onboarding_level
                 
-                # 의존성 복잡도 (Step 12에서 이름 변경됨)
+                # 의존성 복잡도
                 entry["dependency_complexity_score"] = result.dependency_complexity_score
                 entry["dependency_flags"] = ",".join(result.dependency_flags) if result.dependency_flags else ""
                 
