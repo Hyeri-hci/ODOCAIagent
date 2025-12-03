@@ -11,6 +11,7 @@ from backend.core.models import (
     DiagnosisCoreResult,
     DependencySnapshot,
     DocsCoreResult,
+    ActivityCoreResult,
     ProjectRules,
     UserGuidelines,
 )
@@ -34,6 +35,7 @@ class SupervisorState(TypedDict):
     diagnosis_result: Optional[DiagnosisCoreResult]
     security_result: Optional[Any]  # SecurityResult placeholder
     docs_result: Optional[DocsCoreResult]
+    activity_result: Optional[ActivityCoreResult]
     
     # Context
     project_rules: Optional[ProjectRules]
@@ -43,4 +45,8 @@ class SupervisorState(TypedDict):
     task_type: Literal["diagnosis", "security", "diagnosis_and_security", "recommendation", "explain"]
     run_security: bool
     run_recommendation: bool
+    run_recommendation: bool
     last_answer_kind: Optional[Literal["diagnosis", "security", "recommendation", "explain"]]
+
+    # Error
+    error_message: Optional[str]

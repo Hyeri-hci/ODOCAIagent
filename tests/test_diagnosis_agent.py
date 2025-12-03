@@ -37,6 +37,11 @@ class TestDiagnosisAgent(unittest.TestCase):
         self.assertIsNotNone(diag)
         print(f"Diagnosis Result: Health={diag.health_score}, Level={diag.health_level}")
         
+        # - activity_result 존재 여부 (User Request)
+        act = result.get("activity_result")
+        self.assertIsNotNone(act)
+        print(f"Activity Result: Score={act.total_score}")
+        
         # - messages에 요약 메시지 추가 여부
         messages = result.get("messages", [])
         self.assertTrue(len(messages) > 0)

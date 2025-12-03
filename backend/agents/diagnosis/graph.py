@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import AIMessage
@@ -65,6 +65,7 @@ def run_diagnosis_core_node(state: SupervisorState) -> Dict[str, Any]:
         "dependency_snapshot": deps,
         "diagnosis_result": diagnosis,
         "docs_result": docs_result,
+        "activity_result": activity_result,
     }
 
 
@@ -96,6 +97,20 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     }
 
 
+def route_after_fetch(state: SupervisorState) -> Literal["run_diagnosis_core", "__end__"]:
+    """Fetch 실패 시 조기 종료."""
+    if state.get("error_message"):
+        return "__end__"
+    return "run_diagnosis_core"
+
+
+def route_after_core(state: SupervisorState) -> Literal["summarize_diagnosis", "__end__"]:
+    """Core 진단 실패 시 조기 종료."""
+    if state.get("error_message"):
+        return "__end__"
+    return "summarize_diagnosis"
+
+
 def build_diagnosis_agent_graph() -> StateGraph:
     """DiagnosisAgent 그래프 빌드."""
     graph = StateGraph(SupervisorState)
@@ -105,8 +120,25 @@ def build_diagnosis_agent_graph() -> StateGraph:
     graph.add_node("summarize_diagnosis", summarize_diagnosis_node)
 
     graph.set_entry_point("fetch_repo_data")
-    graph.add_edge("fetch_repo_data", "run_diagnosis_core")
-    graph.add_edge("run_diagnosis_core", "summarize_diagnosis")
+    
+    graph.add_conditional_edges(
+        "fetch_repo_data",
+        route_after_fetch,
+        {
+            "run_diagnosis_core": "run_diagnosis_core",
+            "__end__": END,
+        }
+    )
+    
+    graph.add_conditional_edges(
+        "run_diagnosis_core",
+        route_after_core,
+        {
+            "summarize_diagnosis": "summarize_diagnosis",
+            "__end__": END,
+        }
+    )
+    
     graph.add_edge("summarize_diagnosis", END)
 
     return graph
