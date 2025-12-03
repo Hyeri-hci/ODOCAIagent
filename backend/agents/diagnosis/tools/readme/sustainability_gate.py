@@ -98,7 +98,7 @@ def check_sustainability_gate(
     # 이슈 데이터 추출
     issue_data = activity_data.get("issue", {})
     open_issues = issue_data.get("open_issues", 0)
-    closed_in_window = issue_data.get("closed_in_window", 0)
+    closed_in_window = issue_data.get("closed_issues_in_window", 0)  # IssueActivityMetrics 필드명
     
     # PR 데이터 추출
     pr_data = activity_data.get("pr", {})
