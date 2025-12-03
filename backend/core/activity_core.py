@@ -13,14 +13,12 @@ from backend.common.github_client import (
     fetch_recent_pull_requests,
     DEFAULT_ACTIVITY_DAYS,
 )
-from .models import ActivityCoreResult
+from .models import ActivityCoreResult, RepoSnapshot
 
 logger = logging.getLogger(__name__)
 
 
-# -------------------------------------------------------------------------
 # 1. Data Structures (CHAOSS Metrics)
-# -------------------------------------------------------------------------
 
 @dataclass
 class CommitActivityMetrics:
@@ -82,9 +80,7 @@ class ActivityScoreBreakdown:
         return asdict(self)
 
 
-# -------------------------------------------------------------------------
 # 2. Helper Functions
-# -------------------------------------------------------------------------
 
 def _parse_iso8601(dt_str: str) -> Optional[datetime]:
     if not isinstance(dt_str, str) or not dt_str:
@@ -129,9 +125,7 @@ def _extract_author_id(commit: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-# -------------------------------------------------------------------------
 # 3. Metric Computation Functions
-# -------------------------------------------------------------------------
 
 def compute_commit_activity(owner: str, repo: str, days: int = 90) -> CommitActivityMetrics:
     try:
@@ -287,9 +281,7 @@ def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestAct
     )
 
 
-# -------------------------------------------------------------------------
 # 4. Scoring Functions
-# -------------------------------------------------------------------------
 
 def score_commit_activity(m: CommitActivityMetrics) -> float:
     if m.total_commits == 0:
@@ -340,16 +332,26 @@ def activity_score_to_100(breakdown: ActivityScoreBreakdown) -> int:
     return round(breakdown.overall * 100)
 
 
-# -------------------------------------------------------------------------
 # 5. Main Analysis Function
-# -------------------------------------------------------------------------
+
+from typing import Union
 
 def analyze_activity(
-    owner: str,
-    repo: str,
+    snapshot_or_owner: Union[RepoSnapshot, str],
+    repo: Optional[str] = None,
     days: int = DEFAULT_ACTIVITY_DAYS,
 ) -> ActivityCoreResult:
     """CHAOSS 기반 활동성 분석 (Pure Python)."""
+    if hasattr(snapshot_or_owner, "owner") and hasattr(snapshot_or_owner, "repo"):
+        # It's a RepoSnapshot
+        owner = snapshot_or_owner.owner
+        repo = snapshot_or_owner.repo
+    else:
+        # It's an owner string
+        owner = str(snapshot_or_owner)
+        if repo is None:
+            raise ValueError("Repo argument is required when passing owner as string")
+
     commit = compute_commit_activity(owner, repo, days=days)
     issue = compute_issue_activity(owner, repo, days=days)
     pr = compute_pr_activity(owner, repo, days=days)

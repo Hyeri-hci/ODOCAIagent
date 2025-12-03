@@ -6,13 +6,13 @@ import re
 import logging
 from typing import List, Optional, Dict
 
-from .models import DependencyInfo, DependencySnapshot, RepoSnapshot
+from .models import DependencyInfo, DependenciesSnapshot, RepoSnapshot
 from .github_core import fetch_repo_tree, fetch_file_content
 
 logger = logging.getLogger(__name__)
 
 
-def parse_dependencies(repo_snapshot: RepoSnapshot) -> DependencySnapshot:
+def parse_dependencies(repo_snapshot: RepoSnapshot) -> DependenciesSnapshot:
     """저장소의 의존성 파싱 (requirements.txt, package.json)."""
     owner = repo_snapshot.owner
     repo = repo_snapshot.repo
@@ -21,7 +21,7 @@ def parse_dependencies(repo_snapshot: RepoSnapshot) -> DependencySnapshot:
     try:
         file_tree = fetch_repo_tree(owner, repo, ref)
     except Exception as e:
-        return DependencySnapshot(
+        return DependenciesSnapshot(
             repo_id=repo_snapshot.repo_id,
             dependencies=[],
             analyzed_files=[],
@@ -68,12 +68,12 @@ def parse_dependencies(repo_snapshot: RepoSnapshot) -> DependencySnapshot:
         except Exception as e:
             errors.append(f"Failed to parse {path}: {e}")
 
-    return DependencySnapshot(
+    return DependenciesSnapshot(
         repo_id=repo_snapshot.repo_id,
         dependencies=dependencies,
         analyzed_files=analyzed_files,
         parse_errors=errors,
-    )
+        )
 
 
 def _parse_requirements_txt(content: str, source: str) -> List[DependencyInfo]:

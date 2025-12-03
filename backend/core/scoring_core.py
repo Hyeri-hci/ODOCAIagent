@@ -7,12 +7,11 @@ from .models import (
     DiagnosisCoreResult,
     DocsCoreResult,
     ActivityCoreResult,
+    DependenciesSnapshot,
     ProjectRules,
 )
 
-# -------------------------------------------------------------------------
 # 1. Constants (Thresholds)
-# -------------------------------------------------------------------------
 
 HEALTH_GOOD_THRESHOLD = 70
 HEALTH_WARNING_THRESHOLD = 50
@@ -23,9 +22,7 @@ ONBOARDING_NORMAL_THRESHOLD = 55
 WEAK_DOCS_THRESHOLD = 40
 INACTIVE_ACTIVITY_THRESHOLD = 30
 
-# -------------------------------------------------------------------------
 # 2. Score Computation Logic
-# -------------------------------------------------------------------------
 
 def compute_health_score(doc: int, activity: int) -> int:
     """모델 2: 운영/유지보수 Health (doc 30% + activity 70%)"""
@@ -106,9 +103,7 @@ def compute_activity_issues(
     return issues
 
 
-# -------------------------------------------------------------------------
 # 3. Main Computation Function
-# -------------------------------------------------------------------------
 
 def compute_diagnosis(
     repo_id: str,
@@ -153,3 +148,21 @@ def compute_diagnosis(
         docs_result=docs_result,
         activity_result=activity_result,
     )
+
+
+def compute_scores(
+    docs: DocsCoreResult,
+    activity: ActivityCoreResult,
+    deps: DependenciesSnapshot,
+) -> DiagnosisCoreResult:
+    """CoreResult 객체들을 사용하여 최종 진단을 수행합니다."""
+    # deps에서 repo_id를 가져와 진단 계산
+    result = compute_diagnosis(
+        repo_id=deps.repo_id,
+        docs_result=docs,
+        activity_result=activity,
+    )
+    
+    # 결과에 의존성 스냅샷 추가
+    result.dependency_snapshot = deps
+    return result

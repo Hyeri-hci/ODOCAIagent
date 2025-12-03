@@ -43,7 +43,7 @@ class DependencyInfo:
 
 
 @dataclass
-class DependencySnapshot:
+class DependenciesSnapshot:
     """저장소 의존성 스냅샷."""
     repo_id: str
     dependencies: List[DependencyInfo] = field(default_factory=list)
@@ -57,6 +57,9 @@ class DependencySnapshot:
     @property
     def runtime_count(self) -> int:
         return len([d for d in self.dependencies if d.dep_type == "runtime"])
+
+# Alias for backward compatibility
+DependencySnapshot = DependenciesSnapshot
 
 
 @dataclass
@@ -122,6 +125,7 @@ class DiagnosisCoreResult:
 
     docs_result: Optional[DocsCoreResult] = None
     activity_result: Optional[ActivityCoreResult] = None
+    dependency_snapshot: Optional[DependenciesSnapshot] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """기존 코드 호환용 dict 변환."""
