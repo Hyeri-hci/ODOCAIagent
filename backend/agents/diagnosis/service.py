@@ -9,6 +9,8 @@ from backend.agents.diagnosis.tools.readme.readme_loader import (
     compute_reademe_metrics,
 )
 from backend.agents.diagnosis.tools.readme.readme_categories import classify_readme_sections
+from backend.agents.diagnosis.tools.readme.docs_effective import compute_docs_effective
+from backend.agents.diagnosis.tools.readme.sustainability_gate import check_sustainability_gate
 from backend.common.github_client import DEFAULT_ACTIVITY_DAYS
 from backend.common.parallel import run_parallel
 from .tools.repo_parser import fetch_repo_info
@@ -21,7 +23,7 @@ from .tools.scoring.activity_scores import (
     aggregate_activity_score,
     activity_score_to_100,
 )
-from .tools.scoring.health_score import HealthScore, create_health_score
+from .tools.scoring.health_score import HealthScore, create_health_score, create_health_score_v2
 from .tools.scoring.diagnosis_labels import create_diagnosis_labels
 from .tools.onboarding.onboarding_plan import create_onboarding_plan
 from .tools.onboarding.onboarding_tasks import compute_onboarding_tasks
@@ -187,6 +189,21 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     logger.info("Phase 3: Computing scores...")
     t2 = time.time()
     scores: HealthScore
+    
+    # v2: docs_effective 계산 (교차검증 포함)
+    docs_effective_result = None
+    if readme_text and needs.get("need_readme", True):
+        try:
+            docs_effective_result = compute_docs_effective(
+                owner=owner,
+                repo=repo,
+                readme_content=readme_text,
+                docs_quality_raw=readme_category_score,
+                skip_consilience=False,  # 교차검증 수행
+            )
+            details["docs_effective"] = docs_effective_result.to_dict()
+        except Exception as e:
+            logger.warning("docs_effective 계산 실패: %s", e)
 
     if task_type == DiagnosisTaskType.FULL:
         # CHAOSS 기반 activity 점수 계산
@@ -200,7 +217,39 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         # health_score = 0.3*D + 0.7*A, onboarding_score = 0.6*D_eff + 0.4*A
         doc_score = readme_category_score
         activity_score = activity_score_to_100(activity_breakdown)
-        scores = create_health_score(doc_score, activity_score)
+        
+        # v2: sustainability gate 계산
+        gate_result = None
+        try:
+            activity_data_for_gate = {
+                "commit": asdict(commit_metrics),
+                "issue": asdict(issue_metrics),
+                "pr": asdict(pr_metrics),
+            }
+            gate_result = check_sustainability_gate(activity_data_for_gate)
+            details["sustainability_gate"] = gate_result.to_dict()
+        except Exception as e:
+            logger.warning("sustainability_gate 계산 실패: %s", e)
+        
+        # v2: 확장된 HealthScore 생성
+        if docs_effective_result and gate_result:
+            scores = create_health_score_v2(
+                doc=doc_score,
+                activity=activity_score,
+                docs_effective=docs_effective_result.docs_effective,
+                tech_score=docs_effective_result.tech_score,
+                marketing_penalty=docs_effective_result.marketing_penalty,
+                consilience_score=docs_effective_result.consilience_score,
+                sustainability_score=gate_result.sustainability_score,
+                gate_level=gate_result.gate_level,
+                is_sustainable=gate_result.is_sustainable,
+                is_marketing_heavy=docs_effective_result.is_marketing_heavy,
+                has_broken_refs=docs_effective_result.has_broken_refs,
+            )
+            details["docs_effective"] = docs_effective_result.to_dict()
+            details["sustainability_gate"] = gate_result.to_dict()
+        else:
+            scores = create_health_score(doc_score, activity_score)
 
         # CHAOSS 기반 activity 블록 (commit, issue, pr + scores)
         details["activity"] = {
@@ -212,7 +261,23 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     elif task_type == DiagnosisTaskType.DOCS_ONLY:
         # DOCS_ONLY: documentation만 평가
-        scores = create_health_score(readme_category_score, 0)
+        if docs_effective_result:
+            scores = create_health_score_v2(
+                doc=readme_category_score,
+                activity=0,
+                docs_effective=docs_effective_result.docs_effective,
+                tech_score=docs_effective_result.tech_score,
+                marketing_penalty=docs_effective_result.marketing_penalty,
+                consilience_score=docs_effective_result.consilience_score,
+                sustainability_score=0,
+                gate_level="unknown",
+                is_sustainable=True,  # 활동성 데이터 없음 - 기본값
+                is_marketing_heavy=docs_effective_result.is_marketing_heavy,
+                has_broken_refs=docs_effective_result.has_broken_refs,
+            )
+            details["docs_effective"] = docs_effective_result.to_dict()
+        else:
+            scores = create_health_score(readme_category_score, 0)
 
     elif task_type == DiagnosisTaskType.ACTIVITY_ONLY:
         # ACTIVITY_ONLY: commit, issue, pr 메트릭 병렬 호출
@@ -244,7 +309,29 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             pr=pr_metrics,
         )
 
-        scores = create_health_score(0, activity_score_to_100(activity_breakdown))
+        activity_score = activity_score_to_100(activity_breakdown)
+
+        # Sustainability Gate 계산
+        gate_activity_data = {
+            "commit": asdict(commit_metrics),
+            "issue": asdict(issue_metrics),
+            "pr": asdict(pr_metrics),
+        }
+        gate_result = check_sustainability_gate(activity_data=gate_activity_data)
+
+        scores = create_health_score_v2(
+            doc=0,
+            activity=activity_score,
+            docs_effective=0,
+            tech_score=0,
+            marketing_penalty=0,
+            consilience_score=100,
+            sustainability_score=gate_result.sustainability_score,
+            gate_level=gate_result.gate_level,
+            is_sustainable=gate_result.is_sustainable,
+            is_marketing_heavy=False,
+            has_broken_refs=False,
+        )
 
         details["activity"] = {
             "commit": asdict(commit_metrics),
@@ -252,9 +339,22 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
             "pr": asdict(pr_metrics),
             "scores": activity_breakdown.to_dict(),
         }
+        details["sustainability_gate"] = gate_result.to_dict()
 
     else:
-        scores = create_health_score(0, 0)
+        scores = create_health_score_v2(
+            doc=0,
+            activity=0,
+            docs_effective=0,
+            tech_score=0,
+            marketing_penalty=0,
+            consilience_score=100,
+            sustainability_score=0,
+            gate_level="abandoned",
+            is_sustainable=False,
+            is_marketing_heavy=False,
+            has_broken_refs=False,
+        )
 
     phase_times["phase3_scores"] = time.time() - t2
     logger.info("Phase 3 완료: %.2fs", phase_times["phase3_scores"])
