@@ -1,6 +1,6 @@
 """Instruction Handler Agent Models."""
 from dataclasses import dataclass
-from typing import Optional, List
+from backend.core.models import ProjectRules, UserGuidelines
 
 @dataclass
 class InstructionRequest:
@@ -11,7 +11,7 @@ class InstructionRequest:
 @dataclass
 class InstructionResult:
     """지침 변환 결과."""
-    project_rules_update: Optional[dict]
-    session_guidelines_update: Optional[dict]
+    project_rules_update: Optional[ProjectRules]
+    session_guidelines_update: Optional[UserGuidelines]
     clarification_needed: bool
     message: str
