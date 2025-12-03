@@ -1,251 +1,122 @@
-"""Supervisor Graph V1: Simple 4-node workflow with idempotency."""
+"""Supervisor Graph - 메인 오케스트레이터 (Refactored)."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Literal
 
 from langgraph.graph import StateGraph, END
+# from langgraph.checkpoint.sqlite import SqliteSaver # Import inside function to avoid error if missing
 
-from backend.agents.supervisor.models import (
-    SupervisorState,
-    DEFAULT_INTENT,
-    DEFAULT_SUB_INTENT,
-)
-from backend.agents.supervisor.intent_config import (
-    get_intent_meta,
-    is_v1_supported,
-)
-from backend.agents.shared.contracts import safe_get
-from backend.common.events import EventType, emit_event
-from backend.common.cache import idempotency_store
-
-# Import nodes from modular files
-from backend.agents.supervisor.nodes.init_node import init_node
-from backend.agents.supervisor.nodes.classify_node import classify_node
-from backend.agents.supervisor.nodes.diagnosis_node import diagnosis_node
-from backend.agents.supervisor.nodes.expert_node import expert_node
-from backend.agents.supervisor.nodes.plan_nodes import plan_node, execute_plan_node
+from backend.agents.supervisor.state import SupervisorState
+from backend.agents.diagnosis.graph import get_diagnosis_agent
 
 logger = logging.getLogger(__name__)
 
 
-# Summarize Node Wrapper with idempotency
-def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
-    """Generates final response using V1 summarize logic with idempotency."""
-    from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
-    
-    session_id = safe_get(state, "_session_id", "")
-    turn_id = safe_get(state, "_turn_id", "")
-    step_id = "summarize"
-    
-    # Check for cached result (idempotency)
-    cached = idempotency_store.get_cached(session_id, turn_id, step_id)
-    if cached:
-        logger.info(f"Idempotency HIT: returning cached answer_id={cached.answer_id}")
-        return cached.result
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="summarize_node",
-        inputs={
-            "intent": state.get("intent", DEFAULT_INTENT),
-            "sub_intent": state.get("sub_intent", DEFAULT_SUB_INTENT),
-        },
-    )
-    
-    # Acquire lock to prevent duplicate execution
-    with idempotency_store.acquire_lock(session_id, turn_id, step_id):
-        # Double-check cache after acquiring lock
-        cached = idempotency_store.get_cached(session_id, turn_id, step_id)
-        if cached:
-            return cached.result
-        
-        result = summarize_node_v1(state)
-        
-        # Generate and attach answer_id
-        execution = idempotency_store.store_result(
-            session_id=session_id,
-            turn_id=turn_id,
-            step_id=step_id,
-            result=result,
-        )
-        result["answer_id"] = execution.answer_id
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="summarize_node",
-        outputs={
-            "answer_kind": result.get("answer_kind"),
-            "text_length": len(result.get("llm_summary", "")),
-            "answer_id": result.get("answer_id"),
-        },
-    )
-    
-    return result
+def router_start_node(state: SupervisorState) -> Dict[str, Any]:
+    """라우팅 결정 노드."""
+    task_type = state.get("task_type", "diagnosis")
+    logger.info(f"Router: Starting task {task_type}")
+    # 여기서는 상태 변경 없이 로깅만 하고, 조건부 엣지에서 분기 처리
+    return {}
 
 
-# Routing Functions
-def should_run_diagnosis(state: SupervisorState) -> str:
-    """Hierarchical routing: route to appropriate node based on intent."""
-    intent = state.get("intent", DEFAULT_INTENT)
-    sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
+def diagnosis_agent_entry(state: SupervisorState) -> Dict[str, Any]:
+    """DiagnosisAgent 서브그래프 실행."""
+    logger.info("Entering DiagnosisAgent...")
+    diagnosis_agent = get_diagnosis_agent()
+    result = diagnosis_agent.invoke(state)
     
-    # Check for errors first
-    if state.get("error_message"):
-        return "summarize"
-    
-    # Access Guard: repo inaccessible → ask_user (BLOCK diagnosis)
-    if state.get("_needs_ask_user"):
-        logger.debug(f"[route] Access guard: {intent}.{sub_intent} → summarize (ask_user)")
-        return "summarize"
-    
-    # Disambiguation: repo 필요하지만 없음 → 전문가 노드 진입 금지
-    if state.get("_needs_disambiguation"):
-        logger.debug(f"[route] Disambiguation: {intent}.{sub_intent} → summarize")
-        return "summarize"
-    
-    # Fast path: smalltalk/help/overview → never diagnosis
-    if intent in ("smalltalk", "help", "overview", "general_qa"):
-        logger.debug(f"[route] Fast path: {intent}.{sub_intent} → summarize")
-        return "summarize"
-    
-    # Check V1 support
-    if not is_v1_supported(intent, sub_intent):
-        return "summarize"
-    
-    meta = get_intent_meta(intent, sub_intent)
-    
-    # Entity guard: repo 필요하지만 없음 → disambiguation 강제
-    if meta["requires_repo"] and not state.get("repo"):
-        logger.debug(f"[route] Entity guard: no repo → summarize")
-        return "summarize"
-    
-    # Compare/Onepager → expert_node
-    if sub_intent in ("compare", "onepager"):
-        logger.debug(f"[route] Expert path: {intent}.{sub_intent} → expert")
-        return "expert"
-    
-    # Run diagnosis only for analyze intent
-    if intent == "analyze" and not state.get("diagnosis_result"):
-        return "diagnosis"
-    
-    # followup/explain needs diagnosis_result but should NOT re-run diagnosis
-    if intent == "followup":
-        return "summarize"
-    
-    return "summarize"
+    # 서브그래프 결과를 상위 상태에 병합
+    return {
+        "repo_snapshot": result.get("repo_snapshot"),
+        "dependency_snapshot": result.get("dependency_snapshot"),
+        "diagnosis_result": result.get("diagnosis_result"),
+        "docs_result": result.get("docs_result"),
+        "messages": result.get("messages"),
+        "last_answer_kind": result.get("last_answer_kind"),
+    }
 
 
-def should_use_planning(state: SupervisorState) -> str:
-    """Determines whether to use V1 direct path or V2 planning path."""
-    intent = state.get("intent", DEFAULT_INTENT)
-    
-    # Fast paths: never use planning
-    if intent in ("smalltalk", "help", "general_qa"):
-        return "summarize"
-    
-    # Error path
-    if state.get("error_message"):
-        return "summarize"
-    
-    # V2 Planning for complex intents
-    if intent in ("analyze",) and state.get("_use_planning"):
-        return "plan"
-    
-    # Default to V1 direct routing
-    return "direct"
+def security_agent_entry(state: SupervisorState) -> Dict[str, Any]:
+    """SecurityAgent 서브그래프 실행 (Placeholder)."""
+    logger.info("Entering SecurityAgent (Placeholder)...")
+    # 실제 구현은 생략됨 (요구사항)
+    return {
+        "security_result": {"status": "skipped", "reason": "Not implemented yet"},
+        "last_answer_kind": "security",
+    }
 
 
-# Graph Builders
-def build_supervisor_graph():
-    """Builds V1 Supervisor Graph: init → classify → diagnosis/expert(conditional) → summarize."""
+def route_after_start(state: SupervisorState) -> Literal["diagnosis_agent_entry", "security_agent_entry"]:
+    """시작 후 라우팅."""
+    task_type = state.get("task_type", "diagnosis")
+    
+    if task_type == "security":
+        return "security_agent_entry"
+    
+    # diagnosis, diagnosis_and_security, explain 등은 diagnosis 먼저
+    return "diagnosis_agent_entry"
+
+
+def route_after_diagnosis(state: SupervisorState) -> Literal["security_agent_entry", "__end__"]:
+    """진단 후 라우팅."""
+    task_type = state.get("task_type", "diagnosis")
+    
+    if task_type == "diagnosis_and_security":
+        return "security_agent_entry"
+    
+    return "__end__"
+
+
+def build_supervisor_graph() -> StateGraph:
+    """Supervisor 그래프 빌드."""
     graph = StateGraph(SupervisorState)
 
-    # Add 5 nodes
-    graph.add_node("init", init_node)
-    graph.add_node("classify", classify_node)
-    graph.add_node("diagnosis", diagnosis_node)
-    graph.add_node("expert", expert_node)
-    graph.add_node("summarize", summarize_node_wrapper)
+    graph.add_node("router_start_node", router_start_node)
+    graph.add_node("diagnosis_agent_entry", diagnosis_agent_entry)
+    graph.add_node("security_agent_entry", security_agent_entry)
 
-    # Set entry point
-    graph.set_entry_point("init")
+    graph.set_entry_point("router_start_node")
 
-    # Linear flow: init → classify
-    graph.add_edge("init", "classify")
-    
-    # Conditional: classify → diagnosis OR expert OR summarize
     graph.add_conditional_edges(
-        "classify",
-        should_run_diagnosis,
+        "router_start_node",
+        route_after_start,
         {
-            "diagnosis": "diagnosis",
-            "expert": "expert",
-            "summarize": "summarize",
-        },
+            "diagnosis_agent_entry": "diagnosis_agent_entry",
+            "security_agent_entry": "security_agent_entry",
+        }
     )
 
-    # diagnosis → summarize → END
-    graph.add_edge("diagnosis", "summarize")
-    # expert → summarize → END
-    graph.add_edge("expert", "summarize")
-    graph.add_edge("summarize", END)
+    graph.add_conditional_edges(
+        "diagnosis_agent_entry",
+        route_after_diagnosis,
+        {
+            "security_agent_entry": "security_agent_entry",
+            "__end__": END,
+        }
+    )
 
-    logger.info("Built V1 Supervisor Graph (5 nodes)")
-    return graph.compile()
+    graph.add_edge("security_agent_entry", END)
+
+    return graph
 
 
 def get_supervisor_graph():
-    """Returns the V1 supervisor graph."""
-    return build_supervisor_graph()
-
-
-def build_supervisor_graph_v2():
-    """Builds V2 Supervisor Graph with Agentic Planning support."""
-    graph = StateGraph(SupervisorState)
-
-    # Add nodes
-    graph.add_node("init", init_node)
-    graph.add_node("classify", classify_node)
-    graph.add_node("plan", plan_node)
-    graph.add_node("execute_plan", execute_plan_node)
-    graph.add_node("diagnosis", diagnosis_node)
-    graph.add_node("summarize", summarize_node_wrapper)
-
-    # Set entry point
-    graph.set_entry_point("init")
-
-    # Linear flow: init → classify
-    graph.add_edge("init", "classify")
+    """컴파일된 Supervisor 그래프 반환 (Checkpointer 포함)."""
+    graph = build_supervisor_graph()
     
-    # Conditional: classify → plan OR diagnosis OR summarize
-    graph.add_conditional_edges(
-        "classify",
-        should_use_planning,
-        {
-            "plan": "plan",
-            "direct": "diagnosis",
-            "summarize": "summarize",
-        },
-    )
-    
-    # V2 Planning path
-    graph.add_edge("plan", "execute_plan")
-    graph.add_edge("execute_plan", "summarize")
-    
-    # V1 Direct path (fallback)
-    graph.add_conditional_edges(
-        "diagnosis",
-        lambda s: "summarize",
-        {"summarize": "summarize"},
-    )
-    
-    graph.add_edge("summarize", END)
+    # Checkpointer 설정
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        checkpointer = SqliteSaver.from_conn_string("sqlite:///odo_state.db")
+    except ImportError:
+        logger.warning("SqliteSaver not found. Using MemorySaver.")
+        from langgraph.checkpoint.memory import MemorySaver
+        checkpointer = MemorySaver()
+    except Exception as e:
+        logger.warning(f"Failed to create SqliteSaver: {e}. Using MemorySaver instead.")
+        from langgraph.checkpoint.memory import MemorySaver
+        checkpointer = MemorySaver()
 
-    logger.info("Built V2 Supervisor Graph with Planning (6 nodes)")
-    return graph.compile()
-
-
-def get_supervisor_graph_v2():
-    """Returns the V2 supervisor graph with planning."""
-    return build_supervisor_graph_v2()
+    return graph.compile(checkpointer=checkpointer)
