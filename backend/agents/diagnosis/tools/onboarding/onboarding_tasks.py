@@ -4,6 +4,8 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from backend.agents.diagnosis.config.settings import DIAGNOSIS_CONFIG
+
 from .models import (
     TaskSuggestion,
     OnboardingTasks,
@@ -113,10 +115,15 @@ def compute_onboarding_tasks(
     repo: str,
     labels: dict[str, Any],
     onboarding_plan: Optional[dict[str, Any]] = None,
-    max_issues: int = 30,
-    min_tasks: int = 3,
+    max_issues: Optional[int] = None,
+    min_tasks: Optional[int] = None,
 ) -> OnboardingTasks:
     """진단 결과를 바탕으로 온보딩 Task 목록 생성."""
+    # 설정에서 기본값 로드
+    policy = DIAGNOSIS_CONFIG.task_policy
+    max_issues = max_issues or policy.max_issues_fetch
+    min_tasks = min_tasks or policy.min_tasks
+    
     repo_url = f"https://github.com/{owner}/{repo}"
 
     health_level = labels.get("health_level", "warning")
@@ -159,7 +166,7 @@ def compute_onboarding_tasks(
     advanced_tasks = sorted([t for t in all_tasks if t.difficulty == "advanced"], key=sort_key)
 
     # 5. Beginner 보충
-    MIN_BEGINNER_TASKS = 2
+    MIN_BEGINNER_TASKS = policy.min_tasks  # 설정에서 로드
     if len(beginner_tasks) < MIN_BEGINNER_TASKS and is_healthy and is_active:
         existing_ids = {t.id for t in all_tasks}
         for task in create_minimum_meta_tasks(repo_url):
@@ -174,9 +181,9 @@ def compute_onboarding_tasks(
     meta_count = len([t for t in all_tasks if t.kind == "meta"])
 
     return OnboardingTasks(
-        beginner=beginner_tasks[:10],
-        intermediate=intermediate_tasks[:10],
-        advanced=advanced_tasks[:5],
+        beginner=beginner_tasks[:policy.max_beginner],
+        intermediate=intermediate_tasks[:policy.max_intermediate],
+        advanced=advanced_tasks[:policy.max_advanced],
         total_count=len(all_tasks),
         issue_count=issue_count,
         meta_count=meta_count,
