@@ -79,8 +79,8 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
             "last_answer_kind": "diagnosis",
         }
 
-    # Simple f-string summary (No LLM for Step 2)
-    summary_text = (
+    # 1. Fallback Summary (Default)
+    fallback_summary = (
         f"### {diagnosis.repo_id} 진단 결과\n\n"
         f"- **건강 점수**: {diagnosis.health_score}점 ({diagnosis.health_level})\n"
         f"- **문서 품질**: {diagnosis.documentation_quality}점\n"
@@ -90,6 +90,48 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
         f"- 문서: {', '.join(diagnosis.docs_issues) or '없음'}\n"
         f"- 활동성: {', '.join(diagnosis.activity_issues) or '없음'}"
     )
+
+    # 2. Try LLM Summary
+    try:
+        from backend.llm.factory import fetch_llm_client
+        from backend.llm.base import ChatRequest, ChatMessage
+        from backend.common.config import LLM_MODEL_NAME
+
+        client = fetch_llm_client()
+        
+        system_prompt = (
+            "You are an expert software engineering consultant. "
+            "Analyze the provided repository diagnosis data and provide a concise, professional summary in Korean. "
+            "Highlight key strengths, critical issues, and actionable recommendations. "
+            "Use markdown formatting."
+        )
+        
+        user_prompt = (
+            f"Repository: {diagnosis.repo_id}\n"
+            f"Health Score: {diagnosis.health_score} ({diagnosis.health_level})\n"
+            f"Docs Quality: {diagnosis.documentation_quality}\n"
+            f"Activity Score: {diagnosis.activity_maintainability}\n"
+            f"Onboarding Score: {diagnosis.onboarding_score} ({diagnosis.onboarding_level})\n"
+            f"Docs Issues: {', '.join(diagnosis.docs_issues)}\n"
+            f"Activity Issues: {', '.join(diagnosis.activity_issues)}\n\n"
+            "Please summarize this diagnosis."
+        )
+
+        request = ChatRequest(
+            messages=[
+                ChatMessage(role="system", content=system_prompt),
+                ChatMessage(role="user", content=user_prompt),
+            ],
+            model=LLM_MODEL_NAME,
+            temperature=0.2,
+        )
+        
+        response = client.chat(request, timeout=10)
+        summary_text = response.content
+
+    except Exception as e:
+        logger.warning(f"LLM summary failed, using fallback: {e}")
+        summary_text = fallback_summary
 
     return {
         "messages": [AIMessage(content=summary_text)],
