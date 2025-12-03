@@ -5,10 +5,6 @@ from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Literal, Optional
 
 
-# ============================================================
-# 입력 스키마
-# ============================================================
-
 @dataclass
 class UserContext:
     """사용자 컨텍스트 (언어, 경험, 스택, 목표)."""
@@ -66,10 +62,6 @@ class CandidateRepo:
         owner, repo = full_name.split("/", 1)
         return cls(owner=owner, repo=repo)
 
-
-# ============================================================
-# 출력 스키마
-# ============================================================
 
 @dataclass
 class RepoRecommendation:

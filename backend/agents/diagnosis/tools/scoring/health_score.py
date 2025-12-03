@@ -34,8 +34,6 @@ class HealthScore:
         return asdict(self)
 
 
-# === Score Computation ===
-
 def compute_health_score(doc: int, activity: int) -> int:
     """모델 2: 운영/유지보수 Health (doc 30% + activity 70%)"""
     return round(0.3 * doc + 0.7 * activity)

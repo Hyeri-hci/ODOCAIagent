@@ -124,39 +124,39 @@ class UserContext(TypedDict, total=False):
 class SupervisorState(TypedDict, total=False):
     """V1 Supervisor State - minimal fields only."""
     
-    # === Input ===
+    # Input
     user_query: str
     repo: RepoInfo
     compare_repo: RepoInfo  # Second repo for compare
     user_context: UserContext
     
-    # === Routing/Meta ===
+    # Routing/Meta
     intent: SupervisorIntent
     sub_intent: SubIntent
     answer_kind: AnswerKind
     
-    # === Agent Results ===
+    # Agent Results
     diagnosis_result: Dict[str, Any]
     llm_summary: str
     last_brief: str
     
-    # === Follow-up State ===
+    # Follow-up State
     last_answer_kind: AnswerKind
     last_explain_target: ExplainTarget
     last_task_list: List[Dict[str, Any]]
     
-    # === Error Handling ===
+    # Error Handling
     error_message: str
     
-    # === Idempotency ===
+    # Idempotency
     answer_id: str  # Unique ID for deduplication (frontend key)
     answer_contract: Dict[str, Any]  # AnswerContract serialized
     
-    # === Internal (not exposed to user) ===
+    # Internal (not exposed to user)
     _session_id: str
     _turn_id: str
     
-    # === Guards (Entity/Access) ===
+    # Guards (Entity/Access)
     _needs_disambiguation: bool  # Entity guard: repo required but missing (multiple candidates)
     _disambiguation_template: str
     _disambiguation_source: str
@@ -171,11 +171,11 @@ class SupervisorState(TypedDict, total=False):
     _access_error: str
     _repo_context: RepoContext  # Pre-flight access check result
     
-    # === Classification Meta ===
+    # Classification Meta
     _classification_confidence: float
     _classification_method: str
     
-    # === History ===
+    # History
     history: List[Dict[str, Any]]
 
 

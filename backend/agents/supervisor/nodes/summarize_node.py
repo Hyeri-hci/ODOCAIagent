@@ -234,7 +234,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
     
     # 4. Route by mode (LLM required)
     
-    # --- Health Report Mode ---
+    # Health Report Mode
     if mode in [("analyze", "health"), ("analyze", "onboarding")]:
         if not diagnosis_result:
             if DEGRADE_ENABLED:
@@ -284,7 +284,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         
         return build_response(state, llm_result.content, "report", diagnosis_result)
     
-    # --- Score Explain Mode ---
+    # Score Explain Mode
     elif mode == ("followup", "explain"):
         if not diagnosis_result:
             if DEGRADE_ENABLED:
@@ -326,7 +326,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         
         return build_response(state, llm_result.content, "explain", diagnosis_result)
     
-    # --- Chat Mode ---
+    # Chat Mode
     elif intent == "general_qa":
         repo_summary = ""
         if repo and diagnosis_result:
@@ -346,7 +346,7 @@ def summarize_node_v1(state: SupervisorState) -> Dict[str, Any]:
         
         return build_response(state, llm_result.content, "chat")
     
-    # --- Fallback ---
+    # Fallback
     else:
         return build_response(state, NOT_READY_TEMPLATE, "chat")
 
