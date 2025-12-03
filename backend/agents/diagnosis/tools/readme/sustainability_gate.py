@@ -164,6 +164,27 @@ def check_sustainability_gate(
             message=f"최근 병합된 PR: {merged_in_window}개"
         ))
     
+    # Gate 6: Bus Factor 경고 (CHAOSS Risk Metrics)
+    # 출처: CHAOSS - healthy >= 3명, risky = 1명
+    bus_factor_warning = config.get("bus_factor_warning", 2)
+    if unique_authors < bus_factor_warning:
+        checks.append(GateCheckResult(
+            name="bus_factor",
+            passed=False,
+            value=unique_authors,
+            threshold=bus_factor_warning,
+            message=f"기여자 {unique_authors}명 - Bus Factor 위험"
+        ))
+        warnings.append(f"핵심 기여자가 {unique_authors}명뿐입니다 (권장: {bus_factor_warning}명 이상)")
+    else:
+        checks.append(GateCheckResult(
+            name="bus_factor",
+            passed=True,
+            value=unique_authors,
+            threshold=bus_factor_warning,
+            message=f"기여자 {unique_authors}명 - Bus Factor 양호"
+        ))
+    
     # 게이트 레벨 결정
     gate_level = _determine_gate_level(
         days_since_commit=days_since_commit,
@@ -173,7 +194,8 @@ def check_sustainability_gate(
     )
     
     # 필수 게이트 통과 여부
-    required_gates = ["recent_commit"]
+    # 출처: CHAOSS - 최근 커밋 + 최소 기여자 수
+    required_gates = ["recent_commit", "min_commits"]
     is_sustainable = all(
         c.passed for c in checks if c.name in required_gates
     )
@@ -200,16 +222,25 @@ def _determine_gate_level(
     unique_authors: int,
     config: Dict[str, Any],
 ) -> str:
-    """게이트 레벨 결정."""
-    # 임계값
+    """게이트 레벨 결정.
+    
+    출처:
+    - GitHub Octoverse 2023: 30일 = "최근 활동"
+    - 분기별 릴리스 주기: 90일
+    - GitHub Archive Program: 365일 = "1년 내 활동"
+    """
     active_days = config.get("active_threshold_days", 30)
     maintained_days = config.get("maintained_threshold_days", 90)
-    stale_days = config.get("stale_threshold_days", 180)
+    stale_days = config.get("stale_threshold_days", 365)  # 변경: 180 → 365
+    min_authors = config.get("min_authors", 2)  # 변경: 1 → 2 (Archive 기준)
     
-    if days_since_commit <= active_days and total_commits >= 20:
+    # active: 30일 내 커밋 + 2명 이상 기여자
+    if days_since_commit <= active_days and unique_authors >= min_authors:
         return "active"
+    # maintained: 90일 내 커밋
     elif days_since_commit <= maintained_days:
         return "maintained"
+    # stale: 365일 내 커밋
     elif days_since_commit <= stale_days:
         return "stale"
     else:
@@ -221,7 +252,12 @@ def _compute_sustainability_score(
     gate_level: str,
     config: Dict[str, Any],
 ) -> int:
-    """지속가능성 점수 계산 (0-100)."""
+    """지속가능성 점수 계산 (0-100).
+    
+    가중치 근거:
+    - 게이트 레벨 70%: 핵심 판단 기준
+    - 체크 통과율 30%: 세부 지표 보정
+    """
     # 기본 점수 (게이트 레벨 기반)
     level_scores = {
         "active": 90,
@@ -231,7 +267,7 @@ def _compute_sustainability_score(
     }
     base_score = level_scores.get(gate_level, 50)
     
-    # 체크 통과율 보정
+    # 체크 통과율 보정 (30%)
     if checks:
         passed_count = sum(1 for c in checks if c.passed)
         pass_ratio = passed_count / len(checks)

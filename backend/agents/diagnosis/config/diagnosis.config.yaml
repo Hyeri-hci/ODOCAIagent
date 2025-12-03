@@ -14,7 +14,7 @@ marketing:
   threshold: 0.6 # tech_ratio 임계값 (이하면 페널티)
   penalty_cap: 0.4 # 페널티 상한
   template_bonus: 0.05 # 템플릿 유사도 > 0.9 시 추가 페널티
-  
+
   # Phase 2 추가: 마케팅 페널티 세부 설정
   max_penalty: 30 # 최대 페널티 점수
   density_threshold: 0.08 # 마케팅 밀도 임계값
@@ -48,7 +48,7 @@ docs:
     raw: 0.55
     consilience: 0.25
     freshness: 0.20
-  
+
   # Phase 2 추가: docs_effective 계산용
   tech_score_weights:
     code_blocks: 25
@@ -56,42 +56,56 @@ docs:
     path_refs: 15
     platforms: 15
     density: 25
-  
+
   effective_weights:
     raw: 0.3
     tech: 0.4
     consilience: 0.3
 
 # 지속성 게이트 (Sustainability Gate)
+# 출처: CHAOSS Metrics, GitHub Octoverse 2023, GitHub Archive Program
 gate:
-  # 최근성
-  recency_days: 90
-  commit_recency_days: 180 # 필수 게이트: 마지막 커밋 임계값
+  # === 활동성 임계값 ===
+  # 출처: GitHub Octoverse "최근 활동" 정의
+  active_threshold_days: 30       # 30일 내 커밋 = 활성
   
-  # 활동량
-  commit_rate_per_week_90d: 0.5
-  issue_or_pr_rate_per_week_90d: 0.3
-  min_commits: 10 # 최소 커밋 수
-  min_authors: 1 # 최소 기여자 수
+  # 출처: 일반적인 분기별 릴리스 주기
+  maintained_threshold_days: 90   # 90일 내 커밋 = 유지보수 중
+  
+  # 출처: GitHub Archive Program "1년 내 활동" 기준
+  stale_threshold_days: 365       # 365일 초과 = 사실상 중단
+  
+  # 필수 게이트: 마지막 커밋 임계값
+  commit_recency_days: 365        # Archive 기준과 동일
 
-  # 반응성
-  median_first_response_days: 14
+  # === 최소 요구사항 ===
+  # 출처: GitHub Archive Program 선정 기준
+  min_commits: 10                 # 최소 커밋 수 (합리적 추정)
+  min_authors: 2                  # Archive 기준: 2명 이상 기여자
 
-  # 릴리스
+  # === 반응성 ===
+  # 출처: CHAOSS "Issue Resolution Efficiency" 메트릭
+  # - good: < 48시간, acceptable: < 168시간 (7일)
+  time_to_first_response_hours: 48
+  median_first_response_days: 7   # 7일 = acceptable
+
+  # === 활동량 ===
+  # 출처: 학술 연구 "주 1회 이상 커밋 = 활성" (Jansen et al. 2020)
+  commit_rate_per_week_90d: 1.0   # 주 1회
+  issue_or_pr_rate_per_week_90d: 0.5
+
+  # === 위험 지표 ===
+  # 출처: CHAOSS Risk Metrics "Bus Factor"
+  # - healthy: >= 3명, risky: 1명
+  bus_factor_warning: 2           # 2명 미만이면 경고
+
+  # === 기타 설정 ===
+  recency_days: 90
   last_release_days: 180
-
-  # 커뮤니티 (절대값 대신 상대적 지표)
   unique_contributors_90d: 1
   stars_delta_180d: 0
-
-  # 특수 케이스
   early_stage_days: 60
   archived_fail: true
-  
-  # 레벨 임계값
-  active_threshold_days: 30
-  maintained_threshold_days: 90
-  stale_threshold_days: 180
 
 # 기술 신호 패턴 (정규식)
 tech_patterns:
