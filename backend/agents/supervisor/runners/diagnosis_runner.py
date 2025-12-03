@@ -34,11 +34,39 @@ class DiagnosisRunner(ExpertRunner):
         user_context: Optional[Dict[str, Any]] = None,
         task_type: str = "full_diagnosis",
         focus: Optional[List[str]] = None,
+        intent: Optional[str] = None,
+        sub_intent: Optional[str] = None,
     ):
         super().__init__(repo_id, user_context)
         self.task_type = task_type
         self.focus = focus or ["documentation", "activity"]
+        self.intent = intent
+        self.sub_intent = sub_intent
         self._diagnosis_result: Optional[Dict[str, Any]] = None
+    
+    def _build_needs(self) -> Dict[str, bool]:
+        """intent 기반 needs 생성 (비용 최적화)."""
+        # 기본값: 모두 True
+        needs = {
+            "need_health": True,
+            "need_readme": True,
+            "need_activity": True,
+            "need_onboarding": True,
+        }
+        
+        # intent가 health/overview면 onboarding 최소화
+        if self.sub_intent in ("health", "overview"):
+            needs["need_onboarding"] = False
+        
+        # activity_only면 readme 분석 최소화
+        if self.task_type == "activity_only":
+            needs["need_readme"] = False
+        
+        # docs_only면 activity 분석 최소화
+        if self.task_type == "docs_only":
+            needs["need_activity"] = False
+        
+        return needs
     
     def _collect_artifacts(self) -> None:
         """Collects artifacts for diagnosis."""
@@ -79,6 +107,7 @@ class DiagnosisRunner(ExpertRunner):
             "task_type": self.task_type,
             "focus": self.focus,
             "user_context": {"level": user_level},
+            "needs": self._build_needs(),  # intent 기반 비용 최적화
             "advanced_analysis": False,
         }
         

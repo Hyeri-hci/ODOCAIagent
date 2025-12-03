@@ -5,6 +5,8 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
+from backend.agents.diagnosis.config import get_labels_config
+
 
 @dataclass
 class DiagnosisLabels:
@@ -30,18 +32,26 @@ class DiagnosisLabels:
 
 def compute_health_level(health_score: int) -> str:
     """건강 점수 -> 레벨 (good/warning/bad)."""
-    if health_score >= 70:
+    config = get_labels_config()
+    good_threshold = config.get("health_good", 70)
+    warning_threshold = config.get("health_warning", 50)
+    
+    if health_score >= good_threshold:
         return "good"
-    elif health_score >= 50:
+    elif health_score >= warning_threshold:
         return "warning"
     return "bad"
 
 
 def compute_onboarding_level(onboarding_score: int) -> str:
     """온보딩 점수 -> 레벨 (easy/normal/hard)."""
-    if onboarding_score >= 75:
+    config = get_labels_config()
+    easy_threshold = config.get("onboarding_easy", 75)
+    normal_threshold = config.get("onboarding_normal", 55)
+    
+    if onboarding_score >= easy_threshold:
         return "easy"
-    elif onboarding_score >= 55:
+    elif onboarding_score >= normal_threshold:
         return "normal"
     return "hard"
 
@@ -54,10 +64,12 @@ def compute_docs_issues(
     docs_effective: Optional[int] = None,
 ) -> List[str]:
     """doc_score 및 readme_categories 기반 문서 이슈 추출 (v2: 마케팅/참조 이슈 포함)."""
+    config = get_labels_config()
     issues: List[str] = []
 
     # 전반적 문서화 부족
-    if doc_score < 40:
+    weak_threshold = config.get("weak_docs_threshold", 40)
+    if doc_score < weak_threshold:
         issues.append("weak_documentation")
 
     # v2: 마케팅 과다 README
@@ -69,9 +81,10 @@ def compute_docs_issues(
         issues.append("broken_references")
     
     # v2: 유효 문서 점수가 형식 점수보다 많이 낮은 경우
+    inflated_gap = config.get("inflated_gap_threshold", 20)
     if docs_effective is not None and doc_score > 0:
         gap = doc_score - docs_effective
-        if gap >= 20:
+        if gap >= inflated_gap:
             issues.append("inflated_docs_score")
 
     # 개별 카테고리 검사

@@ -223,18 +223,25 @@ def compute_docs_effective(
             owner, repo, tech_signals, marketing_signals
         )
     
+    # 수식 안정화: consilience 하한 적용 (점수 붕괴 방지)
+    docs_config = get_docs_config()
+    consilience_floor = docs_config.get("consilience_floor", 60)
+    consilience_score = max(consilience_score, consilience_floor)
+    
     # 마케팅 과다 플래그
     config = get_marketing_config()
     is_marketing_heavy = marketing_signals.marketing_density > config.get("density_threshold", 0.08)
     
     # 최종 점수 계산
-    # docs_effective = (raw * 0.3 + tech * 0.4 + consilience * 0.3) - penalty
-    docs_config = get_docs_config()
+    # docs_effective = (raw×0.3 + tech×0.4 + consilience×0.3) - penalty
+    # consilience 하한으로 점수 붕괴 방지, penalty 상한으로 과도한 감점 방지
     weights = docs_config.get("effective_weights", {
         "raw": 0.3,
         "tech": 0.4,
         "consilience": 0.3,
     })
+    penalty_cap = docs_config.get("marketing_penalty_cap", 30)
+    marketing_penalty = min(marketing_penalty, penalty_cap)
     
     base_score = (
         docs_quality_raw * weights["raw"] +

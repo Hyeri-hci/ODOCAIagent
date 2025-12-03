@@ -24,6 +24,7 @@ from .config_loader import (
     get_freshness_config,
     get_docs_config,
     get_gate_config,
+    get_labels_config,
     get_tech_patterns,
     get_marketing_keywords,
     get_readme_preference,

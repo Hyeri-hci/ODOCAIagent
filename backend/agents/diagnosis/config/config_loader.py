@@ -72,6 +72,12 @@ def get_gate_config() -> Dict[str, Any]:
     return config.get("gate", {})
 
 
+def get_labels_config() -> Dict[str, Any]:
+    """라벨 임계값 설정 반환."""
+    config = load_diagnosis_config()
+    return config.get("labels", {})
+
+
 def get_tech_patterns() -> Dict[str, list]:
     """기술 신호 패턴 반환."""
     config = load_diagnosis_config()
