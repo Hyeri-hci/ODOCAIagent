@@ -39,7 +39,10 @@ class SupervisorState(TypedDict):
     
     # Context
     project_rules: Optional[ProjectRules]
+    # 리포지토리 단위로 장기 적용되는 규칙 (예: "프론트엔드 이슈 우선", "문서 먼저 개선")
+    
     session_guidelines: Optional[UserGuidelines]
+    # 이번 진단/추천 세션에만 적용되는 일시적인 지침 (예: "초보자 기여 위주로만 알려줘")
     
     # Control Flow
     task_type: Literal["diagnosis", "security", "diagnosis_and_security", "recommendation", "explain"]
