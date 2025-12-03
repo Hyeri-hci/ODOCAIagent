@@ -35,6 +35,7 @@ def diagnosis_agent_entry(state: SupervisorState) -> Dict[str, Any]:
         "docs_result": result.get("docs_result"),
         "messages": result.get("messages"),
         "last_answer_kind": result.get("last_answer_kind"),
+        "error_message": result.get("error_message"), # Propagate error
     }
 
 
