@@ -45,7 +45,7 @@ class SupervisorState(TypedDict):
     task_type: Literal["diagnosis", "security", "diagnosis_and_security", "recommendation", "explain"]
     run_security: bool
     run_recommendation: bool
-    run_recommendation: bool
+
     last_answer_kind: Optional[Literal["diagnosis", "security", "recommendation", "explain"]]
 
     # Error
