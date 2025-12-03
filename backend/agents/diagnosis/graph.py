@@ -130,6 +130,7 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
             f"Onboarding Score: {diagnosis.onboarding_score} ({diagnosis.onboarding_level})\n"
             f"Docs Issues: {', '.join(diagnosis.docs_issues)}\n"
             f"Activity Issues: {', '.join(diagnosis.activity_issues)}\n"
+            f"Dependency Complexity: {diagnosis.dependency_complexity_score} (Flags: {', '.join(diagnosis.dependency_flags) or 'None'})\n"
             f"{docs_detail}\n"
             "Please summarize this diagnosis."
         )
