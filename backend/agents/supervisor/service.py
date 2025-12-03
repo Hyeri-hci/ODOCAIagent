@@ -16,8 +16,8 @@ def run_supervisor_diagnosis(
     graph = get_supervisor_graph()
     
     # 2. 초기 상태 구성
-    # thread_id는 owner/repo 조합으로 설정하여 재실행 시 상태 복원 가능성 열어둠
-    config = {"configurable": {"thread_id": f"{owner}/{repo}"}}
+    # thread_id는 owner/repo/ref 조합으로 설정하여 재실행 시 상태 복원 가능성 열어둠
+    config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
     
     initial_state = {
         "owner": owner,

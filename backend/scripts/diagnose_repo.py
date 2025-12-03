@@ -32,6 +32,7 @@ def main():
             print(f"- Activity: {', '.join(result.activity_issues) or 'None'}")
         else:
             print("\nDiagnosis failed or returned no result.")
+            # TODO: Supervisor에서 error_message를 전달하도록 확장 후, 같이 출력
             sys.exit(1)
             
     except Exception as e:
