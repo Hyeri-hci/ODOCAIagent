@@ -51,8 +51,11 @@ def fetch_open_issues_for_tasks(owner: str, repo: str, limit: int = 50) -> List[
 
         return sorted(issues, key=priority_score)
 
+    except (KeyError, TypeError) as e:
+        logger.warning("GraphQL response parsing failed: %s", e)
+        return _fetch_issues_rest(owner, repo, limit)
     except Exception as e:
-        logger.warning("GraphQL fetch failed: %s", e)
+        logger.warning("GraphQL fetch failed (%s): %s", type(e).__name__, e)
         return _fetch_issues_rest(owner, repo, limit)
 
 
@@ -66,8 +69,15 @@ def _fetch_issues_rest(owner: str, repo: str, limit: int = 50) -> List[Dict[str,
         params = {"state": "open", "per_page": limit, "sort": "updated", "direction": "desc"}
         resp = requests.get(url, headers=_build_headers(), params=params, timeout=15)
         if resp.status_code != 200:
+            logger.warning("REST API returned %d for %s/%s", resp.status_code, owner, repo)
             return []
         return [issue for issue in resp.json() if "pull_request" not in issue]
-    except Exception as e:
-        logger.warning("REST API failed: %s", e)
+    except requests.exceptions.Timeout:
+        logger.warning("REST API timeout for %s/%s", owner, repo)
+        return []
+    except requests.exceptions.RequestException as e:
+        logger.warning("REST API request failed: %s", e)
+        return []
+    except (ValueError, KeyError) as e:
+        logger.warning("REST API response parsing failed: %s", e)
         return []
