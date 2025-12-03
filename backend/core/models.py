@@ -71,6 +71,7 @@ class DocsCoreResult:
     total_score: int  # 0-100
     missing_sections: List[str]
     present_sections: List[str]
+    marketing_ratio: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -80,6 +81,7 @@ class DocsCoreResult:
             "total_score": self.total_score,
             "missing_sections": self.missing_sections,
             "present_sections": self.present_sections,
+            "marketing_ratio": self.marketing_ratio,
         }
 
 
