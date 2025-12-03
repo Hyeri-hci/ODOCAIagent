@@ -12,41 +12,49 @@ from ..models import Dependency
 class PythonExtractor(BaseExtractor):
     """Python 의존성 추출기"""
 
-    def extract(self, content: str, filename: str) -> List[Dependency]:
+    def extract(self, content: str, filename: str, is_lockfile: bool = False) -> List[Dependency]:
         """파일명에 따라 적절한 추출 메서드 호출"""
+        dependencies = []
+
         # requirements 계열 파일들
         if 'requirements' in filename and filename.endswith('.txt'):
-            return self._safe_extract(
+            dependencies = self._safe_extract(
                 self._extract_requirements_txt,
                 content,
                 f"Error parsing {filename}"
             )
         elif filename == 'requirements.in':
-            return self._safe_extract(
+            dependencies = self._safe_extract(
                 self._extract_requirements_txt,
                 content,
                 f"Error parsing {filename}"
             )
+        else:
+            extractors = {
+                'Pipfile': self._extract_pipfile,
+                'Pipfile.lock': self._extract_pipfile_lock,
+                'pyproject.toml': self._extract_pyproject_toml,
+                'setup.py': self._extract_setup_py,
+                'poetry.lock': self._extract_poetry_lock,
+                'conda.yaml': self._extract_conda_yaml,
+                'conda.yml': self._extract_conda_yaml,
+                'environment.yml': self._extract_conda_yaml,
+                'environment.yaml': self._extract_conda_yaml,
+            }
 
-        extractors = {
-            'Pipfile': self._extract_pipfile,
-            'pyproject.toml': self._extract_pyproject_toml,
-            'setup.py': self._extract_setup_py,
-            'poetry.lock': self._extract_poetry_lock,
-            'conda.yaml': self._extract_conda_yaml,
-            'conda.yml': self._extract_conda_yaml,
-            'environment.yml': self._extract_conda_yaml,
-            'environment.yaml': self._extract_conda_yaml,
-        }
+            extractor = extractors.get(filename)
+            if extractor:
+                dependencies = self._safe_extract(
+                    lambda c: extractor(c),
+                    content,
+                    f"Error parsing {filename}"
+                )
 
-        extractor = extractors.get(filename)
-        if extractor:
-            return self._safe_extract(
-                lambda c: extractor(c),
-                content,
-                f"Error parsing {filename}"
-            )
-        return []
+        # lock 파일 표시
+        for dep in dependencies:
+            dep.is_from_lockfile = is_lockfile
+
+        return dependencies
 
     @staticmethod
     def _extract_requirements_txt(content: str) -> List[Dependency]:
@@ -72,6 +80,25 @@ class PythonExtractor(BaseExtractor):
                 name = re.sub(r'\[.*\]', '', name)
                 version = match.group(2) if match.group(2) else None
                 dependencies.append(Dependency(name, version, 'runtime', 'pypi'))
+
+        return dependencies
+
+    @staticmethod
+    def _extract_pipfile_lock(content: str) -> List[Dependency]:
+        """Pipfile.lock에서 의존성 추출"""
+        import json
+        data = json.loads(content)
+        dependencies = []
+
+        # default packages (runtime)
+        for name, info in data.get('default', {}).items():
+            version = info.get('version', '*') if isinstance(info, dict) else '*'
+            dependencies.append(Dependency(name, version, 'runtime', 'pypi'))
+
+        # develop packages (dev)
+        for name, info in data.get('develop', {}).items():
+            version = info.get('version', '*') if isinstance(info, dict) else '*'
+            dependencies.append(Dependency(name, version, 'dev', 'pypi'))
 
         return dependencies
 

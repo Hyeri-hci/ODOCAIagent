@@ -32,19 +32,20 @@ class DependencyExtractor:
             OthersExtractor(),
         ]
 
-    def extract(self, content: str, filename: str) -> List[Dependency]:
+    def extract(self, content: str, filename: str, is_lockfile: bool = False) -> List[Dependency]:
         """
         파일 내용과 파일명에 따라 적절한 추출기를 사용하여 의존성 추출
 
         Args:
             content: 파일 내용
             filename: 파일명
+            is_lockfile: lock 파일 여부
 
         Returns:
             List[Dependency]: 추출된 의존성 목록
         """
         for extractor in self.extractors:
-            dependencies = extractor.extract(content, filename)
+            dependencies = extractor.extract(content, filename, is_lockfile)
             if dependencies:
                 return dependencies
 

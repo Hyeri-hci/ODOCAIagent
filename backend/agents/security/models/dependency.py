@@ -12,6 +12,7 @@ class Dependency:
     version: Optional[str] = None
     type: str = "runtime"  # runtime, dev, peer, optional
     source: Optional[str] = None  # npm, pypi, maven, etc.
+    is_from_lockfile: bool = False  # lock 파일에서 추출되었는지 여부
 
 
 @dataclass
