@@ -7,7 +7,7 @@ def run_supervisor_diagnosis(
     owner: str,
     repo: str,
     ref: str = "main"
-) -> Optional[DiagnosisCoreResult]:
+) -> tuple[Optional[DiagnosisCoreResult], Optional[str]]:
     """
     Supervisor를 통해 저장소 진단을 실행하는 엔트리 포인트.
     LLM 요약보다는 Core 진단 결과(DiagnosisCoreResult) 반환에 집중.
@@ -32,5 +32,5 @@ def run_supervisor_diagnosis(
     result = graph.invoke(initial_state, config=config)
     
     # 4. 결과 추출
-    # SupervisorState에서 diagnosis_result 반환
-    return result.get("diagnosis_result")
+    # SupervisorState에서 diagnosis_result와 error_message 반환
+    return result.get("diagnosis_result"), result.get("error_message")

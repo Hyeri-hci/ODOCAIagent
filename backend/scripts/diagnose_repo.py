@@ -19,7 +19,7 @@ def main():
     print(f"Starting diagnosis for {args.owner}/{args.repo} (ref: {args.ref})...")
     
     try:
-        result = run_supervisor_diagnosis(args.owner, args.repo, args.ref)
+        result, error_message = run_supervisor_diagnosis(args.owner, args.repo, args.ref)
         
         if result:
             print("\n=== Diagnosis Result ===")
@@ -32,7 +32,8 @@ def main():
             print(f"- Activity: {', '.join(result.activity_issues) or 'None'}")
         else:
             print("\nDiagnosis failed or returned no result.")
-            # TODO: Supervisor에서 error_message를 전달하도록 확장 후, 같이 출력
+            if error_message:
+                print(f"Reason: {error_message}")
             sys.exit(1)
             
     except Exception as e:
