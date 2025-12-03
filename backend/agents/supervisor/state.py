@@ -29,6 +29,7 @@ class SupervisorState(TypedDict):
     repo_id: str
     
     # Snapshots & Results
+    repo_snapshot: Optional[RepoSnapshot]
     dependency_snapshot: Optional[DependencySnapshot]
     diagnosis_result: Optional[DiagnosisCoreResult]
     security_result: Optional[Any]  # SecurityResult placeholder
