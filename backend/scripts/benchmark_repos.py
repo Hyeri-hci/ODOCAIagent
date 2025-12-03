@@ -15,7 +15,7 @@ Note:
 
 Usage:
     python backend/scripts/benchmark_repos.py
-    python backend/scripts/benchmark_repos.py --repos-file repos.txt --output-format json
+    python backend/scripts/benchmark_repos.py --preset oss_eval --output-format json
     python backend/scripts/benchmark_repos.py --output-path my_results.csv
 
 repos.txt Example:
@@ -45,7 +45,15 @@ SAMPLE_REPOS = [
     ("Hyeri-hci", "ODOCAIagent", "main"),
     ("langchain-ai", "langgraph", "main"),
     ("streamlit", "streamlit", "develop"),
-    # 필요 시 추가
+]
+
+# OSS 평가용 프리셋
+OSS_EVAL_REPOS = [
+    ("Hyeri-hci", "ODOCAIagent", "main"),
+    ("Hyeri-hci", "OSSDoctor", "main"),
+    ("Hyeri-hci", "odoc_test_repo", "main"),
+    ("facebook", "react", "main"),
+    ("microsoft", "vscode", "main"),
 ]
 
 def parse_repo_string(repo_str: str) -> Tuple[str, str, str]:
@@ -180,6 +188,7 @@ def save_results(results: List[Dict[str, Any]], output_path: str, output_format:
 def main():
     parser = argparse.ArgumentParser(description="Benchmark GitHub repositories for ODOCAIagent diagnosis.")
     parser.add_argument("--repos-file", help="Path to a file containing list of repos (owner/repo per line)")
+    parser.add_argument("--preset", help="Preset name (e.g., 'oss_eval')")
     parser.add_argument("--output-format", choices=["csv", "json"], default="csv", help="Output format (csv or json)")
     parser.add_argument("--output-path", help="Path to save the results")
     
@@ -188,9 +197,16 @@ def main():
     # 레포 목록 로드
     if args.repos_file:
         repos = load_repos_from_file(args.repos_file)
+        logger.info(f"Loaded {len(repos)} repos from file: {args.repos_file}")
+    elif args.preset == "oss_eval":
+        repos = OSS_EVAL_REPOS
+        logger.info(f"Using 'oss_eval' preset with {len(repos)} repos.")
+    elif args.preset:
+        logger.error(f"Unknown preset: {args.preset}")
+        sys.exit(1)
     else:
         repos = SAMPLE_REPOS
-        logger.info("No repos file provided. Using sample repos.")
+        logger.info("No repos file or preset provided. Using sample repos.")
 
     # 벤치마크 실행
     results = run_benchmark(repos)
