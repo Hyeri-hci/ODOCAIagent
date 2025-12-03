@@ -120,9 +120,7 @@ def compute_dependency_risk(deps: DependenciesSnapshot) -> tuple[int, List[str]]
     base_score = 0
     
     # 1. Total Dependencies Count Risk
-    if total_deps == 0:
-        base_score = 0
-    elif total_deps < 30:
+    if total_deps < 30:
         base_score = 20 + (total_deps / 30.0) * 20  # 20~40
     elif total_deps < 100:
         base_score = 40 + ((total_deps - 30) / 70.0) * 30  # 40~70
