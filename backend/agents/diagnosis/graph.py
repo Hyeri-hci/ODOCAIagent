@@ -2,17 +2,16 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Literal
 
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import AIMessage
 
 from backend.core.github_core import fetch_repo_snapshot
-from backend.core.docs_core import analyze_documentation
+from backend.core.docs_core import analyze_docs
 from backend.core.activity_core import analyze_activity
-from backend.core.structure_core import analyze_structure
 from backend.core.dependencies_core import parse_dependencies
-from backend.core.scoring_core import compute_diagnosis
+from backend.core.scoring_core import compute_scores
 from backend.core.models import RepoSnapshot
 
 from backend.agents.supervisor.state import SupervisorState
@@ -45,28 +44,19 @@ def run_diagnosis_core_node(state: SupervisorState) -> Dict[str, Any]:
     if not snapshot:
         return {"error_message": "저장소 스냅샷이 없습니다."}
 
-    project_rules = state.get("project_rules")
-
     try:
         # 1. 의존성 파싱
         deps = parse_dependencies(snapshot)
         
         # 2. 문서 분석
-        docs_result = analyze_documentation(snapshot.readme_content)
+        docs_result = analyze_docs(snapshot)
         
         # 3. 활동성 분석
-        activity_result = analyze_activity(snapshot.owner, snapshot.repo)
+        activity_result = analyze_activity(snapshot)
         
-        # 4. 구조 분석 (state에는 저장 안 하지만 로직상 실행)
-        # structure_result = analyze_structure(snapshot.owner, snapshot.repo, snapshot.ref)
+        # 4. 최종 진단 계산
+        diagnosis = compute_scores(docs_result, activity_result, deps)
 
-        # 5. 최종 진단 계산
-        diagnosis = compute_diagnosis(
-            repo_id=snapshot.repo_id,
-            docs_result=docs_result,
-            activity_result=activity_result,
-            project_rules=project_rules,
-        )
     except Exception as e:
         logger.error("Diagnosis core failed: %s", e)
         return {"error_message": f"진단 실행 실패: {e}"}
@@ -75,94 +65,95 @@ def run_diagnosis_core_node(state: SupervisorState) -> Dict[str, Any]:
         "dependency_snapshot": deps,
         "diagnosis_result": diagnosis,
         "docs_result": docs_result,
+        "activity_result": activity_result,
     }
 
 
 def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
-    """Node 3: LLM으로 진단 요약 메시지 생성 → messages에 추가."""
+    """Node 3: 진단 결과 요약 (Simple Text)."""
     diagnosis = state.get("diagnosis_result")
-    guidelines = state.get("session_guidelines")
 
     if not diagnosis:
         return {
             "messages": [AIMessage(content="진단 결과가 없습니다.")],
-            "last_answer_kind": "diagnosis", # Error but return diagnosis kind to end
+            "last_answer_kind": "diagnosis",
         }
 
-    user_level = guidelines.user_level if guidelines else "beginner"
-    language = guidelines.preferred_language if guidelines else "ko"
+    # 1. Fallback Summary (Default)
+    fallback_summary = (
+        f"### {diagnosis.repo_id} 진단 결과\n\n"
+        f"- **건강 점수**: {diagnosis.health_score}점 ({diagnosis.health_level})\n"
+        f"- **문서 품질**: {diagnosis.documentation_quality}점\n"
+        f"- **활동성**: {diagnosis.activity_maintainability}점\n"
+        f"- **온보딩**: {diagnosis.onboarding_score}점 ({diagnosis.onboarding_level})\n\n"
+        f"**주요 이슈**:\n"
+        f"- 문서: {', '.join(diagnosis.docs_issues) or '없음'}\n"
+        f"- 활동성: {', '.join(diagnosis.activity_issues) or '없음'}"
+    )
 
-    system_prompt = _build_diagnosis_system_prompt(user_level, language)
-    user_prompt = _build_diagnosis_user_prompt(diagnosis)
-
+    # 2. Try LLM Summary
     try:
         from backend.llm.factory import fetch_llm_client
-        from backend.llm.base import ChatMessage, ChatRequest
+        from backend.llm.base import ChatRequest, ChatMessage
+        from backend.common.config import LLM_MODEL_NAME
 
         client = fetch_llm_client()
+        
+        system_prompt = (
+            "You are an expert software engineering consultant. "
+            "Analyze the provided repository diagnosis data and provide a concise, professional summary in Korean. "
+            "Highlight key strengths, critical issues, and actionable recommendations. "
+            "Use markdown formatting with the following sections:\n"
+            "1. **Summary**: Overall assessment.\n"
+            "2. **Key Issues**: Critical problems found.\n"
+            "3. **Recommendations**: Actionable steps to improve."
+        )
+        
+        user_prompt = (
+            f"Repository: {diagnosis.repo_id}\n"
+            f"Health Score: {diagnosis.health_score} ({diagnosis.health_level})\n"
+            f"Docs Quality: {diagnosis.documentation_quality}\n"
+            f"Activity Score: {diagnosis.activity_maintainability}\n"
+            f"Onboarding Score: {diagnosis.onboarding_score} ({diagnosis.onboarding_level})\n"
+            f"Docs Issues: {', '.join(diagnosis.docs_issues)}\n"
+            f"Activity Issues: {', '.join(diagnosis.activity_issues)}\n\n"
+            "Please summarize this diagnosis."
+        )
+
         request = ChatRequest(
             messages=[
                 ChatMessage(role="system", content=system_prompt),
                 ChatMessage(role="user", content=user_prompt),
             ],
-            max_tokens=2000,
-            temperature=0.3,
+            model=LLM_MODEL_NAME,
+            temperature=0.2,
         )
-        response = client.chat(request)
-        summary = response.content.strip()
+        
+        response = client.chat(request, timeout=10)
+        summary_text = response.content
+
     except Exception as e:
-        logger.error("LLM summarization failed: %s", e)
-        summary = _build_fallback_summary(diagnosis)
+        logger.warning(f"LLM summary failed, using fallback: {e}")
+        summary_text = fallback_summary
 
     return {
-        "messages": [AIMessage(content=summary)],
+        "messages": [AIMessage(content=summary_text)],
         "last_answer_kind": "diagnosis",
     }
 
 
-def _build_diagnosis_system_prompt(user_level: str, language: str) -> str:
-    if language == "ko":
-        return f"""당신은 오픈소스 프로젝트 분석 전문가입니다.
-사용자 수준: {user_level}
-- beginner: 쉬운 용어로 설명, 다음 단계 안내
-- intermediate: 기술적 세부사항 포함
-- advanced: 메트릭 공식과 개선 제안 포함
-
-진단 결과를 한국어로 명확하게 요약해 주세요."""
-    return f"""You are an open source project analysis expert.
-User level: {user_level}
-Summarize the diagnosis results clearly."""
+def route_after_fetch(state: SupervisorState) -> Literal["run_diagnosis_core", "__end__"]:
+    """Fetch 실패 시 조기 종료."""
+    if state.get("error_message"):
+        return "__end__"
+    return "run_diagnosis_core"
 
 
-def _build_diagnosis_user_prompt(diagnosis) -> str:
-    return f"""## 진단 결과
-
-- 저장소: {diagnosis.repo_id}
-- 건강 점수: {diagnosis.health_score}/100 ({diagnosis.health_level})
-- 문서 품질: {diagnosis.documentation_quality}/100
-- 활동성: {diagnosis.activity_maintainability}/100
-- 온보딩 점수: {diagnosis.onboarding_score}/100 ({diagnosis.onboarding_level})
-- 건강 상태: {'양호' if diagnosis.is_healthy else '개선 필요'}
-
-### 이슈
-- 문서: {', '.join(diagnosis.docs_issues) or '없음'}
-- 활동성: {', '.join(diagnosis.activity_issues) or '없음'}
-
-위 데이터를 바탕으로 사용자에게 요약을 제공해 주세요."""
-
-
-def _build_fallback_summary(diagnosis) -> str:
-    status = "양호" if diagnosis.is_healthy else "개선 필요"
-    return f"""### {diagnosis.repo_id} 분석 결과
-
-| 지표 | 점수 | 상태 |
-|------|------|------|
-| 건강 점수 | {diagnosis.health_score} | {diagnosis.health_level} |
-| 문서 품질 | {diagnosis.documentation_quality} | - |
-| 활동성 | {diagnosis.activity_maintainability} | - |
-| 온보딩 | {diagnosis.onboarding_score} | {diagnosis.onboarding_level} |
-
-**상태**: {status}"""
+def route_after_core(state: SupervisorState) -> Literal["summarize_diagnosis", "__end__"]:
+    """Core 진단 실패 시 조기 종료."""
+    if state.get("error_message"):
+        return "__end__"
+    return "summarize_diagnosis"
 
 
 def build_diagnosis_agent_graph() -> StateGraph:
@@ -174,8 +165,25 @@ def build_diagnosis_agent_graph() -> StateGraph:
     graph.add_node("summarize_diagnosis", summarize_diagnosis_node)
 
     graph.set_entry_point("fetch_repo_data")
-    graph.add_edge("fetch_repo_data", "run_diagnosis_core")
-    graph.add_edge("run_diagnosis_core", "summarize_diagnosis")
+    
+    graph.add_conditional_edges(
+        "fetch_repo_data",
+        route_after_fetch,
+        {
+            "run_diagnosis_core": "run_diagnosis_core",
+            "__end__": END,
+        }
+    )
+    
+    graph.add_conditional_edges(
+        "run_diagnosis_core",
+        route_after_core,
+        {
+            "summarize_diagnosis": "summarize_diagnosis",
+            "__end__": END,
+        }
+    )
+    
     graph.add_edge("summarize_diagnosis", END)
 
     return graph

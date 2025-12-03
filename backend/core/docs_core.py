@@ -8,14 +8,12 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Any
 
-from .models import DocsCoreResult
+from .models import DocsCoreResult, RepoSnapshot
 
 logger = logging.getLogger(__name__)
 
 
-# -------------------------------------------------------------------------
 # 1. Data Structures
-# -------------------------------------------------------------------------
 
 class ReadmeCategory(Enum):
     WHAT = "WHAT"
@@ -50,9 +48,7 @@ class SectionClassification:
     score: float
 
 
-# -------------------------------------------------------------------------
 # 2. Constants & Keywords
-# -------------------------------------------------------------------------
 
 REQUIRED_SECTIONS = ["WHAT", "WHY", "HOW", "CONTRIBUTING", "REFERENCES", "WHEN", "WHO", "OTHER"]
 
@@ -139,9 +135,7 @@ BODY_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
 }
 
 
-# -------------------------------------------------------------------------
 # 3. Helper Functions
-# -------------------------------------------------------------------------
 
 def split_readme_into_sections(markdown_text: str) -> List[ReadmeSection]:
     """마크다운 텍스트를 헤딩 기준으로 섹션 분리."""
@@ -310,9 +304,7 @@ def _compute_documentation_score(
     return max(0, min(score, 100))
 
 
-# -------------------------------------------------------------------------
 # 4. Main Analysis Function
-# -------------------------------------------------------------------------
 
 def analyze_documentation(readme_content: Optional[str]) -> DocsCoreResult:
     """README 기반 문서 품질 분석 (Pure Python)."""
@@ -366,3 +358,8 @@ def analyze_documentation(readme_content: Optional[str]) -> DocsCoreResult:
         missing_sections=missing_sections,
         present_sections=present_sections,
     )
+
+
+def analyze_docs(snapshot: "RepoSnapshot") -> DocsCoreResult:
+    """Wrapper for analyze_documentation using RepoSnapshot."""
+    return analyze_documentation(snapshot.readme_content)

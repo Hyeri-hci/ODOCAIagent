@@ -8,7 +8,6 @@ from langgraph.graph import StateGraph, END
 # from langgraph.checkpoint.sqlite import SqliteSaver # Import inside function to avoid error if missing
 
 from backend.agents.supervisor.state import SupervisorState
-from backend.agents.diagnosis.graph import get_diagnosis_agent
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +23,7 @@ def router_start_node(state: SupervisorState) -> Dict[str, Any]:
 def diagnosis_agent_entry(state: SupervisorState) -> Dict[str, Any]:
     """DiagnosisAgent 서브그래프 실행."""
     logger.info("Entering DiagnosisAgent...")
+    from backend.agents.diagnosis.graph import get_diagnosis_agent
     diagnosis_agent = get_diagnosis_agent()
     result = diagnosis_agent.invoke(state)
     
@@ -33,8 +33,10 @@ def diagnosis_agent_entry(state: SupervisorState) -> Dict[str, Any]:
         "dependency_snapshot": result.get("dependency_snapshot"),
         "diagnosis_result": result.get("diagnosis_result"),
         "docs_result": result.get("docs_result"),
+        "activity_result": result.get("activity_result"),
         "messages": result.get("messages"),
         "last_answer_kind": result.get("last_answer_kind"),
+        "error_message": result.get("error_message"), # Propagate error
     }
 
 
