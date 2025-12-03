@@ -366,7 +366,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         commit_metrics=commit_metrics,
     )
 
-    # 규칙 기반 라벨 생성
+    # 규칙 기반 라벨 생성 (v2: 마케팅/지속가능성 파라미터 추가)
     readme_categories = details.get("docs", {}).get("readme_categories")
     activity_scores_dict = details.get("activity", {}).get("scores")
     
@@ -377,8 +377,14 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
         activity_score=scores.activity_maintainability,
         readme_categories=readme_categories,
         activity_scores=activity_scores_dict,
-        repo_info=details.get("repo_info"),  # 데이터 품질 검사용
-        activity_data=details.get("activity"),  # 데이터 품질 검사용
+        repo_info=details.get("repo_info"),
+        activity_data=details.get("activity"),
+        # v2 파라미터
+        is_marketing_heavy=scores.is_marketing_heavy,
+        has_broken_refs=scores.has_broken_refs,
+        docs_effective=scores.docs_effective,
+        gate_level=scores.gate_level,
+        is_sustainable=scores.is_sustainable,
     )
 
     # 온보딩 계획 생성 (needs["need_onboarding"]이 True일 때만)

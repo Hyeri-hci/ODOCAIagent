@@ -8,6 +8,7 @@ from backend.agents.diagnosis.tools.scoring.diagnosis_labels import (
     compute_docs_issues,
     compute_activity_issues,
     compute_data_quality_issues,
+    compute_sustainability_issues,
     create_diagnosis_labels,
 )
 
@@ -209,3 +210,87 @@ class TestInsufficientData:
         d = labels.to_dict()
         assert d["insufficient_data"] is True
 
+
+class TestV2Features:
+    """v2 신규 필드 테스트: 마케팅/지속가능성 이슈"""
+
+    def test_marketing_heavy_issue(self):
+        """is_marketing_heavy=True -> marketing_heavy_readme 이슈"""
+        issues = compute_docs_issues(
+            doc_score=80,
+            is_marketing_heavy=True,
+        )
+        assert "marketing_heavy_readme" in issues
+
+    def test_broken_refs_issue(self):
+        """has_broken_refs=True -> broken_references 이슈"""
+        issues = compute_docs_issues(
+            doc_score=80,
+            has_broken_refs=True,
+        )
+        assert "broken_references" in issues
+
+    def test_inflated_docs_score(self):
+        """doc_score - docs_effective >= 20 -> inflated_docs_score 이슈"""
+        issues = compute_docs_issues(
+            doc_score=80,
+            docs_effective=55,  # gap = 25
+        )
+        assert "inflated_docs_score" in issues
+
+    def test_no_inflated_docs_score_small_gap(self):
+        """doc_score - docs_effective < 20 -> inflated_docs_score 없음"""
+        issues = compute_docs_issues(
+            doc_score=80,
+            docs_effective=65,  # gap = 15
+        )
+        assert "inflated_docs_score" not in issues
+
+    def test_sustainability_abandoned(self):
+        """gate_level=abandoned -> project_abandoned 이슈"""
+        issues = compute_sustainability_issues(gate_level="abandoned")
+        assert "project_abandoned" in issues
+
+    def test_sustainability_stale(self):
+        """gate_level=stale -> project_stale 이슈"""
+        issues = compute_sustainability_issues(gate_level="stale")
+        assert "project_stale" in issues
+
+    def test_sustainability_concern(self):
+        """is_sustainable=False -> sustainability_concern 이슈"""
+        issues = compute_sustainability_issues(gate_level="maintained", is_sustainable=False)
+        assert "sustainability_concern" in issues
+
+    def test_labels_include_v2_fields(self):
+        """create_diagnosis_labels에서 v2 필드 포함 확인"""
+        labels = create_diagnosis_labels(
+            health_score=70,
+            onboarding_score=65,
+            doc_score=80,
+            activity_score=60,
+            is_marketing_heavy=True,
+            has_broken_refs=True,
+            docs_effective=55,
+            gate_level="stale",
+            is_sustainable=False,
+        )
+        assert labels.gate_level == "stale"
+        assert "marketing_heavy_readme" in labels.docs_issues
+        assert "broken_references" in labels.docs_issues
+        assert "inflated_docs_score" in labels.docs_issues
+        assert "project_stale" in labels.sustainability_issues
+        assert "sustainability_concern" in labels.sustainability_issues
+
+    def test_labels_v2_to_dict(self):
+        """v2 필드가 to_dict에 포함되는지 확인"""
+        labels = create_diagnosis_labels(
+            health_score=85,
+            onboarding_score=80,
+            doc_score=90,
+            activity_score=75,
+            gate_level="active",
+        )
+        d = labels.to_dict()
+        assert "gate_level" in d
+        assert "sustainability_issues" in d
+        assert d["gate_level"] == "active"

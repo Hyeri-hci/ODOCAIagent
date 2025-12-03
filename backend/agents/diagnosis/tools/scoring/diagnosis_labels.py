@@ -14,6 +14,10 @@ class DiagnosisLabels:
     activity_issues: List[str] = field(default_factory=list)
     data_quality_issues: List[str] = field(default_factory=list)  # 데이터 부족 경고
     insufficient_data: bool = False  # 점수표 숨김 플래그
+    
+    # v2 신규 필드
+    gate_level: str = "unknown"  # active | maintained | stale | abandoned
+    sustainability_issues: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -45,13 +49,30 @@ def compute_onboarding_level(onboarding_score: int) -> str:
 def compute_docs_issues(
     doc_score: int,
     readme_categories: Optional[Dict[str, Any]] = None,
+    is_marketing_heavy: bool = False,
+    has_broken_refs: bool = False,
+    docs_effective: Optional[int] = None,
 ) -> List[str]:
-    """doc_score 및 readme_categories 기반 문서 이슈 추출."""
+    """doc_score 및 readme_categories 기반 문서 이슈 추출 (v2: 마케팅/참조 이슈 포함)."""
     issues: List[str] = []
 
     # 전반적 문서화 부족
     if doc_score < 40:
         issues.append("weak_documentation")
+
+    # v2: 마케팅 과다 README
+    if is_marketing_heavy:
+        issues.append("marketing_heavy_readme")
+    
+    # v2: 깨진 참조
+    if has_broken_refs:
+        issues.append("broken_references")
+    
+    # v2: 유효 문서 점수가 형식 점수보다 많이 낮은 경우
+    if docs_effective is not None and doc_score > 0:
+        gap = doc_score - docs_effective
+        if gap >= 20:
+            issues.append("inflated_docs_score")
 
     # 개별 카테고리 검사
     if readme_categories:
@@ -92,6 +113,24 @@ def compute_activity_issues(
         if activity_scores.get("pr_score", 1.0) < 0.4:
             issues.append("slow_pr_merge")
 
+    return issues
+
+
+def compute_sustainability_issues(
+    gate_level: str,
+    is_sustainable: bool = True,
+) -> List[str]:
+    """지속가능성 게이트 기반 이슈 추출."""
+    issues: List[str] = []
+    
+    if gate_level == "abandoned":
+        issues.append("project_abandoned")
+    elif gate_level == "stale":
+        issues.append("project_stale")
+    
+    if not is_sustainable:
+        issues.append("sustainability_concern")
+    
     return issues
 
 
@@ -171,15 +210,29 @@ def create_diagnosis_labels(
     activity_scores: Optional[Dict[str, float]] = None,
     repo_info: Optional[Dict[str, Any]] = None,
     activity_data: Optional[Dict[str, Any]] = None,
+    # v2 파라미터
+    is_marketing_heavy: bool = False,
+    has_broken_refs: bool = False,
+    docs_effective: Optional[int] = None,
+    gate_level: str = "unknown",
+    is_sustainable: bool = True,
 ) -> DiagnosisLabels:
-    """진단 점수들로부터 구조적 라벨 생성."""
+    """진단 점수들로부터 구조적 라벨 생성 (v2: 마케팅/지속가능성 이슈 포함)."""
     data_quality_issues, insufficient_data = compute_data_quality_issues(repo_info, activity_data)
     
     return DiagnosisLabels(
         health_level=compute_health_level(health_score),
         onboarding_level=compute_onboarding_level(onboarding_score),
-        docs_issues=compute_docs_issues(doc_score, readme_categories),
+        docs_issues=compute_docs_issues(
+            doc_score, 
+            readme_categories,
+            is_marketing_heavy=is_marketing_heavy,
+            has_broken_refs=has_broken_refs,
+            docs_effective=docs_effective,
+        ),
         activity_issues=compute_activity_issues(activity_score, activity_scores),
         data_quality_issues=data_quality_issues,
         insufficient_data=insufficient_data,
+        gate_level=gate_level,
+        sustainability_issues=compute_sustainability_issues(gate_level, is_sustainable),
     )
