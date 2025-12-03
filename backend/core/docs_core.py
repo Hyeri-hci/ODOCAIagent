@@ -1,4 +1,4 @@
-"""문서 분석 Core 레이어 - README 구조 분석 및 8-카테고리 스코어 (Pure Python)."""
+"""문서 분석 Core 레이어 - README 구조 분석 및 8-카테고리 스코어 (Pure Python)"""
 from __future__ import annotations
 
 import re
@@ -150,7 +150,7 @@ MARKETING_KEYWORDS = [
 # 3. Helper Functions
 
 def split_readme_into_sections(markdown_text: str) -> List[ReadmeSection]:
-    """마크다운 텍스트를 헤딩 기준으로 섹션 분리."""
+    """마크다운 텍스트를 헤딩 기준으로 섹션 분리"""
     lines = markdown_text.splitlines()
     sections: List[ReadmeSection] = []
     
@@ -190,7 +190,7 @@ def split_readme_into_sections(markdown_text: str) -> List[ReadmeSection]:
 
 
 def _classify_section_rule_based(section: ReadmeSection) -> SectionClassification:
-    """헤딩/본문 키워드 기반 섹션 분류."""
+    """헤딩/본문 키워드 기반 섹션 분류"""
     heading = (section.heading or "").strip()
     body = section.content or ""
 
@@ -241,6 +241,11 @@ def _classify_section_rule_based(section: ReadmeSection) -> SectionClassificatio
             best_cat = cat
 
     return SectionClassification(category=best_cat, score=min(best_raw_score / 10.0, 1.0))
+
+
+
+
+
 
 
 def _apply_last_section_bias(category: ReadmeCategory, section: ReadmeSection) -> ReadmeCategory:
@@ -306,8 +311,8 @@ def _compute_documentation_score(
     optional_cov = 0.0
 
     # 1. Coverage Score Calculation (Presence-based)
-    # 텍스트 비중(fraction)을 사용하면 카테고리 수로 나눌 때 점수가 너무 낮아지므로,
-    # "존재 여부(Presence)"를 기준으로 가중치를 적용합니다.
+    # 텍스트 비중(fraction) 사용 시 카테고리 수로 나눌 때 점수가 너무 낮아짐
+    # "존재 여부(Presence)" 기준으로 가중치 적용
     
     for cat in ReadmeCategory:
         sections = grouped.get(cat, [])
@@ -355,20 +360,18 @@ def _compute_documentation_score(
     
     final_score = base_score + bonus
     
-    # Scale adjustment: 커버리지가 낮으면 점수가 너무 낮게 나올 수 있으므로,
-    # 필수 카테고리가 존재하면 기본 점수를 보장하는 로직 추가 가능하나,
-    # 현재 요구사항에 따라 단순 클램핑만 수행.
+    # Scale adjustment: 커버리지가 낮으면 점수가 너무 낮게 나올 수 있음
+    # 필수 카테고리 존재 시 기본 점수 보장 로직 추가 가능하나, 현재 요구사항에 따라 단순 클램핑만 수행
     
-    # 다만, 커버리지 기반 점수는 텍스트 양이 적으면 매우 낮게 나올 수 있음.
-    # 따라서 카테고리 존재 여부 자체에 대한 기본 점수를 부여하는 것이 일반적임.
-    # 여기서는 요구사항("필수/옵션 coverage 기준으로만 계산")을 따르되,
-    # 커버리지 값이 너무 작아지는 것을 방지하기 위해 Normalize 방식을 유지함.
+    # 커버리지 기반 점수는 텍스트 양이 적으면 매우 낮게 나올 수 있음
+    # 카테고리 존재 여부 자체에 대한 기본 점수 부여가 일반적임
+    # 요구사항("필수/옵션 coverage 기준으로만 계산")을 따르되, 커버리지 값이 너무 작아지는 것 방지 위해 Normalize 방식 유지
     
     return max(0, min(int(round(final_score)), 100))
 
 
 def _calculate_marketing_ratio(readme_content: str) -> float:
-    """마케팅 텍스트 비중 계산 (0~1)."""
+    """마케팅 텍스트 비중 계산 (0~1)"""
     if not readme_content:
         return 0.0
         
@@ -390,15 +393,21 @@ def _calculate_marketing_ratio(readme_content: str) -> float:
 
 # 4. Main Analysis Function
 
-def analyze_documentation(readme_content: Optional[str]) -> DocsCoreResult:
-    """README 기반 문서 품질 분석 (Pure Python)."""
+def analyze_documentation(
+    readme_content: Optional[str],
+    custom_required_sections: Optional[List[str]] = None
+) -> DocsCoreResult:
+    """README 기반 문서 품질 분석 (Pure Python)"""
+    
+    target_required = custom_required_sections if custom_required_sections else REQUIRED_SECTIONS
+    
     if not readme_content or not readme_content.strip():
         return DocsCoreResult(
             readme_present=False,
             readme_word_count=0,
             category_scores={},
             total_score=0,
-            missing_sections=REQUIRED_SECTIONS.copy(),
+            missing_sections=target_required.copy(),
             present_sections=[],
             marketing_ratio=0.0,
         )
@@ -434,7 +443,11 @@ def analyze_documentation(readme_content: Optional[str]) -> DocsCoreResult:
     marketing_ratio = _calculate_marketing_ratio(readme_content)
 
     present_sections = [k for k, v in cat_infos.items() if v["present"]]
-    missing_sections = [k for k in REQUIRED_SECTIONS if k not in present_sections]
+    
+    # Missing Sections 계산 (Custom Rule 적용)
+    # Note: ReadmeCategory Enum 값과 target_required 문자열 일치해야 함
+    # target_required가 ["WHAT", "HOW"] 형태라고 가정
+    missing_sections = [req for req in target_required if req not in present_sections]
 
     return DocsCoreResult(
         readme_present=True,
@@ -447,6 +460,9 @@ def analyze_documentation(readme_content: Optional[str]) -> DocsCoreResult:
     )
 
 
-def analyze_docs(snapshot: "RepoSnapshot") -> DocsCoreResult:
-    """Wrapper for analyze_documentation using RepoSnapshot."""
-    return analyze_documentation(snapshot.readme_content)
+def analyze_docs(
+    snapshot: "RepoSnapshot",
+    custom_required_sections: Optional[List[str]] = None
+) -> DocsCoreResult:
+    """Wrapper for analyze_documentation using RepoSnapshot"""
+    return analyze_documentation(snapshot.readme_content, custom_required_sections)

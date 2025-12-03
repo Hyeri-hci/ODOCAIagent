@@ -40,6 +40,7 @@ def fetch_repo_data_node(state: SupervisorState) -> Dict[str, Any]:
 def run_diagnosis_core_node(state: SupervisorState) -> Dict[str, Any]:
     """Node 2: Core 레이어 진단 실행."""
     snapshot: Optional[RepoSnapshot] = state.get("repo_snapshot")
+    project_rules = state.get("project_rules")
 
     if not snapshot:
         return {"error_message": "저장소 스냅샷이 없습니다."}
@@ -48,8 +49,9 @@ def run_diagnosis_core_node(state: SupervisorState) -> Dict[str, Any]:
         # 1. 의존성 파싱
         deps = parse_dependencies(snapshot)
         
-        # 2. 문서 분석
-        docs_result = analyze_docs(snapshot)
+        # 2. 문서 분석 (ProjectRules 적용)
+        required_sections = project_rules.required_sections if project_rules else None
+        docs_result = analyze_docs(snapshot, custom_required_sections=required_sections)
         
         # 3. 활동성 분석
         activity_result = analyze_activity(snapshot)
@@ -72,6 +74,7 @@ def run_diagnosis_core_node(state: SupervisorState) -> Dict[str, Any]:
 def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     """Node 3: 진단 결과 요약 (Simple Text)."""
     diagnosis = state.get("diagnosis_result")
+    docs_result = state.get("docs_result")
 
     if not diagnosis:
         return {
@@ -109,6 +112,16 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
             "3. **Recommendations**: Actionable steps to improve."
         )
         
+        # 문서 상세 정보 추가
+        docs_detail = ""
+        if docs_result:
+            missing = ", ".join(docs_result.missing_sections) or "None"
+            marketing = f"{docs_result.marketing_ratio:.2f}"
+            docs_detail = (
+                f"Missing Sections: {missing}\n"
+                f"Marketing Ratio: {marketing}\n"
+            )
+        
         user_prompt = (
             f"Repository: {diagnosis.repo_id}\n"
             f"Health Score: {diagnosis.health_score} ({diagnosis.health_level})\n"
@@ -116,7 +129,8 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
             f"Activity Score: {diagnosis.activity_maintainability}\n"
             f"Onboarding Score: {diagnosis.onboarding_score} ({diagnosis.onboarding_level})\n"
             f"Docs Issues: {', '.join(diagnosis.docs_issues)}\n"
-            f"Activity Issues: {', '.join(diagnosis.activity_issues)}\n\n"
+            f"Activity Issues: {', '.join(diagnosis.activity_issues)}\n"
+            f"{docs_detail}\n"
             "Please summarize this diagnosis."
         )
 

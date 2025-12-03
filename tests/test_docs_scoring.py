@@ -88,5 +88,22 @@ print("Hello")
         # Let's verify the logic directly if possible, or rely on the score difference.
         self.assertGreater(result_bonus.total_score, result_no.total_score)
 
+    def test_custom_required_sections(self):
+        content = "# Title\n## Overview\nSome text."
+        
+        # Default requirements (WHAT, WHY, HOW, etc.)
+        result_default = analyze_documentation(content)
+        self.assertIn("HOW", result_default.missing_sections)
+        
+        # Custom requirements
+        custom_reqs = ["WHAT", "Overview"] # Note: Overview is not a category, but let's assume user maps it or we use categories.
+        # Wait, the implementation expects ReadmeCategory values as strings in required_sections.
+        # Let's use valid category names.
+        custom_reqs = ["WHAT", "HOW"]
+        
+        result_custom = analyze_documentation(content, custom_required_sections=custom_reqs)
+        self.assertIn("HOW", result_custom.missing_sections)
+        self.assertNotIn("WHY", result_custom.missing_sections) # WHY is not in custom reqs
+
 if __name__ == "__main__":
     unittest.main()
