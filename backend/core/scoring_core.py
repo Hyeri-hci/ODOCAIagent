@@ -103,6 +103,45 @@ def compute_activity_issues(
     return issues
 
 
+def compute_dependency_risk(deps: DependenciesSnapshot) -> tuple[int, List[str]]:
+    """초기 베타 버전 의존성 리스크 점수, 나중에 실제 데이터/전문가 피드백 기반으로 튜닝 예정."""
+    if not deps or not deps.dependencies:
+        return 0, []
+
+    total_deps = len(deps.dependencies)
+    pinned_count = 0
+    for d in deps.dependencies:
+        if d.version and (d.version.startswith("==") or d.version[0].isdigit()):
+            pinned_count += 1
+            
+    pinned_ratio = pinned_count / total_deps if total_deps > 0 else 0.0
+    
+    issues: List[str] = []
+    base_score = 0
+    
+    # 1. Total Dependencies Count Risk
+    if total_deps == 0:
+        base_score = 0
+    elif total_deps < 30:
+        base_score = 20 + (total_deps / 30.0) * 20  # 20~40
+    elif total_deps < 100:
+        base_score = 40 + ((total_deps - 30) / 70.0) * 30  # 40~70
+    else:
+        base_score = 70 + min(((total_deps - 100) / 100.0) * 20, 20) # 70~90
+        issues.append("many_dependencies")
+
+    # 2. Pinned Ratio Risk
+    if pinned_ratio < 0.3:
+        base_score += 15
+        issues.append("unpinned_dependencies")
+    elif pinned_ratio < 0.7:
+        base_score += 5
+
+    final_score = min(int(base_score), 100)
+    
+    return final_score, issues
+
+
 # 3. Main Computation Function
 
 def compute_diagnosis(
@@ -163,6 +202,16 @@ def compute_scores(
         activity_result=activity,
     )
     
-    # 결과에 의존성 스냅샷 추가
+    # 의존성 리스크 계산
+    risk_score, dep_issues = compute_dependency_risk(deps)
+    
+    # 결과에 의존성 정보 추가 (dataclass replace 대신 직접 할당 또는 재생성)
+    # DiagnosisCoreResult는 frozen=False (default) 이므로 직접 수정 가능하지만,
+    # 안전하게 새로운 객체를 생성하거나 필드를 업데이트.
+    # 여기서는 compute_diagnosis가 반환한 객체에 필드를 설정.
+    
     result.dependency_snapshot = deps
+    result.dependency_risk_score = risk_score
+    result.dependency_issues = dep_issues
+    
     return result
