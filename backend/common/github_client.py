@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
 import datetime as dt
 import requests
 import logging
@@ -15,6 +16,113 @@ GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 class GitHubClientError(Exception):
     """Custom exception for GitHub API call errors."""
     pass
+
+
+class RepoAccessError(GitHubClientError):
+    """Raised when repo access is denied (403/404)."""
+    def __init__(self, owner: str, repo: str, status_code: int, reason: str):
+        self.owner = owner
+        self.repo = repo
+        self.status_code = status_code
+        self.reason = reason
+        super().__init__(f"Access denied to {owner}/{repo}: {status_code} - {reason}")
+
+
+@dataclass
+class RepoAccessResult:
+    """Result of repo access check."""
+    accessible: bool
+    owner: str
+    repo: str
+    repo_id: str
+    status_code: int
+    reason: str  # "ok" | "not_found" | "private_no_access" | "rate_limit" | "error"
+    default_branch: Optional[str] = None
+    
+    @property
+    def is_private_error(self) -> bool:
+        return self.status_code in (403, 404) and self.reason in ("not_found", "private_no_access")
+
+
+def check_repo_access(owner: str, repo: str) -> RepoAccessResult:
+    """Pre-flight check: verify repo exists and is accessible.
+    
+    This is the FIRST call before any diagnosis/analysis.
+    Returns RepoAccessResult with accessibility status.
+    """
+    repo_id = f"{owner}/{repo}"
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}"
+    
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            return RepoAccessResult(
+                accessible=True,
+                owner=owner,
+                repo=repo,
+                repo_id=repo_id,
+                status_code=200,
+                reason="ok",
+                default_branch=data.get("default_branch", "main"),
+            )
+        elif resp.status_code == 404:
+            return RepoAccessResult(
+                accessible=False,
+                owner=owner,
+                repo=repo,
+                repo_id=repo_id,
+                status_code=404,
+                reason="not_found",
+            )
+        elif resp.status_code == 403:
+            # Check if rate limit or private repo
+            if "rate limit" in resp.text.lower():
+                return RepoAccessResult(
+                    accessible=False,
+                    owner=owner,
+                    repo=repo,
+                    repo_id=repo_id,
+                    status_code=403,
+                    reason="rate_limit",
+                )
+            return RepoAccessResult(
+                accessible=False,
+                owner=owner,
+                repo=repo,
+                repo_id=repo_id,
+                status_code=403,
+                reason="private_no_access",
+            )
+        else:
+            return RepoAccessResult(
+                accessible=False,
+                owner=owner,
+                repo=repo,
+                repo_id=repo_id,
+                status_code=resp.status_code,
+                reason="error",
+            )
+    except requests.Timeout:
+        return RepoAccessResult(
+            accessible=False,
+            owner=owner,
+            repo=repo,
+            repo_id=repo_id,
+            status_code=0,
+            reason="timeout",
+        )
+    except Exception as e:
+        logger.warning(f"check_repo_access failed for {repo_id}: {e}")
+        return RepoAccessResult(
+            accessible=False,
+            owner=owner,
+            repo=repo,
+            repo_id=repo_id,
+            status_code=0,
+            reason="error",
+        )
 
 
 def _build_headers() -> Dict[str, str]:
@@ -477,6 +585,81 @@ def fetch_recent_pull_requests(
             break
 
     return all_prs
+
+
+# Consilience 지원 함수
+
+@cached(ttl=86400)  # 24시간 캐시
+def fetch_repo_tree(owner: str, repo: str, sha: str = "HEAD") -> Dict[str, Any]:
+    """리포지토리 트리 가져오기 (재귀적)."""
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"tree": []}
+    except requests.Timeout:
+        logger.warning("fetch_repo_tree timeout: %s/%s", owner, repo)
+        return {"tree": []}
+    except requests.RequestException as e:
+        logger.warning("fetch_repo_tree failed: %s/%s - %s", owner, repo, e)
+        return {"tree": []}
+
+
+@cached(ttl=86400)  # 24시간 캐시
+def fetch_workflow_runs(owner: str, repo: str, workflow_file: str = None) -> Dict[str, Any]:
+    """GitHub Actions 워크플로 실행 기록 가져오기."""
+    if workflow_file:
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/workflows/{workflow_file}/runs?per_page=5"
+    else:
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/runs?per_page=10"
+    
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"workflow_runs": []}
+    except requests.Timeout:
+        logger.warning("fetch_workflow_runs timeout: %s/%s", owner, repo)
+        return {"workflow_runs": []}
+    except requests.RequestException as e:
+        logger.warning("fetch_workflow_runs failed: %s/%s - %s", owner, repo, e)
+        return {"workflow_runs": []}
+
+
+@cached(ttl=86400)  # 24시간 캐시
+def fetch_workflows(owner: str, repo: str) -> List[Dict[str, Any]]:
+    """워크플로 목록 가져오기."""
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/workflows"
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        if resp.status_code == 200:
+            return resp.json().get("workflows", [])
+        return []
+    except requests.Timeout:
+        logger.warning("fetch_workflows timeout: %s/%s", owner, repo)
+        return []
+    except requests.RequestException as e:
+        logger.warning("fetch_workflows failed: %s/%s - %s", owner, repo, e)
+        return []
+
+
+@cached(ttl=3600)  # 1시간 캐시
+def fetch_repo_contents(owner: str, repo: str, path: str = "") -> List[Dict[str, Any]]:
+    """리포지토리 디렉토리 내용 가져오기."""
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}"
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        if resp.status_code == 200:
+            result = resp.json()
+            return result if isinstance(result, list) else []
+        return []
+    except requests.Timeout:
+        logger.warning("fetch_repo_contents timeout: %s/%s/%s", owner, repo, path)
+        return []
+    except requests.RequestException as e:
+        logger.warning("fetch_repo_contents failed: %s/%s/%s - %s", owner, repo, path, e)
+        return []
 
 
 def clear_repo_cache(owner: str, repo: str) -> None:

@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field, field_validator
 
 
 # Answer Contract (Enforces sources for LLM responses)
-
 class AnswerContract(BaseModel):
     """LLM Response Contract: All answers must specify their sources."""
     text: str = Field(..., min_length=1, description="Response text for the user.")
@@ -37,7 +36,6 @@ class AnswerContract(BaseModel):
 
 
 # Plan Step & Supervisor Output
-
 class AgentType(str, Enum):
     """Available Agent types."""
     DIAGNOSIS = "diagnosis"
@@ -126,7 +124,6 @@ class AgenticSupervisorOutput(BaseModel):
 
 
 # Error Policy & Inference Hints
-
 class ErrorKind(str, Enum):
     """Enumeration of error types."""
     PERMISSION = "permission"       # Permission error (e.g., private repo)
@@ -173,7 +170,6 @@ class InferenceHints(BaseModel):
 
 
 # Artifact-related types
-
 class ArtifactKind(str, Enum):
     """Enumeration of artifact kinds."""
     DIAGNOSIS_RAW = "diagnosis_raw"
@@ -196,7 +192,6 @@ class ArtifactRef(BaseModel):
 
 
 # Agent Error
-
 class AgentError(Exception):
     """Custom exception for errors during Agent execution."""
     
@@ -215,10 +210,7 @@ class AgentError(Exception):
         return self._suggested_fallback
 
 
-# =============================================================================
 # Runner Output Contract (Unified output for all runners/agents)
-# =============================================================================
-
 class RunnerStatus(str, Enum):
     """Execution status for runners."""
     SUCCESS = "success"
@@ -276,10 +268,7 @@ class RunnerOutput(BaseModel):
         )
 
 
-# =============================================================================
 # Answer Contract Validator
-# =============================================================================
-
 def validate_answer_contract(answer: AnswerContract, enforce: bool = True) -> bool:
     """
     Validates the AnswerContract.
@@ -338,10 +327,7 @@ def create_answer_with_sources(
     )
 
 
-# =============================================================================
 # Runner Output Normalization (Null-safe)
-# =============================================================================
-
 def normalize_runner_output(raw: Any) -> RunnerOutput:
     """
     Normalizes any runner output to RunnerOutput contract.
@@ -416,10 +402,7 @@ def safe_get_nested(d: Any, *keys: str, default: Any = None) -> Any:
     return current if current is not None else default
 
 
-# =============================================================================
 # Contract Validation Helpers
-# =============================================================================
-
 class ContractViolation(Exception):
     """Raised when a contract is violated."""
     def __init__(self, message: str, contract_name: str, field: str = ""):
