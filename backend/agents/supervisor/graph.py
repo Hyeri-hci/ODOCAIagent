@@ -1,780 +1,122 @@
-"""Supervisor Graph V1: Simple 4-node workflow with idempotency."""
+"""Supervisor Graph - 메인 오케스트레이터 (Refactored)."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal
 
 from langgraph.graph import StateGraph, END
+# from langgraph.checkpoint.sqlite import SqliteSaver # Import inside function to avoid error if missing
 
-from backend.agents.supervisor.models import (
-    SupervisorState,
-    DEFAULT_INTENT,
-    DEFAULT_SUB_INTENT,
-)
-from backend.agents.supervisor.intent_config import (
-    get_intent_meta,
-    is_v1_supported,
-)
-from backend.common.events import (
-    EventType,
-    emit_event,
-    generate_session_id,
-    generate_turn_id,
-    set_session_id,
-    set_turn_id,
-    get_session_id,
-    get_turn_id,
-)
-from backend.agents.shared.contracts import (
-    normalize_runner_output,
-    safe_get,
-    safe_get_nested,
-    RunnerStatus,
-)
-from backend.common.cache import idempotency_store
-from backend.common.github_client import check_repo_access, RepoAccessResult
+from backend.agents.supervisor.state import SupervisorState
+from backend.agents.diagnosis.graph import get_diagnosis_agent
 
 logger = logging.getLogger(__name__)
 
 
-# Node 1: init_node
-def init_node(state: SupervisorState) -> Dict[str, Any]:
-    """Initializes session context and validates input."""
-    existing_session_id = state.get("_session_id")
-    if existing_session_id:
-        set_session_id(existing_session_id)
-    else:
-        session_id = generate_session_id()
-        set_session_id(session_id)
+def router_start_node(state: SupervisorState) -> Dict[str, Any]:
+    """라우팅 결정 노드."""
+    task_type = state.get("task_type", "diagnosis")
+    logger.info(f"Router: Starting task {task_type}")
+    # 여기서는 상태 변경 없이 로깅만 하고, 조건부 엣지에서 분기 처리
+    return {}
+
+
+def diagnosis_agent_entry(state: SupervisorState) -> Dict[str, Any]:
+    """DiagnosisAgent 서브그래프 실행."""
+    logger.info("Entering DiagnosisAgent...")
+    diagnosis_agent = get_diagnosis_agent()
+    result = diagnosis_agent.invoke(state)
     
-    turn_id = generate_turn_id()
-    set_turn_id(turn_id)
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="supervisor",
-        inputs={"node_name": "init_node"},
-        outputs={
-            "session_id": get_session_id(),
-            "turn_id": get_turn_id(),
-        }
-    )
-    
+    # 서브그래프 결과를 상위 상태에 병합
     return {
-        "_session_id": get_session_id(),
-        "_turn_id": turn_id,
+        "repo_snapshot": result.get("repo_snapshot"),
+        "dependency_snapshot": result.get("dependency_snapshot"),
+        "diagnosis_result": result.get("diagnosis_result"),
+        "docs_result": result.get("docs_result"),
+        "messages": result.get("messages"),
+        "last_answer_kind": result.get("last_answer_kind"),
     }
 
 
-# Node 2: classify_node
-def classify_node(state: SupervisorState) -> Dict[str, Any]:
-    """Classifies user intent using simple rules or LLM."""
-    from backend.agents.supervisor.nodes.intent_classifier import (
-        classify_intent_node,
-        _extract_keyword_candidates,
-    )
-    from backend.agents.supervisor.prompts import (
-        MISSING_REPO_TEMPLATE,
-        DISAMBIGUATION_CANDIDATES_TEMPLATE,
-        DISAMBIGUATION_SOURCE_ID,
-        AUTO_SELECT_REPO_TEMPLATE,
-        AUTO_SELECT_SOURCE_ID,
-        ACCESS_ERROR_NOT_FOUND_TEMPLATE,
-        ACCESS_ERROR_PRIVATE_TEMPLATE,
-        ACCESS_ERROR_RATE_LIMIT_TEMPLATE,
-        ACCESS_ERROR_SOURCE_ID,
-    )
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="classify_node",
-        inputs={"query_length": len(state.get("user_query", ""))},
-    )
-    
-    result = classify_intent_node(state)
-    
-    intent = result.get("intent", DEFAULT_INTENT)
-    sub_intent = result.get("sub_intent", DEFAULT_SUB_INTENT)
-    
-    # Set default answer_kind based on intent
-    answer_kind = _get_default_answer_kind(intent, sub_intent)
-    result["answer_kind"] = answer_kind
-    
-    # Entity Guard: analyze/* intent requires repo - ALWAYS check
-    meta = get_intent_meta(intent, sub_intent)
-    if meta["requires_repo"] and not result.get("repo"):
-        # Extract keyword candidates from query
-        user_query = state.get("user_query", "")
-        keyword, candidates = _extract_keyword_candidates(user_query)
-        
-        if keyword and candidates:
-            if len(candidates) == 1:
-                # Single candidate: auto-select with notice (no disambiguation)
-                c = candidates[0]
-                result["repo"] = {
-                    "owner": c["owner"],
-                    "name": c["name"],
-                    "url": f"https://github.com/{c['owner']}/{c['name']}",
-                }
-                result["_auto_selected_repo"] = True
-                result["_auto_select_notice"] = AUTO_SELECT_REPO_TEMPLATE.format(
-                    keyword=keyword,
-                    owner=c["owner"],
-                    repo=c["name"],
-                    desc=c.get("desc", ""),
-                )
-                result["_auto_select_source"] = AUTO_SELECT_SOURCE_ID
-                
-                logger.info(
-                    "[entity_guard] analyze/%s: auto-selected %s/%s (single candidate for '%s')",
-                    sub_intent, c["owner"], c["name"], keyword
-                )
-            else:
-                # Multiple candidates: force disambiguation
-                result["_needs_disambiguation"] = True
-                
-                candidate_lines = []
-                candidate_sources = []
-                for c in candidates[:3]:
-                    candidate_lines.append(f"- `{c['owner']}/{c['name']}` - {c['desc']}")
-                    candidate_sources.append(f"CANDIDATE:{c['owner']}/{c['name']}")
-                candidates_text = "\n".join(candidate_lines)
-                
-                result["_disambiguation_template"] = DISAMBIGUATION_CANDIDATES_TEMPLATE.format(
-                    keyword=keyword,
-                    candidates=candidates_text,
-                )
-                result["_disambiguation_source"] = DISAMBIGUATION_SOURCE_ID
-                result["_disambiguation_candidates"] = candidates
-                result["_disambiguation_candidate_sources"] = candidate_sources
-                result["answer_kind"] = "disambiguation"
-                
-                logger.info(
-                    "[entity_guard] analyze/%s blocked: disambiguation forced (keyword=%s, candidates=%d)",
-                    sub_intent, keyword, len(candidates)
-                )
-        else:
-            # No candidates: force disambiguation with generic message
-            result["_needs_disambiguation"] = True
-            result["_disambiguation_template"] = MISSING_REPO_TEMPLATE
-            result["_disambiguation_source"] = "SYS:TEMPLATES:MISSING_REPO"
-            result["answer_kind"] = "disambiguation"
-            
-            logger.info(
-                "[entity_guard] analyze/%s blocked: no repo, no candidates",
-                sub_intent
-            )
-    
-    # Access Guard: Pre-flight check for repo accessibility (BEFORE diagnosis)
-    repo = result.get("repo")
-    if repo and meta["requires_repo"] and not result.get("_needs_disambiguation"):
-        owner = safe_get(repo, "owner", "")
-        name = safe_get(repo, "name", "")
-        
-        if owner and name:
-            access_result = check_repo_access(owner, name)
-            
-            # Store repo context for artifact validation
-            result["_repo_context"] = {
-                "owner": owner,
-                "repo": name,
-                "repo_id": access_result.repo_id,
-                "default_branch": access_result.default_branch,
-                "accessible": access_result.accessible,
-            }
-            
-            if not access_result.accessible:
-                # CRITICAL: Block diagnosis path - force ask_user
-                result["_needs_ask_user"] = True
-                result["_access_error"] = access_result.reason
-                result["answer_kind"] = "ask_user"
-                
-                # Select appropriate error template
-                if access_result.reason == "not_found":
-                    result["_ask_user_template"] = ACCESS_ERROR_NOT_FOUND_TEMPLATE.format(
-                        owner=owner, repo=name
-                    )
-                elif access_result.reason == "private_no_access":
-                    result["_ask_user_template"] = ACCESS_ERROR_PRIVATE_TEMPLATE.format(
-                        owner=owner, repo=name
-                    )
-                elif access_result.reason == "rate_limit":
-                    result["_ask_user_template"] = ACCESS_ERROR_RATE_LIMIT_TEMPLATE
-                else:
-                    result["_ask_user_template"] = ACCESS_ERROR_NOT_FOUND_TEMPLATE.format(
-                        owner=owner, repo=name
-                    )
-                result["_ask_user_source"] = ACCESS_ERROR_SOURCE_ID
-                
-                logger.info(
-                    "[access_guard] %s/%s blocked: %s (status=%d)",
-                    owner, name, access_result.reason, access_result.status_code
-                )
-                
-                emit_event(
-                    EventType.SUPERVISOR_ROUTE_SELECTED,
-                    actor="supervisor",
-                    outputs={
-                        "selected_route": "ask_user",
-                        "intent": intent,
-                        "sub_intent": sub_intent,
-                        "repo": f"{owner}/{name}",
-                        "access_error": access_result.reason,
-                        "status_code": access_result.status_code,
-                    },
-                )
-    
-    # Emit route selection event for disambiguation
-    if result.get("_needs_disambiguation"):
-        emit_event(
-            EventType.SUPERVISOR_ROUTE_SELECTED,
-            actor="supervisor",
-            outputs={
-                "selected_route": "disambiguation",
-                "intent": intent,
-                "sub_intent": sub_intent,
-                "has_candidates": bool(result.get("_disambiguation_candidates")),
-                "candidate_count": len(result.get("_disambiguation_candidates", [])),
-            },
-        )
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="classify_node",
-        outputs={
-            "intent": intent,
-            "sub_intent": sub_intent,
-            "answer_kind": result.get("answer_kind", answer_kind),
-            "needs_disambiguation": result.get("_needs_disambiguation", False),
-            "needs_ask_user": result.get("_needs_ask_user", False),
-        },
-    )
-    
-    return result
-
-
-def _get_default_answer_kind(intent: str, sub_intent: str) -> str:
-    """Maps (intent, sub_intent) to default answer_kind."""
-    if intent == "analyze":
-        return "report"
-    elif intent == "followup" and sub_intent == "explain":
-        return "explain"
-    elif intent == "smalltalk":
-        return "greeting"
-    else:
-        return "chat"
-
-
-# Node 3: diagnosis_node (conditional) with ExpertRunner
-def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
-    """Runs diagnosis using DiagnosisRunner with error policy."""
-    from backend.agents.supervisor.runners import DiagnosisRunner
-    
-    repo = state.get("repo")
-    if not repo:
-        return {"error_message": "저장소 정보가 없습니다."}
-    
-    user_context = safe_get(state, "user_context", {})
-    current_repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
-    
-    # CRITICAL: Check for repo context mismatch (prevent cross-repo contamination)
-    existing_diagnosis = state.get("diagnosis_result")
-    if existing_diagnosis:
-        existing_repo_id = ""
-        if isinstance(existing_diagnosis, dict):
-            input_data = existing_diagnosis.get("input", {})
-            existing_owner = input_data.get("owner", "")
-            existing_repo = input_data.get("repo", "")
-            existing_repo_id = f"{existing_owner}/{existing_repo}"
-        
-        if existing_repo_id and existing_repo_id != current_repo_id:
-            # Different repo - invalidate old diagnosis_result
-            logger.info(
-                "[diagnosis_node] Repo context changed: %s → %s, invalidating old result",
-                existing_repo_id, current_repo_id
-            )
-        elif existing_repo_id == current_repo_id:
-            # Same repo - skip re-diagnosis (followup case)
-            return {}
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="diagnosis_node",
-        inputs={"repo": current_repo_id},
-    )
-    
-    # Run diagnosis using ExpertRunner
-    runner = DiagnosisRunner(
-        repo_id=current_repo_id,
-        user_context=user_context,
-    )
-    result = runner.run()
-    
-    if not result.success:
-        emit_event(
-            EventType.NODE_FINISHED,
-            actor="diagnosis_node",
-            outputs={"status": "error", "error": result.error_message},
-        )
-        return {"error_message": result.error_message or "진단 중 오류가 발생했습니다."}
-    
-    # Get raw diagnosis result for state
-    diagnosis_result = runner.get_diagnosis_result()
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="diagnosis_node",
-        outputs={
-            "status": "success",
-            "degraded": result.degraded,
-            "artifact_count": len(result.artifacts_out),
-        },
-    )
-    
+def security_agent_entry(state: SupervisorState) -> Dict[str, Any]:
+    """SecurityAgent 서브그래프 실행 (Placeholder)."""
+    logger.info("Entering SecurityAgent (Placeholder)...")
+    # 실제 구현은 생략됨 (요구사항)
     return {
-        "diagnosis_result": diagnosis_result,
-        "_expert_result": result,  # Store for summarize node if needed
+        "security_result": {"status": "skipped", "reason": "Not implemented yet"},
+        "last_answer_kind": "security",
     }
 
 
-# Node 3b: expert_node (for compare/onepager)
-def expert_node(state: SupervisorState) -> Dict[str, Any]:
-    """Runs specialized expert runners (compare, onepager)."""
-    from backend.agents.supervisor.runners import CompareRunner, OnepagerRunner
-    from backend.agents.supervisor.intent_config import COMPARE_ENABLED
+def route_after_start(state: SupervisorState) -> Literal["diagnosis_agent_entry", "security_agent_entry"]:
+    """시작 후 라우팅."""
+    task_type = state.get("task_type", "diagnosis")
     
-    intent = state.get("intent", "analyze")
-    sub_intent = state.get("sub_intent", "health")
-    repo = state.get("repo")
-    user_context = safe_get(state, "user_context", {})
+    if task_type == "security":
+        return "security_agent_entry"
     
-    if not repo:
-        return {"error_message": "저장소 정보가 없습니다."}
-    
-    repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="expert_node",
-        inputs={"intent": intent, "sub_intent": sub_intent, "repo": repo_id},
-    )
-    
-    # Select appropriate runner
-    if sub_intent == "compare":
-        # Compare guard: check feature toggle
-        if not COMPARE_ENABLED:
-            return {
-                "error_message": "비교 기능은 현재 준비 중입니다. 개별 저장소 분석을 이용해 주세요."
-            }
-        
-        # Compare guard: need second repo
-        repo_b = safe_get(state, "compare_repo")
-        if not repo_b:
-            return {
-                "error_message": "비교할 두 번째 저장소를 찾지 못했습니다.\n"
-                    "예시: 'facebook/react랑 vuejs/core 비교해줘'"
-            }
-        
-        repo_b_id = f"{safe_get(repo_b, 'owner', '')}/{safe_get(repo_b, 'name', '')}"
-        runner = CompareRunner(
-            repo_a=repo_id,
-            repo_b=repo_b_id,
-            user_context=user_context,
-        )
-    elif sub_intent == "onepager":
-        runner = OnepagerRunner(
-            repo_id=repo_id,
-            user_context=user_context,
-        )
-    else:
-        # Fallback to diagnosis
-        from backend.agents.supervisor.runners import DiagnosisRunner
-        runner = DiagnosisRunner(
-            repo_id=repo_id,
-            user_context=user_context,
-        )
-    
-    result = runner.run()
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="expert_node",
-        outputs={
-            "status": "success" if result.success else "error",
-            "degraded": result.degraded,
-            "runner": runner.runner_name,
-            "incomplete_compare": result.meta.get("incomplete_compare", False),
-        },
-    )
-    
-    if not result.success:
-        return {"error_message": result.error_message}
-    
-    # Expert node returns final response directly (no summarize needed)
-    from backend.agents.supervisor.intent_config import ANSWER_KIND_MAP, DEFAULT_ANSWER_KIND
-    from backend.agents.supervisor.nodes.summarize_node import _generate_last_brief
-    
-    answer = result.answer
-    answer_kind = ANSWER_KIND_MAP.get((intent, sub_intent), DEFAULT_ANSWER_KIND)
-    
-    emit_event(
-        EventType.ANSWER_GENERATED,
-        actor="expert_node",
-        inputs={"answer_kind": answer_kind, "runner": runner.runner_name},
-        outputs={
-            "text_length": len(answer.text or "") if answer else 0,
-            "source_count": len(answer.sources or []) if answer else 0,
-            "degraded": result.degraded,
-            "incomplete_compare": result.meta.get("incomplete_compare", False),
-        },
-    )
-    
-    # Pass runner meta to state for summarize validation
-    runner_meta = {
-        "status": result.meta.get("status", "ok"),
-        "incomplete_compare": result.meta.get("incomplete_compare", False),
-        "failed_repos": result.meta.get("failed_repos", []),
-        "degrade_reason": result.meta.get("degrade_reason"),
-    }
-    
-    return {
-        "llm_summary": answer.text if answer else "",
-        "answer_kind": answer_kind,
-        "answer_contract": answer.model_dump() if answer else {},
-        "last_brief": _generate_last_brief(answer.text if answer else ""),
-        "last_answer_kind": answer_kind,
-        "_runner_meta": runner_meta,
-    }
+    # diagnosis, diagnosis_and_security, explain 등은 diagnosis 먼저
+    return "diagnosis_agent_entry"
 
 
-# Node 4: summarize_node (with idempotency)
-def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
-    """Generates final response using V1 summarize logic with idempotency."""
-    from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
+def route_after_diagnosis(state: SupervisorState) -> Literal["security_agent_entry", "__end__"]:
+    """진단 후 라우팅."""
+    task_type = state.get("task_type", "diagnosis")
     
-    session_id = safe_get(state, "_session_id", "")
-    turn_id = safe_get(state, "_turn_id", "")
-    step_id = "summarize"
+    if task_type == "diagnosis_and_security":
+        return "security_agent_entry"
     
-    # Check for cached result (idempotency)
-    cached = idempotency_store.get_cached(session_id, turn_id, step_id)
-    if cached:
-        logger.info(f"Idempotency HIT: returning cached answer_id={cached.answer_id}")
-        return cached.result
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="summarize_node",
-        inputs={
-            "intent": state.get("intent", DEFAULT_INTENT),
-            "sub_intent": state.get("sub_intent", DEFAULT_SUB_INTENT),
-        },
-    )
-    
-    # Acquire lock to prevent duplicate execution
-    with idempotency_store.acquire_lock(session_id, turn_id, step_id):
-        # Double-check cache after acquiring lock
-        cached = idempotency_store.get_cached(session_id, turn_id, step_id)
-        if cached:
-            return cached.result
-        
-        result = summarize_node_v1(state)
-        
-        # Generate and attach answer_id
-        execution = idempotency_store.store_result(
-            session_id=session_id,
-            turn_id=turn_id,
-            step_id=step_id,
-            result=result,
-        )
-        result["answer_id"] = execution.answer_id
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="summarize_node",
-        outputs={
-            "answer_kind": result.get("answer_kind"),
-            "text_length": len(result.get("llm_summary", "")),
-            "answer_id": result.get("answer_id"),
-        },
-    )
-    
-    return result
+    return "__end__"
 
 
-# Routing: should_run_diagnosis (hierarchical routing)
-def should_run_diagnosis(state: SupervisorState) -> str:
-    """Hierarchical routing: route to appropriate node based on intent."""
-    intent = state.get("intent", DEFAULT_INTENT)
-    sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
-    
-    # Check for errors first
-    if state.get("error_message"):
-        return "summarize"
-    
-    # Access Guard: repo inaccessible → ask_user (BLOCK diagnosis)
-    if state.get("_needs_ask_user"):
-        logger.debug(f"[route] Access guard: {intent}.{sub_intent} → summarize (ask_user)")
-        return "summarize"
-    
-    # Disambiguation: repo 필요하지만 없음 → 전문가 노드 진입 금지
-    if state.get("_needs_disambiguation"):
-        logger.debug(f"[route] Disambiguation: {intent}.{sub_intent} → summarize")
-        return "summarize"
-    
-    # Fast path: smalltalk/help/overview → never diagnosis
-    if intent in ("smalltalk", "help", "overview", "general_qa"):
-        logger.debug(f"[route] Fast path: {intent}.{sub_intent} → summarize")
-        return "summarize"
-    
-    # Check V1 support
-    if not is_v1_supported(intent, sub_intent):
-        return "summarize"
-    
-    meta = get_intent_meta(intent, sub_intent)
-    
-    # Entity guard: repo 필요하지만 없음 → disambiguation 강제
-    if meta["requires_repo"] and not state.get("repo"):
-        logger.debug(f"[route] Entity guard: no repo → summarize")
-        return "summarize"
-    
-    # Compare/Onepager → expert_node
-    if sub_intent in ("compare", "onepager"):
-        logger.debug(f"[route] Expert path: {intent}.{sub_intent} → expert")
-        return "expert"
-    
-    # Run diagnosis only for analyze intent
-    if intent == "analyze" and not state.get("diagnosis_result"):
-        return "diagnosis"
-    
-    # followup/explain needs diagnosis_result but should NOT re-run diagnosis
-    if intent == "followup":
-        # evidence/explain → summarize (uses existing diagnosis_result)
-        return "summarize"
-    
-    return "summarize"
-
-
-# Graph Builder
-def build_supervisor_graph():
-    """Builds V1 Supervisor Graph: init → classify → diagnosis/expert(conditional) → summarize."""
+def build_supervisor_graph() -> StateGraph:
+    """Supervisor 그래프 빌드."""
     graph = StateGraph(SupervisorState)
 
-    # Add 5 nodes
-    graph.add_node("init", init_node)
-    graph.add_node("classify", classify_node)
-    graph.add_node("diagnosis", diagnosis_node)
-    graph.add_node("expert", expert_node)
-    graph.add_node("summarize", summarize_node_wrapper)
+    graph.add_node("router_start_node", router_start_node)
+    graph.add_node("diagnosis_agent_entry", diagnosis_agent_entry)
+    graph.add_node("security_agent_entry", security_agent_entry)
 
-    # Set entry point
-    graph.set_entry_point("init")
+    graph.set_entry_point("router_start_node")
 
-    # Linear flow: init → classify
-    graph.add_edge("init", "classify")
-    
-    # Conditional: classify → diagnosis OR expert OR summarize
     graph.add_conditional_edges(
-        "classify",
-        should_run_diagnosis,
+        "router_start_node",
+        route_after_start,
         {
-            "diagnosis": "diagnosis",
-            "expert": "expert",
-            "summarize": "summarize",
-        },
+            "diagnosis_agent_entry": "diagnosis_agent_entry",
+            "security_agent_entry": "security_agent_entry",
+        }
     )
 
-    # diagnosis → summarize → END
-    graph.add_edge("diagnosis", "summarize")
-    # expert → summarize → END
-    graph.add_edge("expert", "summarize")
-    graph.add_edge("summarize", END)
+    graph.add_conditional_edges(
+        "diagnosis_agent_entry",
+        route_after_diagnosis,
+        {
+            "security_agent_entry": "security_agent_entry",
+            "__end__": END,
+        }
+    )
 
-    logger.info("Built V1 Supervisor Graph (5 nodes)")
-    return graph.compile()
+    graph.add_edge("security_agent_entry", END)
+
+    return graph
 
 
 def get_supervisor_graph():
-    """Returns the V1 supervisor graph."""
-    return build_supervisor_graph()
+    """컴파일된 Supervisor 그래프 반환 (Checkpointer 포함)."""
+    graph = build_supervisor_graph()
+    
+    # Checkpointer 설정
+    try:
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        checkpointer = SqliteSaver.from_conn_string("sqlite:///odo_state.db")
+    except ImportError:
+        logger.warning("SqliteSaver not found. Using MemorySaver.")
+        from langgraph.checkpoint.memory import MemorySaver
+        checkpointer = MemorySaver()
+    except Exception as e:
+        logger.warning(f"Failed to create SqliteSaver: {e}. Using MemorySaver instead.")
+        from langgraph.checkpoint.memory import MemorySaver
+        checkpointer = MemorySaver()
 
-
-# V2 Agentic Planning Graph
-
-def plan_node(state: SupervisorState) -> Dict[str, Any]:
-    """Builds execution plan based on intent classification."""
-    from backend.agents.supervisor.planner import build_plan, PlanStatus
-    
-    intent = state.get("intent", DEFAULT_INTENT)
-    sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="plan_node",
-        inputs={"intent": intent, "sub_intent": sub_intent},
-    )
-    
-    # Build plan from intent
-    context = {
-        "repo": state.get("repo"),
-        "user_context": state.get("user_context", {}),
-        "compare_repo": state.get("compare_repo"),
-        "user_query": state.get("user_query", ""),
-    }
-    
-    plan = build_plan(intent, sub_intent, context)
-    
-    emit_event(
-        EventType.SUPERVISOR_PLAN_BUILT,
-        actor="plan_node",
-        outputs={
-            "plan_id": plan.id,
-            "step_count": len(plan.steps),
-            "artifacts_required": plan.artifacts_required,
-        },
-    )
-    
-    return {
-        "_plan": plan.id,
-        "_plan_steps": [s.id for s in plan.steps],
-        "_plan_object": plan,
-    }
-
-
-def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
-    """Executes the plan with error handling and re-planning."""
-    from backend.agents.supervisor.planner import (
-        execute_plan,
-        PlanStatus,
-        replan_on_failure,
-        ReplanReason,
-    )
-    
-    plan = state.get("_plan_object")
-    if not plan:
-        return {"error_message": "실행할 계획이 없습니다."}
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="execute_plan_node",
-        inputs={"plan_id": plan.id, "step_count": len(plan.steps)},
-    )
-    
-    # Execute plan
-    executed_plan = execute_plan(plan, dict(state))
-    
-    # Handle re-planning on failure
-    if executed_plan.status == PlanStatus.FAILED:
-        failed_steps = executed_plan.get_failed_steps()
-        if failed_steps:
-            failed_step = failed_steps[0]
-            # Try re-planning
-            new_plan = replan_on_failure(
-                executed_plan,
-                failed_step,
-                ReplanReason.STEP_FAILED,
-            )
-            if new_plan:
-                executed_plan = execute_plan(new_plan, dict(state))
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="execute_plan_node",
-        outputs={
-            "plan_id": executed_plan.id,
-            "status": executed_plan.status.value,
-            "execution_time_ms": executed_plan.total_execution_time_ms,
-            "replan_count": executed_plan.replan_count,
-        },
-    )
-    
-    # Extract results from plan execution
-    result: Dict[str, Any] = {
-        "_executed_plan": executed_plan.id,
-        "_plan_status": executed_plan.status.value,
-    }
-    
-    # Collect step outputs
-    for step_id, step_result in executed_plan.step_results.items():
-        if step_result.success and step_result.result:
-            # Merge results into state
-            result.update(step_result.result)
-    
-    # Handle ask_user status
-    if executed_plan.status == PlanStatus.ASK_USER:
-        result["error_message"] = executed_plan.error_message
-    elif executed_plan.status == PlanStatus.FAILED:
-        result["error_message"] = executed_plan.error_message or "계획 실행 중 오류가 발생했습니다."
-    
-    return result
-
-
-def should_use_planning(state: SupervisorState) -> str:
-    """Determines whether to use V1 direct path or V2 planning path."""
-    intent = state.get("intent", DEFAULT_INTENT)
-    
-    # Fast paths: never use planning
-    if intent in ("smalltalk", "help", "general_qa"):
-        return "summarize"
-    
-    # Error path
-    if state.get("error_message"):
-        return "summarize"
-    
-    # V2 Planning for complex intents
-    if intent in ("analyze",) and state.get("_use_planning"):
-        return "plan"
-    
-    # Default to V1 direct routing
-    return "direct"
-
-
-def build_supervisor_graph_v2():
-    """Builds V2 Supervisor Graph with Agentic Planning support."""
-    graph = StateGraph(SupervisorState)
-
-    # Add nodes
-    graph.add_node("init", init_node)
-    graph.add_node("classify", classify_node)
-    graph.add_node("plan", plan_node)
-    graph.add_node("execute_plan", execute_plan_node)
-    graph.add_node("diagnosis", diagnosis_node)
-    graph.add_node("summarize", summarize_node_wrapper)
-
-    # Set entry point
-    graph.set_entry_point("init")
-
-    # Linear flow: init → classify
-    graph.add_edge("init", "classify")
-    
-    # Conditional: classify → plan OR diagnosis OR summarize
-    graph.add_conditional_edges(
-        "classify",
-        should_use_planning,
-        {
-            "plan": "plan",
-            "direct": "diagnosis",
-            "summarize": "summarize",
-        },
-    )
-    
-    # V2 Planning path
-    graph.add_edge("plan", "execute_plan")
-    graph.add_edge("execute_plan", "summarize")
-    
-    # V1 Direct path (fallback)
-    graph.add_conditional_edges(
-        "diagnosis",
-        lambda s: "summarize",
-        {"summarize": "summarize"},
-    )
-    
-    graph.add_edge("summarize", END)
-
-    logger.info("Built V2 Supervisor Graph with Planning (6 nodes)")
-    return graph.compile()
-
-
-def get_supervisor_graph_v2():
-    """Returns the V2 supervisor graph with planning."""
-    return build_supervisor_graph_v2()
+    return graph.compile(checkpointer=checkpointer)

@@ -587,6 +587,81 @@ def fetch_recent_pull_requests(
     return all_prs
 
 
+# Consilience 지원 함수
+
+@cached(ttl=86400)  # 24시간 캐시
+def fetch_repo_tree(owner: str, repo: str, sha: str = "HEAD") -> Dict[str, Any]:
+    """리포지토리 트리 가져오기 (재귀적)."""
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"tree": []}
+    except requests.Timeout:
+        logger.warning("fetch_repo_tree timeout: %s/%s", owner, repo)
+        return {"tree": []}
+    except requests.RequestException as e:
+        logger.warning("fetch_repo_tree failed: %s/%s - %s", owner, repo, e)
+        return {"tree": []}
+
+
+@cached(ttl=86400)  # 24시간 캐시
+def fetch_workflow_runs(owner: str, repo: str, workflow_file: str = None) -> Dict[str, Any]:
+    """GitHub Actions 워크플로 실행 기록 가져오기."""
+    if workflow_file:
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/workflows/{workflow_file}/runs?per_page=5"
+    else:
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/runs?per_page=10"
+    
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        if resp.status_code == 200:
+            return resp.json()
+        return {"workflow_runs": []}
+    except requests.Timeout:
+        logger.warning("fetch_workflow_runs timeout: %s/%s", owner, repo)
+        return {"workflow_runs": []}
+    except requests.RequestException as e:
+        logger.warning("fetch_workflow_runs failed: %s/%s - %s", owner, repo, e)
+        return {"workflow_runs": []}
+
+
+@cached(ttl=86400)  # 24시간 캐시
+def fetch_workflows(owner: str, repo: str) -> List[Dict[str, Any]]:
+    """워크플로 목록 가져오기."""
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/workflows"
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        if resp.status_code == 200:
+            return resp.json().get("workflows", [])
+        return []
+    except requests.Timeout:
+        logger.warning("fetch_workflows timeout: %s/%s", owner, repo)
+        return []
+    except requests.RequestException as e:
+        logger.warning("fetch_workflows failed: %s/%s - %s", owner, repo, e)
+        return []
+
+
+@cached(ttl=3600)  # 1시간 캐시
+def fetch_repo_contents(owner: str, repo: str, path: str = "") -> List[Dict[str, Any]]:
+    """리포지토리 디렉토리 내용 가져오기."""
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}"
+    try:
+        resp = requests.get(url, headers=_build_headers(), timeout=10)
+        if resp.status_code == 200:
+            result = resp.json()
+            return result if isinstance(result, list) else []
+        return []
+    except requests.Timeout:
+        logger.warning("fetch_repo_contents timeout: %s/%s/%s", owner, repo, path)
+        return []
+    except requests.RequestException as e:
+        logger.warning("fetch_repo_contents failed: %s/%s/%s - %s", owner, repo, path, e)
+        return []
+
+
 def clear_repo_cache(owner: str, repo: str) -> None:
     """Invalidates the cache for a specific repository."""
     fetch_repo.invalidate(owner, repo)
