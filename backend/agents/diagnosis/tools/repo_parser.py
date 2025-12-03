@@ -5,12 +5,13 @@ from typing import Optional
 
 from backend.common.github_client import fetch_repo_overview
 from .readme.readme_loader import (
-    compute_reademe_metrics,
+    compute_readme_metrics,
     ReadmeContent,
 )
 
 @dataclass
-class RepoInfo:
+class RepoOverview:
+    """저장소 개요 정보 (진단용)."""
     full_name: str
     description: Optional[str]
     stars: int
@@ -20,16 +21,16 @@ class RepoInfo:
     has_readme: bool
     readme_stats: Optional[ReadmeContent] = None
 
-def fetch_repo_info(owner: str, repo: str) -> RepoInfo:
+def fetch_repo_info(owner: str, repo: str) -> RepoOverview:
     overview = fetch_repo_overview(owner, repo)
 
     has_readme = overview.get("has_readme", False)
     readme_stats: Optional[ReadmeContent] = None
 
     if has_readme and overview.get("readme_content"):
-        readme_stats = compute_reademe_metrics(overview["readme_content"])
+        readme_stats = compute_readme_metrics(overview["readme_content"])
 
-    return RepoInfo(
+    return RepoOverview(
         full_name=overview.get("full_name", f"{owner}/{repo}"),
         description=overview.get("description"),
         stars=overview.get("stargazers_count", 0),

@@ -63,8 +63,8 @@ docs:
     consilience: 0.3
 
   # 수식 안정화 (점수 붕괴 방지)
-  consilience_floor: 60   # 교차검증 최소값 (0->60 하한)
-  marketing_penalty_cap: 30  # 마케팅 감점 상한
+  consilience_floor: 60 # 교차검증 최소값 (0->60 하한)
+  marketing_penalty_cap: 30 # 마케팅 감점 상한
 
 # 지속성 게이트 (Sustainability Gate)
 # 출처: CHAOSS Metrics, GitHub Octoverse 2023, GitHub Archive Program
@@ -115,23 +115,23 @@ gate:
 # 주간 튜닝: ±0.02~0.05 조정 가능
 labels:
   # 건강 레벨 경계
-  health_good: 70      # >= 70: good
-  health_warning: 50   # >= 50: warning, < 50: bad
-  
+  health_good: 70 # >= 70: good
+  health_warning: 50 # >= 50: warning, < 50: bad
+
   # 온보딩 레벨 경계
-  onboarding_easy: 75    # >= 75: easy
-  onboarding_normal: 55  # >= 55: normal, < 55: hard
-  
+  onboarding_easy: 75 # >= 75: easy
+  onboarding_normal: 55 # >= 55: normal, < 55: hard
+
   # is_healthy 판정 기준
-  is_healthy_docs_min: 60      # 유효 문서 >= 60
-  is_healthy_activity_min: 50  # 활동성 >= 50
-  
+  is_healthy_docs_min: 60 # 유효 문서 >= 60
+  is_healthy_activity_min: 50 # 활동성 >= 50
+
   # 문서 이슈 임계값
-  weak_docs_threshold: 40       # doc_score < 40: weak_documentation
-  inflated_gap_threshold: 20    # raw - effective >= 20: inflated_docs_score
-  
+  weak_docs_threshold: 40 # doc_score < 40: weak_documentation
+  inflated_gap_threshold: 20 # raw - effective >= 20: inflated_docs_score
+
   # 활동성 이슈 임계값
-  sustainability_concern_threshold: 50  # sus_score < 50: sustainability_concern
+  sustainability_concern_threshold: 50 # sus_score < 50: sustainability_concern
 
 # 기술 신호 패턴 (정규식)
 tech_patterns:

@@ -6,7 +6,7 @@ import logging
 
 from backend.agents.diagnosis.tools.readme.readme_loader import (
     fetch_readme_content,
-    compute_reademe_metrics,
+    compute_readme_metrics,
 )
 from backend.agents.diagnosis.tools.readme.readme_categories import classify_readme_sections
 from backend.agents.diagnosis.tools.readme.docs_effective import compute_docs_effective
@@ -147,7 +147,7 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     # README 메트릭 계산 (로컬, 빠름)
     readme_metrics = None
     if readme_text:
-        readme_metrics = compute_reademe_metrics(readme_text)
+        readme_metrics = compute_readme_metrics(readme_text)
 
     # Phase 2: README 분류 + 요약
     logger.info("Phase 2: README classification...")

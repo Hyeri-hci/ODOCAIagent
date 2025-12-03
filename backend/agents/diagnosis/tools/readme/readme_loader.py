@@ -43,7 +43,7 @@ def fetch_readme_content(owner: str, repo: str) -> Optional[str]:
     return _decode_readme_content(readme_data)
 
 # README 메트릭 계산 함수
-def compute_reademe_metrics(readme_text: str) -> ReadmeContent:
+def compute_readme_metrics(readme_text: str) -> ReadmeContent:
     # Heading 개수 (#, ##, ### 등)
     heading_pattern = re.compile(r"^(#{1,6})\s+", re.MULTILINE)
     headings: List[str] = heading_pattern.findall(readme_text)
