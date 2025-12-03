@@ -67,7 +67,7 @@ class DocsCoreResult:
     """문서 분석 결과."""
     readme_present: bool
     readme_word_count: int
-    category_scores: Dict[str, float]  # WHAT, WHY, HOW 등
+    category_scores: Dict[str, Dict[str, Any]]  # WHAT, WHY, HOW 등 (CategoryInfo dict)
     total_score: int  # 0-100
     missing_sections: List[str]
     present_sections: List[str]
