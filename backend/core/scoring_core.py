@@ -103,8 +103,12 @@ def compute_activity_issues(
     return issues
 
 
-def compute_dependency_risk(deps: DependenciesSnapshot) -> tuple[int, List[str]]:
-    """초기 베타 버전 의존성 리스크 점수, 나중에 실제 데이터/전문가 피드백 기반으로 튜닝 예정."""
+def compute_dependency_complexity(deps: DependenciesSnapshot) -> tuple[int, List[str]]:
+    """의존성 복잡도 점수 (0~100). 높을수록 관리 난이도가 높음.
+    
+    Note: 이것은 보안 취약점(Security Risk) 점수가 아님.
+    단순히 의존성 개수와 버전 고정 여부를 기반으로 한 '구조적 복잡도'를 의미함.
+    """
     if not deps or not deps.dependencies:
         return 0, []
 
@@ -116,28 +120,28 @@ def compute_dependency_risk(deps: DependenciesSnapshot) -> tuple[int, List[str]]
             
     pinned_ratio = pinned_count / total_deps if total_deps > 0 else 0.0
     
-    issues: List[str] = []
+    flags: List[str] = []
     base_score = 0
     
-    # 1. Total Dependencies Count Risk
+    # 1. Total Dependencies Count Complexity
     if total_deps < 30:
         base_score = 20 + (total_deps / 30.0) * 20  # 20~40
     elif total_deps < 100:
         base_score = 40 + ((total_deps - 30) / 70.0) * 30  # 40~70
     else:
         base_score = 70 + min(((total_deps - 100) / 100.0) * 20, 20) # 70~90
-        issues.append("many_dependencies")
+        flags.append("many_dependencies")
 
-    # 2. Pinned Ratio Risk
+    # 2. Pinned Ratio Complexity (Unpinned = Higher Complexity/Uncertainty)
     if pinned_ratio < 0.3:
         base_score += 15
-        issues.append("unpinned_dependencies")
+        flags.append("unpinned_dependencies")
     elif pinned_ratio < 0.7:
         base_score += 5
 
     final_score = min(int(base_score), 100)
     
-    return final_score, issues
+    return final_score, flags
 
 
 # 3. Main Computation Function
@@ -200,8 +204,8 @@ def compute_scores(
         activity_result=activity,
     )
     
-    # 의존성 리스크 계산
-    risk_score, dep_issues = compute_dependency_risk(deps)
+    # 의존성 복잡도 계산
+    complexity_score, dep_flags = compute_dependency_complexity(deps)
     
     # 결과에 의존성 정보 추가 (dataclass replace 대신 직접 할당 또는 재생성)
     # DiagnosisCoreResult는 frozen=False (default) 이므로 직접 수정 가능하지만,
@@ -209,7 +213,7 @@ def compute_scores(
     # 여기서는 compute_diagnosis가 반환한 객체에 필드를 설정.
     
     result.dependency_snapshot = deps
-    result.dependency_risk_score = risk_score
-    result.dependency_issues = dep_issues
+    result.dependency_complexity_score = complexity_score
+    result.dependency_flags = dep_flags
     
     return result

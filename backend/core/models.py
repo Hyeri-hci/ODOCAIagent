@@ -129,8 +129,8 @@ class DiagnosisCoreResult:
     activity_result: Optional[ActivityCoreResult] = None
     dependency_snapshot: Optional[DependenciesSnapshot] = None
     
-    dependency_risk_score: int = 0
-    dependency_issues: List[str] = field(default_factory=list)
+    dependency_complexity_score: int = 0
+    dependency_flags: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """기존 코드 호환용 dict 변환."""
@@ -147,10 +147,10 @@ class DiagnosisCoreResult:
                 "onboarding_level": self.onboarding_level,
                 "docs_issues": self.docs_issues,
                 "activity_issues": self.activity_issues,
-                "dependency_issues": self.dependency_issues,
+                "dependency_flags": self.dependency_flags,
             },
-            "risk": {
-                "dependency_risk_score": self.dependency_risk_score,
+            "complexity": {
+                "dependency_complexity_score": self.dependency_complexity_score,
             },
         }
 
