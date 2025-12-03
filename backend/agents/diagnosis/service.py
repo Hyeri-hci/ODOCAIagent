@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import asdict
 from typing import Any, Dict, List
 import logging
@@ -96,7 +97,6 @@ def run_diagnosis(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 고급 분석 모드: 카테고리별 상세 요약 포함 (LLM 5회, 기본 1회보다 느림)
     advanced_analysis = payload.get("advanced_analysis", False)
 
-    import time
     phase_times = {}
 
     # Phase 1: GitHub API 병렬 호출

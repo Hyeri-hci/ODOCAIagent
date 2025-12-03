@@ -598,7 +598,11 @@ def fetch_repo_tree(owner: str, repo: str, sha: str = "HEAD") -> Dict[str, Any]:
         if resp.status_code == 200:
             return resp.json()
         return {"tree": []}
-    except Exception:
+    except requests.Timeout:
+        logger.warning("fetch_repo_tree timeout: %s/%s", owner, repo)
+        return {"tree": []}
+    except requests.RequestException as e:
+        logger.warning("fetch_repo_tree failed: %s/%s - %s", owner, repo, e)
         return {"tree": []}
 
 
@@ -615,7 +619,11 @@ def fetch_workflow_runs(owner: str, repo: str, workflow_file: str = None) -> Dic
         if resp.status_code == 200:
             return resp.json()
         return {"workflow_runs": []}
-    except Exception:
+    except requests.Timeout:
+        logger.warning("fetch_workflow_runs timeout: %s/%s", owner, repo)
+        return {"workflow_runs": []}
+    except requests.RequestException as e:
+        logger.warning("fetch_workflow_runs failed: %s/%s - %s", owner, repo, e)
         return {"workflow_runs": []}
 
 
@@ -628,7 +636,11 @@ def fetch_workflows(owner: str, repo: str) -> List[Dict[str, Any]]:
         if resp.status_code == 200:
             return resp.json().get("workflows", [])
         return []
-    except Exception:
+    except requests.Timeout:
+        logger.warning("fetch_workflows timeout: %s/%s", owner, repo)
+        return []
+    except requests.RequestException as e:
+        logger.warning("fetch_workflows failed: %s/%s - %s", owner, repo, e)
         return []
 
 
@@ -642,7 +654,11 @@ def fetch_repo_contents(owner: str, repo: str, path: str = "") -> List[Dict[str,
             result = resp.json()
             return result if isinstance(result, list) else []
         return []
-    except Exception:
+    except requests.Timeout:
+        logger.warning("fetch_repo_contents timeout: %s/%s/%s", owner, repo, path)
+        return []
+    except requests.RequestException as e:
+        logger.warning("fetch_repo_contents failed: %s/%s/%s - %s", owner, repo, path, e)
         return []
 
 

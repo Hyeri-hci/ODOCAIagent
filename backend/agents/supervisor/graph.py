@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from langgraph.graph import StateGraph, END
 
@@ -15,439 +15,21 @@ from backend.agents.supervisor.intent_config import (
     get_intent_meta,
     is_v1_supported,
 )
-from backend.common.events import (
-    EventType,
-    emit_event,
-    generate_session_id,
-    generate_turn_id,
-    set_session_id,
-    set_turn_id,
-    get_session_id,
-    get_turn_id,
-)
-from backend.agents.shared.contracts import (
-    normalize_runner_output,
-    safe_get,
-    safe_get_nested,
-    RunnerStatus,
-)
+from backend.agents.shared.contracts import safe_get
+from backend.common.events import EventType, emit_event
 from backend.common.cache import idempotency_store
-from backend.common.github_client import check_repo_access, RepoAccessResult
+
+# Import nodes from modular files
+from backend.agents.supervisor.nodes.init_node import init_node
+from backend.agents.supervisor.nodes.classify_node import classify_node
+from backend.agents.supervisor.nodes.diagnosis_node import diagnosis_node
+from backend.agents.supervisor.nodes.expert_node import expert_node
+from backend.agents.supervisor.nodes.plan_nodes import plan_node, execute_plan_node
 
 logger = logging.getLogger(__name__)
 
 
-# Node 1: init_node
-def init_node(state: SupervisorState) -> Dict[str, Any]:
-    """Initializes session context and validates input."""
-    existing_session_id = state.get("_session_id")
-    if existing_session_id:
-        set_session_id(existing_session_id)
-    else:
-        session_id = generate_session_id()
-        set_session_id(session_id)
-    
-    turn_id = generate_turn_id()
-    set_turn_id(turn_id)
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="supervisor",
-        inputs={"node_name": "init_node"},
-        outputs={
-            "session_id": get_session_id(),
-            "turn_id": get_turn_id(),
-        }
-    )
-    
-    return {
-        "_session_id": get_session_id(),
-        "_turn_id": turn_id,
-    }
-
-
-# Node 2: classify_node
-def classify_node(state: SupervisorState) -> Dict[str, Any]:
-    """Classifies user intent using simple rules or LLM."""
-    from backend.agents.supervisor.nodes.intent_classifier import (
-        classify_intent_node,
-        _extract_keyword_candidates,
-    )
-    from backend.agents.supervisor.prompts import (
-        MISSING_REPO_TEMPLATE,
-        DISAMBIGUATION_CANDIDATES_TEMPLATE,
-        DISAMBIGUATION_SOURCE_ID,
-        AUTO_SELECT_REPO_TEMPLATE,
-        AUTO_SELECT_SOURCE_ID,
-        ACCESS_ERROR_NOT_FOUND_TEMPLATE,
-        ACCESS_ERROR_PRIVATE_TEMPLATE,
-        ACCESS_ERROR_RATE_LIMIT_TEMPLATE,
-        ACCESS_ERROR_SOURCE_ID,
-    )
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="classify_node",
-        inputs={"query_length": len(state.get("user_query", ""))},
-    )
-    
-    result = classify_intent_node(state)
-    
-    intent = result.get("intent", DEFAULT_INTENT)
-    sub_intent = result.get("sub_intent", DEFAULT_SUB_INTENT)
-    
-    # Set default answer_kind based on intent
-    answer_kind = _get_default_answer_kind(intent, sub_intent)
-    result["answer_kind"] = answer_kind
-    
-    # Entity Guard: analyze/* intent requires repo - ALWAYS check
-    meta = get_intent_meta(intent, sub_intent)
-    if meta["requires_repo"] and not result.get("repo"):
-        # Extract keyword candidates from query
-        user_query = state.get("user_query", "")
-        keyword, candidates = _extract_keyword_candidates(user_query)
-        
-        if keyword and candidates:
-            if len(candidates) == 1:
-                # Single candidate: auto-select with notice (no disambiguation)
-                c = candidates[0]
-                result["repo"] = {
-                    "owner": c["owner"],
-                    "name": c["name"],
-                    "url": f"https://github.com/{c['owner']}/{c['name']}",
-                }
-                result["_auto_selected_repo"] = True
-                result["_auto_select_notice"] = AUTO_SELECT_REPO_TEMPLATE.format(
-                    keyword=keyword,
-                    owner=c["owner"],
-                    repo=c["name"],
-                    desc=c.get("desc", ""),
-                )
-                result["_auto_select_source"] = AUTO_SELECT_SOURCE_ID
-                
-                logger.info(
-                    "[entity_guard] analyze/%s: auto-selected %s/%s (single candidate for '%s')",
-                    sub_intent, c["owner"], c["name"], keyword
-                )
-            else:
-                # Multiple candidates: force disambiguation
-                result["_needs_disambiguation"] = True
-                
-                candidate_lines = []
-                candidate_sources = []
-                for c in candidates[:3]:
-                    candidate_lines.append(f"- `{c['owner']}/{c['name']}` - {c['desc']}")
-                    candidate_sources.append(f"CANDIDATE:{c['owner']}/{c['name']}")
-                candidates_text = "\n".join(candidate_lines)
-                
-                result["_disambiguation_template"] = DISAMBIGUATION_CANDIDATES_TEMPLATE.format(
-                    keyword=keyword,
-                    candidates=candidates_text,
-                )
-                result["_disambiguation_source"] = DISAMBIGUATION_SOURCE_ID
-                result["_disambiguation_candidates"] = candidates
-                result["_disambiguation_candidate_sources"] = candidate_sources
-                result["answer_kind"] = "disambiguation"
-                
-                logger.info(
-                    "[entity_guard] analyze/%s blocked: disambiguation forced (keyword=%s, candidates=%d)",
-                    sub_intent, keyword, len(candidates)
-                )
-        else:
-            # No candidates: force disambiguation with generic message
-            result["_needs_disambiguation"] = True
-            result["_disambiguation_template"] = MISSING_REPO_TEMPLATE
-            result["_disambiguation_source"] = "SYS:TEMPLATES:MISSING_REPO"
-            result["answer_kind"] = "disambiguation"
-            
-            logger.info(
-                "[entity_guard] analyze/%s blocked: no repo, no candidates",
-                sub_intent
-            )
-    
-    # Access Guard: Pre-flight check for repo accessibility (BEFORE diagnosis)
-    repo = result.get("repo")
-    if repo and meta["requires_repo"] and not result.get("_needs_disambiguation"):
-        owner = safe_get(repo, "owner", "")
-        name = safe_get(repo, "name", "")
-        
-        if owner and name:
-            access_result = check_repo_access(owner, name)
-            
-            # Store repo context for artifact validation
-            result["_repo_context"] = {
-                "owner": owner,
-                "repo": name,
-                "repo_id": access_result.repo_id,
-                "default_branch": access_result.default_branch,
-                "accessible": access_result.accessible,
-            }
-            
-            if not access_result.accessible:
-                # CRITICAL: Block diagnosis path - force ask_user
-                result["_needs_ask_user"] = True
-                result["_access_error"] = access_result.reason
-                result["answer_kind"] = "ask_user"
-                
-                # Select appropriate error template
-                if access_result.reason == "not_found":
-                    result["_ask_user_template"] = ACCESS_ERROR_NOT_FOUND_TEMPLATE.format(
-                        owner=owner, repo=name
-                    )
-                elif access_result.reason == "private_no_access":
-                    result["_ask_user_template"] = ACCESS_ERROR_PRIVATE_TEMPLATE.format(
-                        owner=owner, repo=name
-                    )
-                elif access_result.reason == "rate_limit":
-                    result["_ask_user_template"] = ACCESS_ERROR_RATE_LIMIT_TEMPLATE
-                else:
-                    result["_ask_user_template"] = ACCESS_ERROR_NOT_FOUND_TEMPLATE.format(
-                        owner=owner, repo=name
-                    )
-                result["_ask_user_source"] = ACCESS_ERROR_SOURCE_ID
-                
-                logger.info(
-                    "[access_guard] %s/%s blocked: %s (status=%d)",
-                    owner, name, access_result.reason, access_result.status_code
-                )
-                
-                emit_event(
-                    EventType.SUPERVISOR_ROUTE_SELECTED,
-                    actor="supervisor",
-                    outputs={
-                        "selected_route": "ask_user",
-                        "intent": intent,
-                        "sub_intent": sub_intent,
-                        "repo": f"{owner}/{name}",
-                        "access_error": access_result.reason,
-                        "status_code": access_result.status_code,
-                    },
-                )
-    
-    # Emit route selection event for disambiguation
-    if result.get("_needs_disambiguation"):
-        emit_event(
-            EventType.SUPERVISOR_ROUTE_SELECTED,
-            actor="supervisor",
-            outputs={
-                "selected_route": "disambiguation",
-                "intent": intent,
-                "sub_intent": sub_intent,
-                "has_candidates": bool(result.get("_disambiguation_candidates")),
-                "candidate_count": len(result.get("_disambiguation_candidates", [])),
-            },
-        )
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="classify_node",
-        outputs={
-            "intent": intent,
-            "sub_intent": sub_intent,
-            "answer_kind": result.get("answer_kind", answer_kind),
-            "needs_disambiguation": result.get("_needs_disambiguation", False),
-            "needs_ask_user": result.get("_needs_ask_user", False),
-        },
-    )
-    
-    return result
-
-
-def _get_default_answer_kind(intent: str, sub_intent: str) -> str:
-    """Maps (intent, sub_intent) to default answer_kind."""
-    if intent == "analyze":
-        return "report"
-    elif intent == "followup" and sub_intent == "explain":
-        return "explain"
-    elif intent == "smalltalk":
-        return "greeting"
-    else:
-        return "chat"
-
-
-# Node 3: diagnosis_node (conditional) with ExpertRunner
-def diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
-    """Runs diagnosis using DiagnosisRunner with error policy."""
-    from backend.agents.supervisor.runners import DiagnosisRunner
-    
-    repo = state.get("repo")
-    if not repo:
-        return {"error_message": "저장소 정보가 없습니다."}
-    
-    user_context = safe_get(state, "user_context", {})
-    current_repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
-    
-    # CRITICAL: Check for repo context mismatch (prevent cross-repo contamination)
-    existing_diagnosis = state.get("diagnosis_result")
-    if existing_diagnosis:
-        existing_repo_id = ""
-        if isinstance(existing_diagnosis, dict):
-            input_data = existing_diagnosis.get("input", {})
-            existing_owner = input_data.get("owner", "")
-            existing_repo = input_data.get("repo", "")
-            existing_repo_id = f"{existing_owner}/{existing_repo}"
-        
-        if existing_repo_id and existing_repo_id != current_repo_id:
-            # Different repo - invalidate old diagnosis_result
-            logger.info(
-                "[diagnosis_node] Repo context changed: %s → %s, invalidating old result",
-                existing_repo_id, current_repo_id
-            )
-        elif existing_repo_id == current_repo_id:
-            # Same repo - skip re-diagnosis (followup case)
-            return {}
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="diagnosis_node",
-        inputs={"repo": current_repo_id},
-    )
-    
-    # Run diagnosis using ExpertRunner
-    runner = DiagnosisRunner(
-        repo_id=current_repo_id,
-        user_context=user_context,
-    )
-    result = runner.run()
-    
-    if not result.success:
-        emit_event(
-            EventType.NODE_FINISHED,
-            actor="diagnosis_node",
-            outputs={"status": "error", "error": result.error_message},
-        )
-        return {"error_message": result.error_message or "진단 중 오류가 발생했습니다."}
-    
-    # Get raw diagnosis result for state
-    diagnosis_result = runner.get_diagnosis_result()
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="diagnosis_node",
-        outputs={
-            "status": "success",
-            "degraded": result.degraded,
-            "artifact_count": len(result.artifacts_out),
-        },
-    )
-    
-    return {
-        "diagnosis_result": diagnosis_result,
-        "_expert_result": result,  # Store for summarize node if needed
-    }
-
-
-# Node 3b: expert_node (for compare/onepager)
-def expert_node(state: SupervisorState) -> Dict[str, Any]:
-    """Runs specialized expert runners (compare, onepager)."""
-    from backend.agents.supervisor.runners import CompareRunner, OnepagerRunner
-    from backend.agents.supervisor.intent_config import COMPARE_ENABLED
-    
-    intent = state.get("intent", "analyze")
-    sub_intent = state.get("sub_intent", "health")
-    repo = state.get("repo")
-    user_context = safe_get(state, "user_context", {})
-    
-    if not repo:
-        return {"error_message": "저장소 정보가 없습니다."}
-    
-    repo_id = f"{safe_get(repo, 'owner', '')}/{safe_get(repo, 'name', '')}"
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="expert_node",
-        inputs={"intent": intent, "sub_intent": sub_intent, "repo": repo_id},
-    )
-    
-    # Select appropriate runner
-    if sub_intent == "compare":
-        # Compare guard: check feature toggle
-        if not COMPARE_ENABLED:
-            return {
-                "error_message": "비교 기능은 현재 준비 중입니다. 개별 저장소 분석을 이용해 주세요."
-            }
-        
-        # Compare guard: need second repo
-        repo_b = safe_get(state, "compare_repo")
-        if not repo_b:
-            return {
-                "error_message": "비교할 두 번째 저장소를 찾지 못했습니다.\n"
-                    "예시: 'facebook/react랑 vuejs/core 비교해줘'"
-            }
-        
-        repo_b_id = f"{safe_get(repo_b, 'owner', '')}/{safe_get(repo_b, 'name', '')}"
-        runner = CompareRunner(
-            repo_a=repo_id,
-            repo_b=repo_b_id,
-            user_context=user_context,
-        )
-    elif sub_intent == "onepager":
-        runner = OnepagerRunner(
-            repo_id=repo_id,
-            user_context=user_context,
-        )
-    else:
-        # Fallback to diagnosis
-        from backend.agents.supervisor.runners import DiagnosisRunner
-        runner = DiagnosisRunner(
-            repo_id=repo_id,
-            user_context=user_context,
-        )
-    
-    result = runner.run()
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="expert_node",
-        outputs={
-            "status": "success" if result.success else "error",
-            "degraded": result.degraded,
-            "runner": runner.runner_name,
-            "incomplete_compare": result.meta.get("incomplete_compare", False),
-        },
-    )
-    
-    if not result.success:
-        return {"error_message": result.error_message}
-    
-    # Expert node returns final response directly (no summarize needed)
-    from backend.agents.supervisor.intent_config import ANSWER_KIND_MAP, DEFAULT_ANSWER_KIND
-    from backend.agents.supervisor.nodes.summarize_node import _generate_last_brief
-    
-    answer = result.answer
-    answer_kind = ANSWER_KIND_MAP.get((intent, sub_intent), DEFAULT_ANSWER_KIND)
-    
-    emit_event(
-        EventType.ANSWER_GENERATED,
-        actor="expert_node",
-        inputs={"answer_kind": answer_kind, "runner": runner.runner_name},
-        outputs={
-            "text_length": len(answer.text or "") if answer else 0,
-            "source_count": len(answer.sources or []) if answer else 0,
-            "degraded": result.degraded,
-            "incomplete_compare": result.meta.get("incomplete_compare", False),
-        },
-    )
-    
-    # Pass runner meta to state for summarize validation
-    runner_meta = {
-        "status": result.meta.get("status", "ok"),
-        "incomplete_compare": result.meta.get("incomplete_compare", False),
-        "failed_repos": result.meta.get("failed_repos", []),
-        "degrade_reason": result.meta.get("degrade_reason"),
-    }
-    
-    return {
-        "llm_summary": answer.text if answer else "",
-        "answer_kind": answer_kind,
-        "answer_contract": answer.model_dump() if answer else {},
-        "last_brief": _generate_last_brief(answer.text if answer else ""),
-        "last_answer_kind": answer_kind,
-        "_runner_meta": runner_meta,
-    }
-
-
-# Node 4: summarize_node (with idempotency)
+# Summarize Node Wrapper with idempotency
 def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
     """Generates final response using V1 summarize logic with idempotency."""
     from backend.agents.supervisor.nodes.summarize_node import summarize_node_v1
@@ -502,7 +84,7 @@ def summarize_node_wrapper(state: SupervisorState) -> Dict[str, Any]:
     return result
 
 
-# Routing: should_run_diagnosis (hierarchical routing)
+# Routing Functions
 def should_run_diagnosis(state: SupervisorState) -> str:
     """Hierarchical routing: route to appropriate node based on intent."""
     intent = state.get("intent", DEFAULT_INTENT)
@@ -549,13 +131,32 @@ def should_run_diagnosis(state: SupervisorState) -> str:
     
     # followup/explain needs diagnosis_result but should NOT re-run diagnosis
     if intent == "followup":
-        # evidence/explain → summarize (uses existing diagnosis_result)
         return "summarize"
     
     return "summarize"
 
 
-# Graph Builder
+def should_use_planning(state: SupervisorState) -> str:
+    """Determines whether to use V1 direct path or V2 planning path."""
+    intent = state.get("intent", DEFAULT_INTENT)
+    
+    # Fast paths: never use planning
+    if intent in ("smalltalk", "help", "general_qa"):
+        return "summarize"
+    
+    # Error path
+    if state.get("error_message"):
+        return "summarize"
+    
+    # V2 Planning for complex intents
+    if intent in ("analyze",) and state.get("_use_planning"):
+        return "plan"
+    
+    # Default to V1 direct routing
+    return "direct"
+
+
+# Graph Builders
 def build_supervisor_graph():
     """Builds V1 Supervisor Graph: init → classify → diagnosis/expert(conditional) → summarize."""
     graph = StateGraph(SupervisorState)
@@ -597,136 +198,6 @@ def build_supervisor_graph():
 def get_supervisor_graph():
     """Returns the V1 supervisor graph."""
     return build_supervisor_graph()
-
-
-# V2 Agentic Planning Graph
-
-def plan_node(state: SupervisorState) -> Dict[str, Any]:
-    """Builds execution plan based on intent classification."""
-    from backend.agents.supervisor.planner import build_plan, PlanStatus
-    
-    intent = state.get("intent", DEFAULT_INTENT)
-    sub_intent = state.get("sub_intent", DEFAULT_SUB_INTENT)
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="plan_node",
-        inputs={"intent": intent, "sub_intent": sub_intent},
-    )
-    
-    # Build plan from intent
-    context = {
-        "repo": state.get("repo"),
-        "user_context": state.get("user_context", {}),
-        "compare_repo": state.get("compare_repo"),
-        "user_query": state.get("user_query", ""),
-    }
-    
-    plan = build_plan(intent, sub_intent, context)
-    
-    emit_event(
-        EventType.SUPERVISOR_PLAN_BUILT,
-        actor="plan_node",
-        outputs={
-            "plan_id": plan.id,
-            "step_count": len(plan.steps),
-            "artifacts_required": plan.artifacts_required,
-        },
-    )
-    
-    return {
-        "_plan": plan.id,
-        "_plan_steps": [s.id for s in plan.steps],
-        "_plan_object": plan,
-    }
-
-
-def execute_plan_node(state: SupervisorState) -> Dict[str, Any]:
-    """Executes the plan with error handling and re-planning."""
-    from backend.agents.supervisor.planner import (
-        execute_plan,
-        PlanStatus,
-        replan_on_failure,
-        ReplanReason,
-    )
-    
-    plan = state.get("_plan_object")
-    if not plan:
-        return {"error_message": "실행할 계획이 없습니다."}
-    
-    emit_event(
-        EventType.NODE_STARTED,
-        actor="execute_plan_node",
-        inputs={"plan_id": plan.id, "step_count": len(plan.steps)},
-    )
-    
-    # Execute plan
-    executed_plan = execute_plan(plan, dict(state))
-    
-    # Handle re-planning on failure
-    if executed_plan.status == PlanStatus.FAILED:
-        failed_steps = executed_plan.get_failed_steps()
-        if failed_steps:
-            failed_step = failed_steps[0]
-            # Try re-planning
-            new_plan = replan_on_failure(
-                executed_plan,
-                failed_step,
-                ReplanReason.STEP_FAILED,
-            )
-            if new_plan:
-                executed_plan = execute_plan(new_plan, dict(state))
-    
-    emit_event(
-        EventType.NODE_FINISHED,
-        actor="execute_plan_node",
-        outputs={
-            "plan_id": executed_plan.id,
-            "status": executed_plan.status.value,
-            "execution_time_ms": executed_plan.total_execution_time_ms,
-            "replan_count": executed_plan.replan_count,
-        },
-    )
-    
-    # Extract results from plan execution
-    result: Dict[str, Any] = {
-        "_executed_plan": executed_plan.id,
-        "_plan_status": executed_plan.status.value,
-    }
-    
-    # Collect step outputs
-    for step_id, step_result in executed_plan.step_results.items():
-        if step_result.success and step_result.result:
-            # Merge results into state
-            result.update(step_result.result)
-    
-    # Handle ask_user status
-    if executed_plan.status == PlanStatus.ASK_USER:
-        result["error_message"] = executed_plan.error_message
-    elif executed_plan.status == PlanStatus.FAILED:
-        result["error_message"] = executed_plan.error_message or "계획 실행 중 오류가 발생했습니다."
-    
-    return result
-
-
-def should_use_planning(state: SupervisorState) -> str:
-    """Determines whether to use V1 direct path or V2 planning path."""
-    intent = state.get("intent", DEFAULT_INTENT)
-    
-    # Fast paths: never use planning
-    if intent in ("smalltalk", "help", "general_qa"):
-        return "summarize"
-    
-    # Error path
-    if state.get("error_message"):
-        return "summarize"
-    
-    # V2 Planning for complex intents
-    if intent in ("analyze",) and state.get("_use_planning"):
-        return "plan"
-    
-    # Default to V1 direct routing
-    return "direct"
 
 
 def build_supervisor_graph_v2():

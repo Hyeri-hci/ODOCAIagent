@@ -1,4 +1,10 @@
-"""Observability & Operations Gate for Supervisor V1."""
+"""Observability & Operations Gate for Supervisor V1.
+
+Structure:
+- Section 1: Metrics (MetricsWindow, MetricsCollector, percentile)
+- Section 2: SLO (SLOChecker, SLOCheckResult, WeeklyReport, EventValidator)
+- Section 3: Canary (CanaryManager, AutoDeploymentController, ErrorMeta)
+"""
 from __future__ import annotations
 
 import time
@@ -17,7 +23,8 @@ from backend.common.events import (
 )
 
 
-# 필수 이벤트 5종
+# Section 1: Metrics
+
 REQUIRED_EVENT_TYPES = [
     EventType.SUPERVISOR_INTENT_DETECTED,
     EventType.SUPERVISOR_ROUTE_SELECTED,
@@ -254,7 +261,8 @@ def get_metrics_collector() -> MetricsCollector:
     return _metrics_collector
 
 
-# SLO 검사기
+# Section 2: SLO
+
 class SLOChecker:
     """SLO 준수 여부 검사."""
     
@@ -479,7 +487,8 @@ class EventValidator:
         )
 
 
-# Canary 배포 관리
+# Section 3: Canary Deployment
+
 class CanaryManager:
     """Canary 배포 및 롤백 관리."""
     

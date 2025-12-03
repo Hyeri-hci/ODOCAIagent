@@ -278,7 +278,7 @@ def check_tone_compliance(text: str, mode: PromptMode) -> Dict[str, bool]:
     for name, check_fn in checklist:
         try:
             results[name] = check_fn(text)
-        except Exception:
+        except (TypeError, ValueError, AttributeError):
             results[name] = False
     
     return results

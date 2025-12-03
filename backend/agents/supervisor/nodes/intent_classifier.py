@@ -235,9 +235,7 @@ def _tier1_heuristic(query: str, has_prev_artifacts: bool = False) -> Optional[C
     # Compare detection (두 개의 repo 비교)
     is_compare, repo_a, repo_b = _detect_compare(query)
     if is_compare and repo_a and repo_b:
-        result = ClassifyResult("analyze", "compare", repo_a, 1.0, "heuristic")
-        result.compare_repo = repo_b  # type: ignore
-        return result
+        return ClassifyResult("analyze", "compare", repo_a, 1.0, "heuristic", compare_repo=repo_b)
     
     # Refine detection (직전 턴 아티팩트 있을 때만, one-pager보다 먼저 체크)
     if _detect_refine(query, has_prev_artifacts):
@@ -499,7 +497,8 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     if not query:
         raise ValueError("user_query is empty")
     
-    new_state: SupervisorState = dict(state)  # type: ignore
+    # TypedDict를 dict로 복사 (동적 키 추가를 위해)
+    new_state: SupervisorState = dict(state)  # type: ignore[assignment]
     
     # Check for previous artifacts (for follow-up detection)
     diagnosis_result = safe_get(state, "diagnosis_result")
@@ -529,14 +528,14 @@ def classify_intent_node(state: SupervisorState) -> SupervisorState:
     if result.compare_repo:
         new_state["compare_repo"] = result.compare_repo
     
-    # Store confidence for routing decisions
-    new_state["_classification_confidence"] = result.confidence  # type: ignore
-    new_state["_classification_method"] = result.method  # type: ignore
+    # Store internal metadata (not in TypedDict spec)
+    new_state["_classification_confidence"] = result.confidence  # type: ignore[typeddict-unknown-key]
+    new_state["_classification_method"] = result.method  # type: ignore[typeddict-unknown-key]
     
     # Update history
     hist = list(safe_get(state, "history", []) or [])
     hist.append({"role": "user", "content": query})
-    new_state["history"] = hist  # type: ignore
+    new_state["history"] = hist  # type: ignore[typeddict-item]
     
     # Emit INTENT_DETECTED event
     emit_event(

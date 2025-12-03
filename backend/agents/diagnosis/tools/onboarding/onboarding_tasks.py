@@ -52,6 +52,8 @@ from .personalization import (
     rank_tasks_for_user,
     generate_personalized_recommendation,
     _estimate_hours_from_level,
+    _calculate_skill_match_score,
+    _calculate_time_fit_score,
 )
 
 logger = logging.getLogger(__name__)

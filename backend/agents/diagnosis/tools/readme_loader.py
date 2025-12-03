@@ -1,2 +1,12 @@
 """호환성 모듈: 기존 import 경로 유지를 위한 re-export."""
-from .readme.readme_loader import *
+from .readme.readme_loader import (
+    ReadmeContent,
+    fetch_readme_content,
+    compute_readme_metrics,
+)
+
+__all__ = [
+    "ReadmeContent",
+    "fetch_readme_content",
+    "compute_readme_metrics",
+]
