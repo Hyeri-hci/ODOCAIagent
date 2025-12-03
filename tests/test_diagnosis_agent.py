@@ -3,6 +3,9 @@ import unittest
 import os
 import sys
 
+# Usage: python tests/test_diagnosis_agent.py
+# Note: This test runs the full DiagnosisAgent graph, including GitHub API calls.
+
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -28,6 +31,9 @@ class TestDiagnosisAgent(unittest.TestCase):
         result = graph.invoke(initial_state)
         
         # 4. 결과 검증
+        # - 에러 메시지가 없어야 함
+        self.assertIsNone(result.get("error_message"), f"Graph execution failed with error: {result.get('error_message')}")
+
         # - repo_snapshot 존재 여부
         self.assertIsNotNone(result.get("repo_snapshot"))
         self.assertEqual(result["repo_snapshot"].owner, "Hyeri-hci")
@@ -36,6 +42,7 @@ class TestDiagnosisAgent(unittest.TestCase):
         diag = result.get("diagnosis_result")
         self.assertIsNotNone(diag)
         print(f"Diagnosis Result: Health={diag.health_score}, Level={diag.health_level}")
+        self.assertTrue(0 <= diag.health_score <= 100)
         
         # - activity_result 존재 여부 (User Request)
         act = result.get("activity_result")
