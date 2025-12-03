@@ -127,12 +127,15 @@ def _extract_author_id(commit: Dict[str, Any]) -> Optional[str]:
 
 # 3. Metric Computation Functions
 
-def compute_commit_activity(owner: str, repo: str, days: int = 90) -> CommitActivityMetrics:
-    try:
-        commits = fetch_recent_commits(owner, repo, days=days) or []
-    except Exception:
-        commits = []
+# 3. Metric Computation Functions
 
+def _compute_commit_metrics(
+    commits: List[Dict[str, Any]],
+    owner: str,
+    repo: str,
+    days: int
+) -> CommitActivityMetrics:
+    """Pure function to compute commit metrics from a list of commits."""
     total_commits = len(commits)
     author_ids = set()
     commit_dates: List[date] = []
@@ -171,12 +174,21 @@ def compute_commit_activity(owner: str, repo: str, days: int = 90) -> CommitActi
     )
 
 
-def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivityMetrics:
+def compute_commit_activity(owner: str, repo: str, days: int = 90) -> CommitActivityMetrics:
     try:
-        issues = fetch_recent_issues(owner, repo, days=days) or []
+        commits = fetch_recent_commits(owner, repo, days=days) or []
     except Exception:
-        issues = []
+        commits = []
+    return _compute_commit_metrics(commits, owner, repo, days)
 
+
+def _compute_issue_metrics(
+    issues: List[Dict[str, Any]],
+    owner: str,
+    repo: str,
+    days: int
+) -> IssueActivityMetrics:
+    """Pure function to compute issue metrics from a list of issues."""
     now = datetime.now(timezone.utc)
     since_dt = now - timedelta(days=days)
     
@@ -200,12 +212,16 @@ def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivi
         if state == "OPEN":
             open_issues += 1
             if created_dt:
-                open_ages.append((now - created_dt).total_seconds() / 86400.0)
+                # Ensure non-negative age
+                age = max(0.0, (now - created_dt).total_seconds() / 86400.0)
+                open_ages.append(age)
         elif state == "CLOSED" and closed_dt:
             if is_created_in_window:
                 closed_in_window += 1
             if created_dt:
-                close_times.append((closed_dt - created_dt).total_seconds() / 86400.0)
+                # Ensure non-negative duration
+                duration = max(0.0, (closed_dt - created_dt).total_seconds() / 86400.0)
+                close_times.append(duration)
 
     issue_closure_ratio = (float(closed_in_window) / float(opened_in_window)) if opened_in_window > 0 else 0.0
     
@@ -228,12 +244,21 @@ def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivi
     )
 
 
-def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestActivityMetrics:
+def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivityMetrics:
     try:
-        prs = fetch_recent_pull_requests(owner, repo, days=days) or []
+        issues = fetch_recent_issues(owner, repo, days=days) or []
     except Exception:
-        prs = []
+        issues = []
+    return _compute_issue_metrics(issues, owner, repo, days)
 
+
+def _compute_pr_metrics(
+    prs: List[Dict[str, Any]],
+    owner: str,
+    repo: str,
+    days: int
+) -> PullRequestActivityMetrics:
+    """Pure function to compute PR metrics from a list of PRs."""
     now = datetime.now(timezone.utc)
     prs_in_window = 0
     merged_in_window = 0
@@ -252,7 +277,8 @@ def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestAct
         if state == "OPEN":
             open_prs += 1
             if created_dt:
-                open_ages.append((now - created_dt).total_seconds() / 86400.0)
+                age = max(0.0, (now - created_dt).total_seconds() / 86400.0)
+                open_ages.append(age)
 
         if state == "MERGED" and created_dt and merged_dt:
             merged_in_window += 1
@@ -279,6 +305,14 @@ def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestAct
         merged_in_window=merged_in_window, pr_merge_ratio=pr_merge_ratio,
         median_time_to_merge_days=median_time_to_merge, avg_open_pr_age_days=avg_open_pr_age,
     )
+
+
+def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestActivityMetrics:
+    try:
+        prs = fetch_recent_pull_requests(owner, repo, days=days) or []
+    except Exception:
+        prs = []
+    return _compute_pr_metrics(prs, owner, repo, days)
 
 
 # 4. Scoring Functions
