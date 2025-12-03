@@ -103,7 +103,10 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
             "You are an expert software engineering consultant. "
             "Analyze the provided repository diagnosis data and provide a concise, professional summary in Korean. "
             "Highlight key strengths, critical issues, and actionable recommendations. "
-            "Use markdown formatting."
+            "Use markdown formatting with the following sections:\n"
+            "1. **Summary**: Overall assessment.\n"
+            "2. **Key Issues**: Critical problems found.\n"
+            "3. **Recommendations**: Actionable steps to improve."
         )
         
         user_prompt = (
