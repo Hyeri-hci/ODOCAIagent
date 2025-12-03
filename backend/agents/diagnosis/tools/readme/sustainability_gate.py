@@ -56,11 +56,15 @@ def _days_since(dt: Optional[datetime]) -> int:
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
-    """문자열/datetime을 datetime으로 변환."""
+    """문자열/datetime/date를 datetime으로 변환."""
     if value is None:
         return None
     if isinstance(value, datetime):
         return value
+    # date 타입 처리 (CHAOSS metrics에서 date 객체로 반환됨)
+    from datetime import date
+    if isinstance(value, date):
+        return datetime.combine(value, datetime.min.time(), tzinfo=timezone.utc)
     if isinstance(value, str):
         # ISO 8601 형식 파싱
         try:

@@ -592,7 +592,7 @@ def fetch_recent_pull_requests(
 @cached(ttl=86400)  # 24시간 캐시
 def fetch_repo_tree(owner: str, repo: str, sha: str = "HEAD") -> Dict[str, Any]:
     """리포지토리 트리 가져오기 (재귀적)."""
-    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/trees/{sha}?recursive=1"
     try:
         resp = requests.get(url, headers=_build_headers(), timeout=10)
         if resp.status_code == 200:
@@ -606,9 +606,9 @@ def fetch_repo_tree(owner: str, repo: str, sha: str = "HEAD") -> Dict[str, Any]:
 def fetch_workflow_runs(owner: str, repo: str, workflow_file: str = None) -> Dict[str, Any]:
     """GitHub Actions 워크플로 실행 기록 가져오기."""
     if workflow_file:
-        url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/actions/workflows/{workflow_file}/runs?per_page=5"
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/workflows/{workflow_file}/runs?per_page=5"
     else:
-        url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/actions/runs?per_page=10"
+        url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/runs?per_page=10"
     
     try:
         resp = requests.get(url, headers=_build_headers(), timeout=10)
@@ -622,7 +622,7 @@ def fetch_workflow_runs(owner: str, repo: str, workflow_file: str = None) -> Dic
 @cached(ttl=86400)  # 24시간 캐시
 def fetch_workflows(owner: str, repo: str) -> List[Dict[str, Any]]:
     """워크플로 목록 가져오기."""
-    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/actions/workflows"
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/actions/workflows"
     try:
         resp = requests.get(url, headers=_build_headers(), timeout=10)
         if resp.status_code == 200:
@@ -635,7 +635,7 @@ def fetch_workflows(owner: str, repo: str) -> List[Dict[str, Any]]:
 @cached(ttl=3600)  # 1시간 캐시
 def fetch_repo_contents(owner: str, repo: str, path: str = "") -> List[Dict[str, Any]]:
     """리포지토리 디렉토리 내용 가져오기."""
-    url = f"{GITHUB_API_URL}/repos/{owner}/{repo}/contents/{path}"
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}"
     try:
         resp = requests.get(url, headers=_build_headers(), timeout=10)
         if resp.status_code == 200:
