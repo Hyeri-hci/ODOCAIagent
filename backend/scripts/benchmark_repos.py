@@ -18,7 +18,7 @@ from typing import List, Tuple, Dict, Any
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from backend.agents.supervisor.service import run_supervisor_diagnosis
+from backend.api.diagnosis_service import diagnose_repository
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -101,34 +101,32 @@ def run_benchmark(repos: List[Tuple[str, str, str]]) -> List[Dict[str, Any]]:
         }
         
         try:
-            # run_supervisor_diagnosis 호출
-            result, error_msg = run_supervisor_diagnosis(owner, repo, ref)
+            # diagnose_repository 호출 (use_llm_summary=False로 속도 우선)
+            # 벤치마크는 점수 위주이므로 LLM 요약 불필요
+            response = diagnose_repository(owner, repo, ref, use_llm_summary=False)
             
-            if error_msg:
+            if not response["ok"]:
                 entry["error"] = True
-                entry["error_message"] = error_msg
-                logger.warning(f"  -> Error: {error_msg}")
-            elif result:
-                entry["documentation_quality"] = result.documentation_quality
-                entry["activity_maintainability"] = result.activity_maintainability
-                entry["health_score"] = result.health_score
-                entry["health_level"] = result.health_level
-                entry["onboarding_score"] = result.onboarding_score
-                entry["onboarding_level"] = result.onboarding_level
+                entry["error_message"] = response["error"]
+                logger.warning(f"  -> Error: {response['error']}")
+            else:
+                data = response["data"]
+                entry["documentation_quality"] = data["documentation_quality"]
+                entry["activity_maintainability"] = data["activity_maintainability"]
+                entry["health_score"] = data["health_score"]
+                entry["health_level"] = data["health_level"]
+                entry["onboarding_score"] = data["onboarding_score"]
+                entry["onboarding_level"] = data["onboarding_level"]
                 
                 # 의존성 복잡도
-                entry["dependency_complexity_score"] = result.dependency_complexity_score
-                entry["dependency_flags"] = ",".join(result.dependency_flags) if result.dependency_flags else ""
+                entry["dependency_complexity_score"] = data["dependency_complexity_score"]
+                entry["dependency_flags"] = ",".join(data["dependency_flags"]) if data["dependency_flags"] else ""
                 
-                entry["docs_issues_count"] = len(result.docs_issues)
-                entry["activity_issues_count"] = len(result.activity_issues)
+                entry["docs_issues_count"] = data["docs_issues_count"]
+                entry["activity_issues_count"] = data["activity_issues_count"]
                 
-                logger.info(f"  -> Success. Health: {result.health_score}, Complexity: {result.dependency_complexity_score}")
-            else:
-                entry["error"] = True
-                entry["error_message"] = "Unknown error: Result is None"
-                logger.warning("  -> Result is None")
-                
+                logger.info(f"  -> Success. Health: {data['health_score']}, Complexity: {data['dependency_complexity_score']}")
+
         except Exception as e:
             entry["error"] = True
             entry["error_message"] = str(e)

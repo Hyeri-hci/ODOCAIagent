@@ -15,8 +15,7 @@ from typing import Tuple, Dict, Any
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from backend.agents.supervisor.service import run_supervisor_diagnosis
-from backend.core.models import DiagnosisCoreResult
+from backend.api.diagnosis_service import diagnose_repository
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -42,39 +41,41 @@ def parse_repo_string(repo_str: str) -> Tuple[str, str, str]:
     owner, repo = repo_part.split("/", 1)
     return owner.strip(), repo.strip(), ref.strip()
 
-def run_diagnosis_safe(repo_str: str) -> DiagnosisCoreResult:
+def run_diagnosis_safe(repo_str: str) -> Dict[str, Any]:
     """진단을 실행하고 에러 발생 시 종료합니다."""
     try:
         owner, repo, ref = parse_repo_string(repo_str)
         logger.info(f"Diagnosing {repo_str}...")
-        result, error_msg = run_supervisor_diagnosis(owner, repo, ref)
         
-        if error_msg:
-            logger.error(f"Failed to diagnose {repo_str}: {error_msg}")
-            sys.exit(1)
-        if not result:
-            logger.error(f"Failed to diagnose {repo_str}: Unknown error (Result is None)")
+        # CLI에서는 기본적으로 LLM 요약 없이 빠르게 진행 (필요시 옵션 처리 가능)
+        # 하지만 compare_repos는 상세 비교이므로 LLM 요약이 있으면 좋을 수도 있음.
+        # 일단 속도를 위해 False로 설정하거나, 인자로 받을 수 있게 확장 가능.
+        # 여기서는 사용자 요청에 따라 "점수 계산은 항상 빠르게, LLM 요약은 선택 사항" 취지를 살려 False로 둠.
+        response = diagnose_repository(owner, repo, ref, use_llm_summary=False)
+        
+        if not response["ok"]:
+            logger.error(f"Failed to diagnose {repo_str}: {response['error']}")
             sys.exit(1)
             
-        return result
+        return response["data"]
     except Exception as e:
         logger.error(f"Exception while diagnosing {repo_str}: {e}")
         sys.exit(1)
 
-def print_comparison_table(repo1_str: str, result1: DiagnosisCoreResult, 
-                           repo2_str: str, result2: DiagnosisCoreResult):
+def print_comparison_table(repo1_str: str, result1: Dict[str, Any], 
+                           repo2_str: str, result2: Dict[str, Any]):
     """두 진단 결과를 텍스트 표 형태로 출력합니다."""
     
     # 데이터 준비
     metrics = [
-        ("Docs Quality", result1.documentation_quality, result2.documentation_quality),
-        ("Activity", result1.activity_maintainability, result2.activity_maintainability),
-        ("Health Score", f"{result1.health_score} ({result1.health_level})", f"{result2.health_score} ({result2.health_level})"),
-        ("Onboarding", f"{result1.onboarding_score} ({result1.onboarding_level})", f"{result2.onboarding_score} ({result2.onboarding_level})"),
-        ("Dep Complexity", result1.dependency_complexity_score, result2.dependency_complexity_score),
-        ("Dep Flags", ",".join(result1.dependency_flags) or "-", ",".join(result2.dependency_flags) or "-"),
-        ("Docs Issues", len(result1.docs_issues), len(result2.docs_issues)),
-        ("Activity Issues", len(result1.activity_issues), len(result2.activity_issues)),
+        ("Docs Quality", result1["documentation_quality"], result2["documentation_quality"]),
+        ("Activity", result1["activity_maintainability"], result2["activity_maintainability"]),
+        ("Health Score", f"{result1['health_score']} ({result1['health_level']})", f"{result2['health_score']} ({result2['health_level']})"),
+        ("Onboarding", f"{result1['onboarding_score']} ({result1['onboarding_level']})", f"{result2['onboarding_score']} ({result2['onboarding_level']})"),
+        ("Dep Complexity", result1["dependency_complexity_score"], result2["dependency_complexity_score"]),
+        ("Dep Flags", ",".join(result1["dependency_flags"]) or "-", ",".join(result2["dependency_flags"]) or "-"),
+        ("Docs Issues", result1["docs_issues_count"], result2["docs_issues_count"]),
+        ("Activity Issues", result1["activity_issues_count"], result2["activity_issues_count"]),
     ]
     
     # 출력
@@ -95,36 +96,18 @@ def print_comparison_table(repo1_str: str, result1: DiagnosisCoreResult,
         print(f"{label:<25} {val1_str:<25} {val2_str:<25}")
     print("-" * 80 + "\n")
 
-def print_comparison_json(repo1_str: str, result1: DiagnosisCoreResult,
-                          repo2_str: str, result2: DiagnosisCoreResult):
+def print_comparison_json(repo1_str: str, result1: Dict[str, Any],
+                          repo2_str: str, result2: Dict[str, Any]):
     """두 진단 결과를 JSON 형태로 출력합니다."""
     
-    def to_summary_dict(repo_id, res: DiagnosisCoreResult):
-        return {
-            "id": repo_id,
-            "scores": {
-                "documentation_quality": res.documentation_quality,
-                "activity_maintainability": res.activity_maintainability,
-                "health_score": res.health_score,
-                "onboarding_score": res.onboarding_score,
-                "dependency_complexity_score": res.dependency_complexity_score,
-            },
-            "levels": {
-                "health_level": res.health_level,
-                "onboarding_level": res.onboarding_level,
-            },
-            "issues": {
-                "dependency_flags": res.dependency_flags,
-                "docs_issues_count": len(res.docs_issues),
-                "activity_issues_count": len(res.activity_issues),
-                "docs_issues": res.docs_issues,
-                "activity_issues": res.activity_issues,
-            }
-        }
-
+    # 이미 DTO(dict) 형태이므로 바로 사용 가능
+    # 다만 구조를 조금 더 명확히 하기 위해 재구성할 수도 있지만,
+    # 여기서는 간단히 DTO 자체를 출력하거나, 기존 포맷을 유지하기 위해 약간의 매핑을 할 수 있음.
+    # 사용자 요청에 따라 "JSON 출력은 {'repo_a': dto1.to_dict(), ...}" 형태로 교체.
+    
     output = {
-        "repo_a": to_summary_dict(repo1_str, result1),
-        "repo_b": to_summary_dict(repo2_str, result2),
+        "repo_a": result1,
+        "repo_b": result2,
     }
     
     print(json.dumps(output, indent=2, ensure_ascii=False))
