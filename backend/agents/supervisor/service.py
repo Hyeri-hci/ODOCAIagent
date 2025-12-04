@@ -6,7 +6,8 @@ from backend.core.models import DiagnosisCoreResult, ProjectRules, UserGuideline
 def run_supervisor_diagnosis(
     owner: str,
     repo: str,
-    ref: str = "main"
+    ref: str = "main",
+    use_llm_summary: bool = True
 ) -> tuple[Optional[DiagnosisCoreResult], Optional[str]]:
     """
     Supervisor를 통해 저장소 진단을 실행하는 엔트리 포인트.
@@ -24,6 +25,7 @@ def run_supervisor_diagnosis(
         "repo": repo,
         "repo_ref": ref,
         "task_type": "diagnosis",
+        "use_llm_summary": use_llm_summary,
         "messages": [],
     }
     

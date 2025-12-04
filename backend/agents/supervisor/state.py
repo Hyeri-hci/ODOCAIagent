@@ -47,7 +47,9 @@ class SupervisorState(TypedDict):
     # Control Flow
     task_type: Literal["diagnosis", "security", "diagnosis_and_security", "recommendation", "explain"]
     run_security: bool
+    run_security: bool
     run_recommendation: bool
+    use_llm_summary: bool  # LLM 요약 사용 여부 (False면 Core 결과만 단순 요약)
 
     last_answer_kind: Optional[Literal["diagnosis", "security", "recommendation", "explain"]]
 

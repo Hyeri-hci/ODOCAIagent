@@ -94,7 +94,15 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
         f"- 활동성: {', '.join(diagnosis.activity_issues) or '없음'}"
     )
 
-    # 2. Try LLM Summary
+    # 2. Check No-LLM Mode
+    if not state.get("use_llm_summary", True):
+        # LLM 사용 안 함 -> 바로 Fallback 반환 (로그 없음)
+        return {
+            "messages": [AIMessage(content=fallback_summary)],
+            "last_answer_kind": "diagnosis",
+        }
+
+    # 3. Try LLM Summary
     try:
         from backend.llm.factory import fetch_llm_client
         from backend.llm.base import ChatRequest, ChatMessage
@@ -148,7 +156,10 @@ def summarize_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
         summary_text = response.content
 
     except Exception as e:
-        logger.warning(f"LLM summary failed, using fallback: {e}")
+        # LLM 실패 시 로그 남기고 Fallback 사용
+        # 전체 traceback은 debug, warning에는 한 줄 요약
+        logger.debug(f"LLM summary full traceback: {e}", exc_info=True)
+        logger.warning(f"LLM summary failed (using fallback): {e}")
         summary_text = fallback_summary
 
     return {
