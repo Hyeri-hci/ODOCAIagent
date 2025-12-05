@@ -1,6 +1,7 @@
 from typing import Dict, Any
 from backend.agents.supervisor.models import SupervisorState
 from backend.llm.kanana_wrapper import KananaWrapper
+from backend.common.github_client import fetch_beginner_issues
 
 # Global or instantiated per request? Instantiating per request is safer for now.
 # Or use a singleton pattern if needed.
@@ -8,15 +9,23 @@ from backend.llm.kanana_wrapper import KananaWrapper
 
 def fetch_issues_node(state: SupervisorState) -> Dict[str, Any]:
     """
-    GitHub 이슈 수집 노드 (Placeholder).
-    실제 구현 시: GitHub API로 'good first issue', 'help wanted' 라벨이 붙은 이슈 수집.
+    GitHub 이슈 수집 노드.
+    good first issue, help wanted 라벨이 붙은 이슈를 GitHub API로 수집.
     """
-    # Mock Data
-    issues = [
-        {"number": 101, "title": "Fix typo in README", "labels": ["good first issue"]},
-        {"number": 102, "title": "Add unit tests for utils", "labels": ["help wanted", "good first issue"]},
-    ]
-    return {"candidate_issues": issues}
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        issues = fetch_beginner_issues(
+            owner=state.owner,
+            repo=state.repo,
+            max_count=10
+        )
+        logger.info(f"Fetched {len(issues)} beginner issues for {state.owner}/{state.repo}")
+        return {"candidate_issues": issues}
+    except Exception as e:
+        logger.warning(f"Failed to fetch issues: {e}. Using empty list.")
+        return {"candidate_issues": []}
 
 def plan_onboarding_node(state: SupervisorState) -> Dict[str, Any]:
     """
