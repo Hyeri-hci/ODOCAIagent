@@ -21,6 +21,10 @@ class DiagnosisOutput(BaseModel):
     dependency_complexity_score: int
     dependency_flags: List[str]
     
+    # 저장소 메타데이터
+    stars: int = 0
+    forks: int = 0
+    
     # 요약
     summary_for_user: str
     

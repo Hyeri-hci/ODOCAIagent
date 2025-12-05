@@ -36,6 +36,10 @@ class DiagnosisSummaryDTO:
     # 문서 상세
     readme_sections: Optional[Dict[str, bool]] = None
     
+    # 저장소 메타데이터
+    stars: int = 0
+    forks: int = 0
+    
     # 추천 이슈
     recommended_issues: Optional[List[Dict[str, Any]]] = None
 
@@ -59,6 +63,10 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
     open_issues_count = 0
     open_prs_count = 0
     
+    # 저장소 메타데이터 기본값
+    stars = 0
+    forks = 0
+    
     if isinstance(res, dict):
         if "scores" in res:
             # 네스트된 구조 (DiagnosisCoreResult.to_dict() 형식)
@@ -76,6 +84,8 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
             dependency_flags = labels.get("dependency_flags", [])
             docs_issues = labels.get("docs_issues", [])
             activity_issues = labels.get("activity_issues", [])
+            stars = res.get("stars", 0)
+            forks = res.get("forks", 0)
         else:
             # 플랫한 구조 (DiagnosisOutput.to_dict() 형식)
             documentation_quality = res.get("docs", {}).get("total_score", 0)
@@ -87,6 +97,8 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
             dependency_complexity_score = res.get("dependency_complexity_score", 0)
             dependency_flags = res.get("dependency_flags", [])
             summary_for_user = res.get("summary_for_user")
+            stars = res.get("stars", 0)
+            forks = res.get("forks", 0)
             
             # 상세 활동성 메트릭 추출
             activity_data = res.get("activity", {})
@@ -180,4 +192,6 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
         open_issues_count=open_issues_count,
         open_prs_count=open_prs_count,
         readme_sections=readme_sections,
+        stars=stars,
+        forks=forks,
     )

@@ -117,6 +117,10 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     open_issues_count = data.get("open_issues_count", 0)
     open_prs_count = data.get("open_prs_count", 0)
     
+    # 저장소 메타데이터
+    stars = data.get("stars", 0)
+    forks = data.get("forks", 0)
+    
     # Good First Issues 가져오기
     try:
         recommended_issues = fetch_beginner_issues(owner, repo, max_count=5)
@@ -151,6 +155,9 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
             "median_issue_close_days_text": f"{median_issue_close_days:.1f}일" if median_issue_close_days else "N/A",
             "open_issues_count": open_issues_count,
             "open_prs_count": open_prs_count,
+            # 저장소 메타데이터
+            "stars": stars,
+            "forks": forks,
         },
         risks=_generate_risks_from_issues(docs_issues, activity_issues, data),
         actions=_generate_actions_from_issues(docs_issues, activity_issues, data, recommended_issues),

@@ -65,6 +65,8 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         structure=structure_result.to_dict(),
         dependency_complexity_score=diagnosis.dependency_complexity_score,
         dependency_flags=list(diagnosis.dependency_flags),
+        stars=snapshot.stars,
+        forks=snapshot.forks,
         summary_for_user=summary_text,
         raw_metrics=diagnosis.to_dict()
     )
