@@ -62,15 +62,35 @@ def summarize_onboarding_plan_node(state: SupervisorState) -> Dict[str, Any]:
     온보딩 플랜 요약 노드.
     Kanana LLM을 사용하여 플랜을 자연어로 설명.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # 플랜 생성 실패 시 요약도 스킵
+    if state.onboarding_plan is None:
+        logger.warning("Onboarding plan is None, skipping summary")
+        return {
+            "last_answer_kind": "plan",
+            "onboarding_summary": "온보딩 플랜 생성에 실패하여 요약을 제공할 수 없습니다."
+        }
+    
     kanana = KananaWrapper()
     repo_id = f"{state.owner}/{state.repo}"
     
-    summary = kanana.summarize_onboarding_plan(
-        repo_id=repo_id,
-        plan=state.onboarding_plan
-    )
-    
-    return {
-        "last_answer_kind": "plan",
-        "onboarding_summary": summary,
-    }
+    try:
+        summary = kanana.summarize_onboarding_plan(
+            repo_id=repo_id,
+            plan=state.onboarding_plan
+        )
+        
+        return {
+            "last_answer_kind": "plan",
+            "onboarding_summary": summary,
+        }
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"Onboarding summary generation failed: {error_msg}")
+        return {
+            "last_answer_kind": "plan",
+            "onboarding_summary": f"요약 생성 중 오류가 발생했습니다: {error_msg[:100]}",
+        }
+

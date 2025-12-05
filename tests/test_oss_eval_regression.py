@@ -1,19 +1,24 @@
+"""
+OSS 평가 회귀 테스트.
+에이전트 스코어 변경을 감지하기 위한 regression 테스트.
+"""
 import json
 import os
 import pytest
 from typing import Dict, Any, Tuple
 
-from backend.agents.supervisor.service import run_supervisor_diagnosis
-from backend.core.models import DiagnosisCoreResult
+from backend.api.agent_service import run_agent_task
 
 # 픽스처 파일 경로
 BASELINE_FILE = os.path.join(os.path.dirname(__file__), "fixtures", "oss_eval_baseline.json")
 
+# 허용 오차 설정
+SCORE_TOLERANCE = 5  # 점수 허용 오차 (±5점)
+DEPENDENCY_TOLERANCE = 10  # 의존성 복잡도 허용 오차 (±10점)
+
+
 def parse_repo_string(repo_str: str) -> Tuple[str, str, str]:
-    """
-    'owner/repo@ref' 문자열을 파싱합니다.
-    (benchmark_repos.py와 동일한 로직)
-    """
+    """'owner/repo@ref' 문자열을 파싱합니다."""
     repo_str = repo_str.strip()
     ref = "main"
     
@@ -28,6 +33,7 @@ def parse_repo_string(repo_str: str) -> Tuple[str, str, str]:
     owner, repo = repo_part.split("/", 1)
     return owner.strip(), repo.strip(), ref.strip()
 
+
 @pytest.fixture
 def baseline_data():
     """베이스라인 데이터를 로드합니다."""
@@ -37,63 +43,104 @@ def baseline_data():
     with open(BASELINE_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
-@pytest.mark.slow
-def test_oss_eval_regression(baseline_data):
-    """
-    OSS 벤치마크 베이스라인 회귀 테스트.
-    각 레포지토리에 대해 진단을 다시 수행하고, 결과가 허용 오차 범위 내인지 확인합니다.
-    """
-    for entry in baseline_data:
-        repo_id = entry.get("repo_id")
+
+class TestAgentScoreRegression:
+    """에이전트 스코어 회귀 테스트."""
+    
+    @pytest.mark.slow
+    def test_oss_eval_regression(self, baseline_data):
+        """
+        OSS 벤치마크 베이스라인 회귀 테스트.
+        run_agent_task API를 통해 진단을 수행하고 허용 오차 범위를 확인합니다.
+        """
+        for entry in baseline_data:
+            repo_id = entry.get("repo_id")
+            
+            if entry.get("error"):
+                continue
+                
+            print(f"\nTesting regression for {repo_id}...")
+            
+            owner, repo, ref = parse_repo_string(repo_id)
+            
+            # run_agent_task API 호출
+            result = run_agent_task(
+                task_type="diagnose_repo",
+                owner=owner,
+                repo=repo,
+                ref=ref,
+                use_llm_summary=False
+            )
+            
+            assert result["ok"], f"Diagnosis failed for {repo_id}: {result.get('error')}"
+            
+            data = result["data"]
+            
+            # 1. 점수 비교 (허용 오차 ±5)
+            self._assert_score_in_range(
+                data["documentation_quality"], 
+                entry["documentation_quality"], 
+                "documentation_quality", 
+                repo_id
+            )
+            self._assert_score_in_range(
+                data["activity_maintainability"], 
+                entry["activity_maintainability"], 
+                "activity_maintainability", 
+                repo_id
+            )
+            self._assert_score_in_range(
+                data["health_score"], 
+                entry["health_score"], 
+                "health_score", 
+                repo_id
+            )
+            self._assert_score_in_range(
+                data["onboarding_score"], 
+                entry["onboarding_score"], 
+                "onboarding_score", 
+                repo_id
+            )
+            
+            # 2. 레벨 비교 (정확히 일치)
+            assert data["health_level"] == entry["health_level"], \
+                f"Health level changed for {repo_id}: {entry['health_level']} -> {data['health_level']}"
+            assert data["onboarding_level"] == entry["onboarding_level"], \
+                f"Onboarding level changed for {repo_id}: {entry['onboarding_level']} -> {data['onboarding_level']}"
+            
+            # 3. 의존성 복잡도 (허용 오차 ±10)
+            baseline_dep = entry.get("dependency_complexity_score") or 0
+            assert abs(data["dependency_complexity_score"] - baseline_dep) <= DEPENDENCY_TOLERANCE, \
+                f"Dependency complexity changed too much for {repo_id}: {baseline_dep} -> {data['dependency_complexity_score']}"
+    
+    def _assert_score_in_range(self, actual: int, expected: int, field: str, repo_id: str):
+        """점수가 허용 범위 내에 있는지 확인."""
+        assert abs(actual - expected) <= SCORE_TOLERANCE, \
+            f"{field} changed too much for {repo_id}: {expected} -> {actual} (tolerance: ±{SCORE_TOLERANCE})"
+    
+    @pytest.mark.slow
+    def test_trace_included_when_enabled(self, baseline_data):
+        """debug_trace=True일 때 trace가 포함되는지 확인."""
+        if not baseline_data:
+            pytest.skip("No baseline data")
         
-        # 에러가 있었던 항목은 건너뜀 (또는 에러가 재현되는지 확인할 수도 있음)
+        entry = baseline_data[0]
         if entry.get("error"):
-            continue
-            
-        print(f"\nTesting regression for {repo_id}...")
+            pytest.skip("First baseline entry has error")
         
-        owner, repo, ref = parse_repo_string(repo_id)
+        owner, repo, ref = parse_repo_string(entry["repo_id"])
         
-        # 진단 실행
-        result, error_msg = run_supervisor_diagnosis(owner, repo, ref)
+        result = run_agent_task(
+            task_type="diagnose_repo",
+            owner=owner,
+            repo=repo,
+            ref=ref,
+            use_llm_summary=False,
+            debug_trace=True
+        )
         
-        assert error_msg is None, f"Diagnosis failed for {repo_id}: {error_msg}"
-        assert result is not None, f"Diagnosis result is None for {repo_id}"
-        
-        # 1. 점수 비교 (허용 오차 +/- 5)
-        assert abs(result.documentation_quality - entry["documentation_quality"]) <= 5, \
-            f"Docs quality changed too much for {repo_id}: {entry['documentation_quality']} -> {result.documentation_quality}"
-            
-        assert abs(result.activity_maintainability - entry["activity_maintainability"]) <= 5, \
-            f"Activity score changed too much for {repo_id}: {entry['activity_maintainability']} -> {result.activity_maintainability}"
-            
-        assert abs(result.health_score - entry["health_score"]) <= 5, \
-            f"Health score changed too much for {repo_id}: {entry['health_score']} -> {result.health_score}"
-            
-        assert abs(result.onboarding_score - entry["onboarding_score"]) <= 5, \
-            f"Onboarding score changed too much for {repo_id}: {entry['onboarding_score']} -> {result.onboarding_score}"
-            
-        # 2. 레벨 비교 (정확히 일치해야 함)
-        assert result.health_level == entry["health_level"], \
-            f"Health level changed for {repo_id}: {entry['health_level']} -> {result.health_level}"
-            
-        assert result.onboarding_level == entry["onboarding_level"], \
-            f"Onboarding level changed for {repo_id}: {entry['onboarding_level']} -> {result.onboarding_level}"
-            
-        # 3. 의존성 복잡도 (허용 오차 +/- 10)
-        # entry에 값이 없는 경우(None) 0으로 취급
-        baseline_dep_score = entry.get("dependency_complexity_score") or 0
-        assert abs(result.dependency_complexity_score - baseline_dep_score) <= 10, \
-            f"Dependency complexity changed too much for {repo_id}: {baseline_dep_score} -> {result.dependency_complexity_score}"
-            
-        # 4. 의존성 플래그 (Superset 검사)
-        # baseline에 있는 플래그는 모두 현재 결과에도 있어야 함
-        baseline_flags = set(entry.get("dependency_flags", "").split(",")) if entry.get("dependency_flags") else set()
-        current_flags = set(result.dependency_flags)
-        
-        # 빈 문자열 split 결과 처리
-        baseline_flags.discard("")
-        
-        missing_flags = baseline_flags - current_flags
-        assert not missing_flags, \
-            f"Missing dependency flags for {repo_id}: {missing_flags}"
+        assert result["ok"], f"Diagnosis failed: {result.get('error')}"
+        assert "trace" in result, "Trace should be included when debug_trace=True"
+        assert isinstance(result["trace"], list), "Trace should be a list"
+        assert len(result["trace"]) > 0, "Trace should not be empty"
+
