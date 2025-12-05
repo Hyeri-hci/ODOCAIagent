@@ -92,7 +92,12 @@ def get_supervisor_graph():
     # Checkpointer 설정
     try:
         from langgraph.checkpoint.sqlite import SqliteSaver
-        checkpointer = SqliteSaver.from_conn_string("sqlite:///odo_state.db")
+        import sqlite3
+        
+        # SqliteSaver는 sqlite3.Connection 객체를 직접 받음
+        conn = sqlite3.connect("odo_state.db", check_same_thread=False)
+        checkpointer = SqliteSaver(conn)
+        logger.info("Using SqliteSaver for state persistence.")
     except ImportError:
         logger.warning("SqliteSaver not found. Using MemorySaver.")
         from langgraph.checkpoint.memory import MemorySaver
