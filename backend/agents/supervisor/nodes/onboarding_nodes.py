@@ -23,6 +23,9 @@ def plan_onboarding_node(state: SupervisorState) -> Dict[str, Any]:
     온보딩 플랜 생성 노드.
     Kanana LLM을 사용하여 사용자 컨텍스트와 진단 결과를 바탕으로 주차별 플랜 생성.
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     kanana = KananaWrapper()
     
     repo_id = f"{state.owner}/{state.repo}"
@@ -35,12 +38,23 @@ def plan_onboarding_node(state: SupervisorState) -> Dict[str, Any]:
             user_context=state.user_context,
             candidate_issues=state.candidate_issues
         )
+        logger.info(f"Onboarding plan generated: {len(plan)} weeks")
         return {"onboarding_plan": plan}
-    except Exception as e:
-        # Safety: Fail gracefully
+    except ValueError as e:
+        # LLM JSON 파싱 실패
+        error_msg = str(e)
+        logger.error(f"Onboarding plan generation failed: {error_msg}")
         return {
-            "onboarding_plan": [{"status": "failed", "reason": "llm_error"}],
-            "error": "onboarding_plan_generation_failed" # Code-like string
+            "onboarding_plan": None,
+            "error": f"LLM_JSON_PARSE_ERROR: {error_msg[:100]}"
+        }
+    except Exception as e:
+        # 기타 에러
+        error_msg = str(e)
+        logger.error(f"Onboarding plan generation failed: {error_msg}")
+        return {
+            "onboarding_plan": None,
+            "error": f"ONBOARDING_PLAN_ERROR: {error_msg[:100]}"
         }
 
 def summarize_onboarding_plan_node(state: SupervisorState) -> Dict[str, Any]:

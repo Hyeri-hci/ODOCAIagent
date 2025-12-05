@@ -1,5 +1,5 @@
 from typing import Literal, Dict, Any, Optional, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from backend.core.models import RepoSnapshot
 
 # 1. TaskType Definition (Hero Scenarios Only)
@@ -15,7 +15,37 @@ class SupervisorInput(BaseModel):
     repo: str   # Required
     user_context: Dict[str, Any] = {}
 
-# 3. SupervisorState Definition
+# 3. OnboardingUserContext - 온보딩 사용자 컨텍스트 스키마
+class OnboardingUserContext(BaseModel):
+    """온보딩 플랜 생성을 위한 사용자 컨텍스트."""
+    preferred_language: str = Field(default="ko", description="선호 언어 (ko, en)")
+    experience_level: Literal["beginner", "intermediate", "advanced"] = Field(
+        default="beginner", 
+        description="개발 경험 수준"
+    )
+    available_hours_per_week: int = Field(
+        default=5, 
+        ge=1, 
+        le=40, 
+        description="주당 투자 가능 시간"
+    )
+    preferred_issue_types: List[str] = Field(
+        default_factory=list, 
+        description="선호 이슈 타입 (docs, bug-fix, feature, test)"
+    )
+    focus_areas: List[str] = Field(
+        default_factory=list, 
+        description="집중 영역 (frontend, backend, testing, docs)"
+    )
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "OnboardingUserContext":
+        """Dict에서 OnboardingUserContext 생성. 알 수 없는 키는 무시."""
+        valid_keys = cls.model_fields.keys()
+        filtered = {k: v for k, v in data.items() if k in valid_keys}
+        return cls(**filtered)
+
+# 4. SupervisorState Definition
 AnswerKind = Literal["none", "report", "plan", "explain"]
 
 class SupervisorState(BaseModel):
@@ -46,3 +76,4 @@ class SupervisorState(BaseModel):
 
     # 6) 에러
     error: Optional[str] = None
+

@@ -42,17 +42,19 @@ class KananaWrapper:
         repo_id: str, 
         diagnosis_summary: str, 
         user_context: Dict[str, Any],
-        candidate_issues: List[Dict[str, Any]]
+        candidate_issues: List[Dict[str, Any]],
+        max_retries: int = 2
     ) -> List[Dict[str, Any]]:
         """
         Generate a structured onboarding plan.
         Returns a list of weeks (dicts).
+        Includes retry logic for JSON parsing errors.
         """
         system_prompt = (
             "You are an expert engineering mentor. "
             "Create a structured onboarding plan for a new contributor based on the repository diagnosis and user profile. "
-            "Return ONLY a JSON array of objects, where each object represents a week with 'week' (int), 'goals' (list of strings), and 'tasks' (list of strings). "
-            "Do not include markdown formatting like ```json."
+            "Return ONLY a valid JSON array of objects, where each object represents a week with 'week' (int), 'goals' (list of strings), and 'tasks' (list of strings). "
+            "Do not include markdown formatting like ```json. Return raw JSON only."
         )
         
         issues_text = "\n".join([f"- #{i['number']}: {i['title']}" for i in candidate_issues])
@@ -65,19 +67,46 @@ class KananaWrapper:
             "Generate a 1-4 week onboarding plan."
         )
         
-        response_text = self._call_llm(system_prompt, user_prompt, temperature=0.5)
+        last_error = None
         
-        # Parse JSON
-        import json
-        try:
-            # Clean up if markdown code blocks are present
-            cleaned_text = response_text.replace("```json", "").replace("```", "").strip()
-            plan = json.loads(cleaned_text)
-            return plan
-        except json.JSONDecodeError:
-            logger.error(f"Failed to parse onboarding plan JSON. Response length: {len(response_text)}")
-            # Re-raise to let the node handle the fallback/error state
-            raise ValueError("Invalid JSON response from LLM")
+        for attempt in range(max_retries):
+            try:
+                response_text = self._call_llm(system_prompt, user_prompt, temperature=0.5)
+                
+                # Clean up markdown code blocks
+                cleaned_text = response_text.strip()
+                if cleaned_text.startswith("```json"):
+                    cleaned_text = cleaned_text[7:]
+                if cleaned_text.startswith("```"):
+                    cleaned_text = cleaned_text[3:]
+                if cleaned_text.endswith("```"):
+                    cleaned_text = cleaned_text[:-3]
+                cleaned_text = cleaned_text.strip()
+                
+                import json
+                plan = json.loads(cleaned_text)
+                
+                # Validate structure
+                if not isinstance(plan, list):
+                    raise ValueError("Expected JSON array")
+                
+                return plan
+                
+            except json.JSONDecodeError as e:
+                last_error = e
+                logger.warning(f"JSON parse attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    # Retry with lower temperature
+                    continue
+            except ValueError as e:
+                last_error = e
+                logger.warning(f"Validation attempt {attempt + 1}/{max_retries} failed: {e}")
+                if attempt < max_retries - 1:
+                    continue
+        
+        # All retries failed
+        logger.error(f"Failed to parse onboarding plan JSON after {max_retries} attempts")
+        raise ValueError(f"LLM_JSON_PARSE_ERROR: {last_error}")
 
     def summarize_onboarding_plan(
         self, 
