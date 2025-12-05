@@ -23,13 +23,39 @@ class AnalyzeRequest(BaseModel):
 
 
 class AnalyzeResponse(BaseModel):
+"""
+HTTP API 라우터 - 통합 에이전트 외부 인터페이스.
+
+UI, PlayMCP, 기타 클라이언트를 위한 HTTP 엔드포인트.
+"""
+import re
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
+
+from backend.api.agent_service import run_agent_task
+
+router = APIRouter(prefix="/api", tags=["agent"])
+
+
+# ============================================================
+# Frontend Compatible Schemas (/api/analyze)
+# ============================================================
+
+class AnalyzeRequest(BaseModel):
+    """프론트엔드 호환 분석 요청."""
+    repo_url: str = Field(..., description="GitHub 저장소 URL (예: https://github.com/owner/repo)")
+
+
+class AnalyzeResponse(BaseModel):
     """프론트엔드 호환 분석 응답."""
     job_id: str
     score: int  # health_score
     analysis: Dict[str, Any]
     risks: List[Dict[str, Any]]
     actions: List[Dict[str, Any]]
-    similar: List[Dict[str, Any]]
+    similar: List[Dict[str, Any]]  # Deprecated in favor of recommended_issues
+    recommended_issues: Optional[List[Dict[str, Any]]] = None
     readme_summary: Optional[str] = None
 
 
@@ -51,6 +77,28 @@ def parse_github_url(url: str) -> tuple[str, str, str]:
     raise ValueError(f"Invalid GitHub URL format: {url}")
 
 
+def _get_score_interpretation(score: int) -> str:
+    """점수 해석 문구 반환."""
+    if score >= 80:
+        return "상위 10% 수준입니다 (OSS 평균: 65점)"
+    elif score >= 60:
+        return "평균적인 수준입니다 (OSS 평균: 65점)"
+    elif score >= 40:
+        return "평균보다 낮습니다 (OSS 평균: 65점)"
+    else:
+        return "심각한 개선이 필요합니다"
+
+
+def _get_level_description(level: str) -> str:
+    """건강도 레벨 설명 반환."""
+    if level == "good":
+        return "안정적인 프로젝트입니다"
+    elif level == "warning":
+        return "일부 개선이 필요한 상태입니다"
+    else:
+        return "지속 가능성이 우려되는 상태입니다"
+
+
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     """
@@ -59,6 +107,8 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     GitHub URL을 받아서 건강도 진단을 수행하고,
     프론트엔드가 기대하는 형식으로 응답합니다.
     """
+    from backend.common.github_client import fetch_beginner_issues
+    
     try:
         owner, repo, ref = parse_github_url(request.repo_url)
     except ValueError as e:
@@ -70,7 +120,7 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
         owner=owner,
         repo=repo,
         ref=ref,
-        use_llm_summary=True  # LLM 요약 활성화
+        use_llm_summary=True
     )
     
     if not result.get("ok"):
@@ -78,9 +128,21 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     
     data = result.get("data", {})
     
-    # 실제 이슈 데이터 사용
+    # 실제 이슈 데이터
     docs_issues = data.get("docs_issues", [])
     activity_issues = data.get("activity_issues", [])
+    
+    # 상세 메트릭
+    days_since_last_commit = data.get("days_since_last_commit")
+    total_commits_30d = data.get("total_commits_30d", 0)
+    unique_contributors = data.get("unique_contributors", 0)
+    readme_sections = data.get("readme_sections", {})
+    
+    # Good First Issues 가져오기
+    try:
+        recommended_issues = fetch_beginner_issues(owner, repo, max_count=5)
+    except Exception:
+        recommended_issues = []
     
     # 프론트엔드 형식으로 변환
     return AnalyzeResponse(
@@ -88,18 +150,25 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
         score=data.get("health_score", 0),
         analysis={
             "health_score": data.get("health_score", 0),
+            "health_score_interpretation": _get_score_interpretation(data.get("health_score", 0)),
+            "health_level": data.get("health_level", "unknown"),
+            "health_level_description": _get_level_description(data.get("health_level", "unknown")),
             "documentation_quality": data.get("documentation_quality", 0),
             "activity_maintainability": data.get("activity_maintainability", 0),
             "onboarding_score": data.get("onboarding_score", 0),
-            "health_level": data.get("health_level", "unknown"),
             "onboarding_level": data.get("onboarding_level", "unknown"),
             "dependency_complexity_score": data.get("dependency_complexity_score", 0),
+            # 상세 메트릭
+            "days_since_last_commit": days_since_last_commit,
+            "total_commits_30d": total_commits_30d,
+            "unique_contributors": unique_contributors,
+            "readme_sections": readme_sections,
         },
-        # 실제 진단 데이터 기반 risks/actions 생성
         risks=_generate_risks_from_issues(docs_issues, activity_issues, data),
         actions=_generate_actions_from_issues(docs_issues, activity_issues, data),
-        similar=[],  # Similar 추천은 미구현
-        readme_summary=data.get("summary_for_user"),  # LLM 요약
+        similar=[],
+        recommended_issues=recommended_issues,
+        readme_summary=data.get("summary_for_user"),
     )
 
 
@@ -140,23 +209,33 @@ def _generate_risks_from_issues(
     risks = []
     risk_id = 1
     
+    # 상세 메트릭 가져오기
+    days_since_last_commit = data.get("days_since_last_commit")
+    
     # 문서 이슈
     for issue in docs_issues:
+        desc = ISSUE_DESCRIPTIONS.get(issue, f"문서 이슈: {issue}")
         risks.append({
             "id": risk_id,
             "type": "documentation",
             "severity": "high" if issue in ["weak_documentation", "missing_how"] else "medium",
-            "description": ISSUE_DESCRIPTIONS.get(issue, f"문서 이슈: {issue}"),
+            "description": desc,
         })
         risk_id += 1
     
     # 활동성 이슈
     for issue in activity_issues:
+        desc = ISSUE_DESCRIPTIONS.get(issue, f"활동성 이슈: {issue}")
+        
+        # 상세 정보 추가
+        if issue == "no_recent_commits" and days_since_last_commit is not None:
+            desc += f" (마지막 커밋: {days_since_last_commit}일 전)"
+            
         risks.append({
             "id": risk_id,
             "type": "maintenance",
             "severity": "high" if issue == "inactive_project" else "medium",
-            "description": ISSUE_DESCRIPTIONS.get(issue, f"활동성 이슈: {issue}"),
+            "description": desc,
         })
         risk_id += 1
     
@@ -281,4 +360,3 @@ async def execute_agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
 async def health_check():
     """API 상태 확인."""
     return {"status": "ok", "service": "ODOCAIagent"}
-
