@@ -5,15 +5,12 @@ import {
   Star,
   GitFork,
   Users,
-  Shield,
-  Code,
   Activity,
   TrendingUp,
   CheckCircle,
   AlertTriangle,
   FileText,
   Search,
-  Clock,
   ArrowRight,
 } from "lucide-react";
 import { formatNumber } from "../../utils/formatNumber";
@@ -62,7 +59,11 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
 
   // 안전한 데이터 접근
   if (!analysisResult || !analysisResult.summary) {
-    return <div className="text-center text-gray-500 py-8">분석 결과를 불러오는 중...</div>;
+    return (
+      <div className="text-center text-gray-500 py-8">
+        분석 결과를 불러오는 중...
+      </div>
+    );
   }
 
   const statusConfig = getStatusConfig(analysisResult.summary.score);
@@ -77,8 +78,12 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
               <div className="absolute inset-0 border-4 border-blue-200 rounded-full"></div>
               <div className="absolute inset-0 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
             </div>
-            <p className="text-lg font-semibold text-gray-900 mb-1">분석 중입니다</p>
-            <p className="text-sm text-gray-600">새로운 프로젝트를 분석하고 있습니다...</p>
+            <p className="text-lg font-semibold text-gray-900 mb-1">
+              분석 중입니다
+            </p>
+            <p className="text-sm text-gray-600">
+              새로운 프로젝트를 분석하고 있습니다...
+            </p>
           </div>
         </div>
       )}
@@ -122,9 +127,7 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
               <div
                 className={`${statusConfig.bgColor} ${statusConfig.borderColor} border-2 px-4 py-3 rounded-xl flex items-center gap-2 justify-center`}
               >
-                <CheckCircle
-                  className={`w-5 h-5 ${statusConfig.textColor}`}
-                />
+                <CheckCircle className={`w-5 h-5 ${statusConfig.textColor}`} />
                 <span className={`${statusConfig.textColor} font-bold`}>
                   {statusConfig.label}
                 </span>
@@ -166,21 +169,29 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
             {/* Metric Bars */}
             <div className="space-y-5">
               <MetricBar
-                icon={Shield}
-                label="보안 점수"
-                value={85}
+                icon={FileText}
+                label="문서 품질"
+                value={
+                  analysisResult.technicalDetails?.documentationQuality ||
+                  analysisResult.rawAnalysis?.documentation_quality ||
+                  0
+                }
                 color="green"
               />
               <MetricBar
-                icon={Code}
-                label="코드 품질"
-                value={92}
+                icon={Activity}
+                label="활동성/유지보수"
+                value={
+                  analysisResult.technicalDetails?.activityMaintainability ||
+                  analysisResult.rawAnalysis?.activity_maintainability ||
+                  0
+                }
                 color="blue"
               />
               <MetricBar
-                icon={Activity}
-                label="커뮤니티 활성도"
-                value={78}
+                icon={Users}
+                label="온보딩 용이성"
+                value={analysisResult.rawAnalysis?.onboarding_score || 0}
                 color="purple"
               />
             </div>
@@ -196,11 +207,19 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
         onToggle={() => toggleSection("projectSummary")}
       >
         <div className="text-sm text-gray-700 leading-relaxed">
-          {analysisResult.projectSummary || 
-           `이 저장소는 ${analysisResult.technicalDetails.framework} 프레임워크를 사용하며, 
-           ${analysisResult.technicalDetails.languages.join(", ")} 언어로 개발되었습니다. 
-           현재 ${analysisResult.technicalDetails.contributors}명의 기여자가 활동 중이며, 
-           테스트 커버리지는 ${analysisResult.technicalDetails.testCoverage}%입니다. 
+          {analysisResult.projectSummary ||
+            `이 저장소는 ${
+              analysisResult.technicalDetails.framework
+            } 프레임워크를 사용하며, 
+           ${analysisResult.technicalDetails.languages.join(
+             ", "
+           )} 언어로 개발되었습니다. 
+           현재 ${
+             analysisResult.technicalDetails.contributors
+           }명의 기여자가 활동 중이며, 
+           테스트 커버리지는 ${
+             analysisResult.technicalDetails.testCoverage
+           }%입니다. 
            전반적으로 ${statusConfig.label} 상태의 프로젝트입니다.`}
         </div>
       </CollapsibleCard>
@@ -220,7 +239,9 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
               <RiskItem key={index} risk={risk} />
             ))
           ) : (
-            <p className="text-center text-gray-500 py-4">위험 요소가 발견되지 않았습니다</p>
+            <p className="text-center text-gray-500 py-4">
+              위험 요소가 발견되지 않았습니다
+            </p>
           )}
         </div>
       </CollapsibleCard>
@@ -242,21 +263,22 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
       </CollapsibleCard>
 
       {/* Related Projects */}
-      {analysisResult.relatedProjects && analysisResult.relatedProjects.length > 0 && (
-        <CollapsibleCard
-          title="Related Projects"
-          icon={<Search className="w-5 h-5 text-blue-600" />}
-          subtitle="Explore similar repositories you might be interested in"
-          isExpanded={expandedSections.relatedProjects}
-          onToggle={() => toggleSection("relatedProjects")}
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {analysisResult.relatedProjects.map((project, index) => (
-              <RelatedProjectCard key={index} project={project} />
-            ))}
-          </div>
-        </CollapsibleCard>
-      )}
+      {analysisResult.relatedProjects &&
+        analysisResult.relatedProjects.length > 0 && (
+          <CollapsibleCard
+            title="Related Projects"
+            icon={<Search className="w-5 h-5 text-blue-600" />}
+            subtitle="Explore similar repositories you might be interested in"
+            isExpanded={expandedSections.relatedProjects}
+            onToggle={() => toggleSection("relatedProjects")}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {analysisResult.relatedProjects.map((project, index) => (
+                <RelatedProjectCard key={index} project={project} />
+              ))}
+            </div>
+          </CollapsibleCard>
+        )}
     </div>
   );
 };
@@ -292,12 +314,8 @@ const CollapsibleCard = ({
           <ChevronDown className="w-6 h-6 text-gray-600" />
         )}
       </button>
-      
-      {isExpanded && (
-        <div className="p-6">
-          {children}
-        </div>
-      )}
+
+      {isExpanded && <div className="p-6">{children}</div>}
     </div>
   );
 };
@@ -328,7 +346,7 @@ const MetricBar = ({ icon: Icon, label, value, color }) => {
           <Icon className={`w-5 h-5 ${config.text}`} />
           <span className="font-bold text-gray-900">{label}</span>
         </div>
-        <span className={`text-lg font-bold ${config.text}`}>{value}%</span>
+        <span className={`text-lg font-bold ${config.text}`}>{value}점</span>
       </div>
       <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
         <div
@@ -363,7 +381,9 @@ const RiskItem = ({ risk }) => {
     return configs[severity] || configs.medium;
   };
 
-  const severityConfig = getSeverityConfig(risk.severity || risk.impact || "medium");
+  const severityConfig = getSeverityConfig(
+    risk.severity || risk.impact || "medium"
+  );
 
   return (
     <div
@@ -374,10 +394,6 @@ const RiskItem = ({ risk }) => {
           className={`text-xs px-3 py-1 rounded-full font-bold ${severityConfig.badgeClass}`}
         >
           {severityConfig.label}
-        </span>
-        <span className="text-xs text-gray-500 flex items-center gap-1">
-          <Clock className="w-3 h-3" />
-          2 days ago
         </span>
       </div>
       <p className="text-sm font-medium text-gray-900 mb-2">
@@ -425,16 +441,12 @@ const ContributionItem = ({ recommendation }) => {
         >
           {priorityConfig.label}
         </span>
-        <span className="text-xs text-gray-500 flex items-center gap-1">
-          <Clock className="w-3 h-3" />
-          {recommendation.estimatedTime}
-        </span>
       </div>
       <h4 className="text-sm font-bold text-gray-900 mb-1">
         {recommendation.title}
       </h4>
       <p className="text-xs text-gray-600">{recommendation.description}</p>
-      
+
       {recommendation.tags && (
         <div className="flex flex-wrap gap-2 mt-2">
           {recommendation.tags.map((tag) => (
@@ -454,7 +466,7 @@ const ContributionItem = ({ recommendation }) => {
 // 관련 프로젝트 카드
 const RelatedProjectCard = ({ project }) => {
   const healthScore = project.score || 75;
-  
+
   const getScoreConfig = (score) => {
     if (score >= 80)
       return {
@@ -524,7 +536,9 @@ const RelatedProjectCard = ({ project }) => {
           </div>
         )}
         {project.match && (
-          <span className="font-semibold text-gray-700">{project.match}% match</span>
+          <span className="font-semibold text-gray-700">
+            {project.match}% match
+          </span>
         )}
       </div>
 

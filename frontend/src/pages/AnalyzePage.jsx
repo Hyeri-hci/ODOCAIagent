@@ -31,6 +31,15 @@ const AnalyzePage = () => {
 
       // API 응답을 프론트엔드 형식으로 변환
       const analysis = apiResponse.analysis || {};
+      console.log("=== API 응답 디버그 ===");
+      console.log("Full API Response:", JSON.stringify(apiResponse, null, 2));
+      console.log("Analysis object:", JSON.stringify(analysis, null, 2));
+      console.log("Stars from analysis:", analysis.stars);
+      console.log("Forks from analysis:", analysis.forks);
+      console.log(
+        "readme_summary:",
+        apiResponse.readme_summary?.substring(0, 100)
+      );
       const transformedResult = {
         repositoryUrl: profileData.repositoryUrl,
         analysisId: apiResponse.job_id || `analysis_${Date.now()}`,
@@ -84,8 +93,11 @@ const AnalyzePage = () => {
               : "알 수 없음",
           openIssues: analysis.open_issues_count || 0,
           contributors: analysis.unique_contributors || 0,
-          stars: 0,
-          forks: 0,
+          stars: analysis.stars || 0,
+          forks: analysis.forks || 0,
+          // 점수 (100점 만점)
+          documentationQuality: analysis.documentation_quality || 0,
+          activityMaintainability: analysis.activity_maintainability || 0,
           // 새 메트릭 추가
           issueCloseRate: analysis.issue_close_rate_pct || "N/A",
           prMergeTime: analysis.median_pr_merge_days_text || "N/A",

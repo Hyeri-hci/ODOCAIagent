@@ -291,4 +291,103 @@ export const sendReportPDF = async (analysisData, userEmail) => {
   }
 };
 
+/**
+ * AI 어시스턴트와 채팅
+ * @param {string} message - 사용자 메시지
+ * @param {Object} context - 분석 컨텍스트
+ * @param {string} context.repoUrl - 분석 중인 저장소 URL
+ * @param {Object} context.analysisResult - 분석 결과
+ * @param {Array} conversationHistory - 이전 대화 기록
+ * @returns {Promise<{ok: boolean, message: string, error?: string}>}
+ */
+export const sendChatMessage = async (
+  message,
+  context = {},
+  conversationHistory = []
+) => {
+  if (MOCK_MODE) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return {
+      ok: true,
+      message: getMockChatResponse(message, context),
+    };
+  }
+
+  try {
+    const response = await api.post("/api/chat", {
+      message,
+      repo_url: context.repoUrl || null,
+      analysis_context: context.analysisResult || null,
+      conversation_history: conversationHistory.map((msg) => ({
+        role: msg.type === "user" ? "user" : "assistant",
+        content: msg.content,
+      })),
+    });
+    return response.data;
+  } catch (error) {
+    console.error("채팅 실패:", error);
+    // Fallback response
+    return {
+      ok: false,
+      message:
+        "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+      error: error.message,
+    };
+  }
+};
+
+// Mock 채팅 응답 생성
+function getMockChatResponse(message, context) {
+  const messageLower = message.toLowerCase();
+
+  if (
+    messageLower.includes("기여") ||
+    messageLower.includes("contribute") ||
+    messageLower.includes("어떻게")
+  ) {
+    return (
+      "오픈소스 기여를 시작하는 방법을 안내해드릴게요:\n\n" +
+      "1. **저장소 Fork**: GitHub에서 저장소를 Fork합니다\n" +
+      "2. **로컬 Clone**: `git clone <your-fork-url>`\n" +
+      "3. **브랜치 생성**: `git checkout -b feature/your-feature`\n" +
+      "4. **변경 사항 작업**: 코드 수정 또는 문서 개선\n" +
+      "5. **커밋 & 푸시**: `git commit -m '설명'` 후 `git push`\n" +
+      "6. **PR 생성**: GitHub에서 Pull Request를 생성합니다\n\n" +
+      "처음이라면 'good first issue' 라벨이 붙은 이슈부터 시작하는 것을 추천드립니다!"
+    );
+  }
+
+  if (
+    messageLower.includes("점수") ||
+    messageLower.includes("score") ||
+    messageLower.includes("평가")
+  ) {
+    const score = context.analysisResult?.health_score || 0;
+    let scoreComment = "";
+    if (score >= 80) {
+      scoreComment = `현재 점수 ${score}점은 상위 10% 수준으로 매우 건강한 프로젝트입니다.`;
+    } else if (score >= 60) {
+      scoreComment = `현재 점수 ${score}점은 평균 수준입니다. 문서화나 활동성 개선으로 점수를 높일 수 있습니다.`;
+    } else {
+      scoreComment = `현재 점수 ${score}점은 개선이 필요합니다. 문서 보완과 이슈 해결에 집중하세요.`;
+    }
+    return (
+      `점수 해석을 도와드릴게요:\n\n${scoreComment}\n\n` +
+      "**점수 구성 요소:**\n" +
+      "- 문서 품질: README 완성도, 기여 가이드 유무\n" +
+      "- 활동성: 최근 커밋, PR 병합 속도, 이슈 해결률\n" +
+      "- 온보딩 용이성: 신규 기여자가 시작하기 쉬운 정도"
+    );
+  }
+
+  return (
+    "궁금한 점에 대해 답변드릴게요. 다음과 같은 주제로 질문해주시면 더 구체적인 답변을 드릴 수 있습니다:\n\n" +
+    "- **기여 방법**: 오픈소스에 어떻게 기여하나요?\n" +
+    "- **문서화**: README를 어떻게 개선하나요?\n" +
+    "- **보안**: 취약점은 어떻게 해결하나요?\n" +
+    "- **점수 해석**: 분석 점수의 의미는 무엇인가요?\n\n" +
+    "자유롭게 질문해주세요!"
+  );
+}
+
 export default api;
