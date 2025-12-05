@@ -1,5 +1,5 @@
 from dataclasses import dataclass, asdict
-from typing import List, Dict, Any, Union
+from typing import List, Dict, Any, Union, Optional
 from backend.core.models import DiagnosisCoreResult
 
 @dataclass
@@ -15,8 +15,11 @@ class DiagnosisSummaryDTO:
     dependency_complexity_score: int
     dependency_complexity_level: str
     dependency_flags: List[str]
+    docs_issues: List[str]           # 실제 이슈 리스트
+    activity_issues: List[str]       # 실제 이슈 리스트
     docs_issues_count: int
     activity_issues_count: int
+    summary_for_user: Optional[str] = None  # LLM 요약
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -28,6 +31,8 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
     - DiagnosisCoreResult.to_dict(): 네스트된 scores/labels/complexity 구조
     - DiagnosisOutput.to_dict(): 플랫한 구조
     """
+    
+    summary_for_user = None
     
     # dict인 경우 구조 분석
     if isinstance(res, dict):
@@ -57,6 +62,8 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
             onboarding_level = res.get("onboarding_level", "hard")
             dependency_complexity_score = res.get("dependency_complexity_score", 0)
             dependency_flags = res.get("dependency_flags", [])
+            summary_for_user = res.get("summary_for_user")  # LLM 요약
+            
             # DiagnosisOutput에서 docs_issues는 raw_metrics에 있을 수 있음
             raw_metrics = res.get("raw_metrics", {})
             if "labels" in raw_metrics:
@@ -97,6 +104,10 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
         dependency_complexity_score=dependency_complexity_score,
         dependency_complexity_level=dep_level,
         dependency_flags=list(dependency_flags),
+        docs_issues=list(docs_issues),
+        activity_issues=list(activity_issues),
         docs_issues_count=len(docs_issues),
         activity_issues_count=len(activity_issues),
+        summary_for_user=summary_for_user,
     )
+

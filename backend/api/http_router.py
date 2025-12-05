@@ -58,28 +58,29 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     
     GitHub URL을 받아서 건강도 진단을 수행하고,
     프론트엔드가 기대하는 형식으로 응답합니다.
-    
-    **Note**: risks, actions, similar는 현재 Diagnosis Agent만 구현되어 있어
-    Mock 데이터로 반환됩니다.
     """
     try:
         owner, repo, ref = parse_github_url(request.repo_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
-    # Diagnosis Agent 호출
+    # Diagnosis Agent 호출 (LLM 요약 활성화)
     result = run_agent_task(
         task_type="diagnose_repo",
         owner=owner,
         repo=repo,
         ref=ref,
-        use_llm_summary=False
+        use_llm_summary=True  # LLM 요약 활성화
     )
     
     if not result.get("ok"):
         raise HTTPException(status_code=500, detail=result.get("error", "Analysis failed"))
     
     data = result.get("data", {})
+    
+    # 실제 이슈 데이터 사용
+    docs_issues = data.get("docs_issues", [])
+    activity_issues = data.get("activity_issues", [])
     
     # 프론트엔드 형식으로 변환
     return AnalyzeResponse(
@@ -94,40 +95,76 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
             "onboarding_level": data.get("onboarding_level", "unknown"),
             "dependency_complexity_score": data.get("dependency_complexity_score", 0),
         },
-        # Mock 데이터 - 다른 Agent 기능 미구현
-        risks=_generate_mock_risks(data),
-        actions=_generate_mock_actions(data),
+        # 실제 진단 데이터 기반 risks/actions 생성
+        risks=_generate_risks_from_issues(docs_issues, activity_issues, data),
+        actions=_generate_actions_from_issues(docs_issues, activity_issues, data),
         similar=[],  # Similar 추천은 미구현
-        readme_summary=None,  # LLM 요약은 별도 호출 필요
+        readme_summary=data.get("summary_for_user"),  # LLM 요약
     )
 
 
-def _generate_mock_risks(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """진단 결과 기반 리스크 Mock 생성."""
+# 이슈 코드 -> 한글 설명 매핑
+ISSUE_DESCRIPTIONS = {
+    # 문서 이슈
+    "weak_documentation": "문서화 품질이 낮습니다",
+    "missing_what": "프로젝트 설명(WHAT)이 누락되었습니다",
+    "missing_why": "프로젝트 목적/이유(WHY)가 누락되었습니다",
+    "missing_how": "설치/사용 방법(HOW)이 누락되었습니다",
+    "missing_contributing": "기여 가이드(CONTRIBUTING)가 없습니다",
+    # 활동성 이슈
+    "inactive_project": "프로젝트가 비활성 상태입니다",
+    "no_recent_commits": "최근 커밋이 없습니다",
+    "low_issue_closure": "이슈 해결률이 낮습니다",
+    "slow_pr_merge": "PR 병합 속도가 느립니다",
+}
+
+ISSUE_ACTIONS = {
+    "weak_documentation": {"title": "README 전체 보완", "duration": "3시간", "priority": "high"},
+    "missing_what": {"title": "프로젝트 소개 추가", "duration": "30분", "priority": "high"},
+    "missing_why": {"title": "프로젝트 목적 명시", "duration": "20분", "priority": "medium"},
+    "missing_how": {"title": "설치 가이드 작성", "duration": "1시간", "priority": "high"},
+    "missing_contributing": {"title": "CONTRIBUTING.md 작성", "duration": "1시간", "priority": "medium"},
+    "inactive_project": {"title": "프로젝트 활성화 계획 수립", "duration": "2시간", "priority": "high"},
+    "no_recent_commits": {"title": "미해결 이슈 작업", "duration": "가변", "priority": "medium"},
+    "low_issue_closure": {"title": "이슈 트리아지 및 정리", "duration": "2시간", "priority": "medium"},
+    "slow_pr_merge": {"title": "PR 리뷰 프로세스 개선", "duration": "1시간", "priority": "medium"},
+}
+
+
+def _generate_risks_from_issues(
+    docs_issues: List[str],
+    activity_issues: List[str],
+    data: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """실제 이슈 목록 기반 리스크 생성."""
     risks = []
+    risk_id = 1
     
-    docs_issues = data.get("docs_issues_count", 0)
-    if docs_issues > 0:
+    # 문서 이슈
+    for issue in docs_issues:
         risks.append({
-            "id": 1,
+            "id": risk_id,
             "type": "documentation",
-            "severity": "medium" if docs_issues == 1 else "high",
-            "description": f"문서화 관련 {docs_issues}개 이슈가 발견되었습니다",
+            "severity": "high" if issue in ["weak_documentation", "missing_how"] else "medium",
+            "description": ISSUE_DESCRIPTIONS.get(issue, f"문서 이슈: {issue}"),
         })
+        risk_id += 1
     
-    activity_issues = data.get("activity_issues_count", 0)
-    if activity_issues > 0:
+    # 활동성 이슈
+    for issue in activity_issues:
         risks.append({
-            "id": 2,
+            "id": risk_id,
             "type": "maintenance",
-            "severity": "medium" if activity_issues == 1 else "high",
-            "description": f"활동성 관련 {activity_issues}개 이슈가 발견되었습니다",
+            "severity": "high" if issue == "inactive_project" else "medium",
+            "description": ISSUE_DESCRIPTIONS.get(issue, f"활동성 이슈: {issue}"),
         })
+        risk_id += 1
     
+    # 의존성 플래그
     dep_flags = data.get("dependency_flags", [])
     if dep_flags:
         risks.append({
-            "id": 3,
+            "id": risk_id,
             "type": "dependency",
             "severity": "medium",
             "description": f"의존성 이슈: {', '.join(dep_flags)}",
@@ -144,27 +181,28 @@ def _generate_mock_risks(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     return risks
 
 
-def _generate_mock_actions(data: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """진단 결과 기반 액션 Mock 생성."""
+def _generate_actions_from_issues(
+    docs_issues: List[str],
+    activity_issues: List[str],
+    data: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """실제 이슈 목록 기반 액션 생성."""
     actions = []
+    action_id = 1
     
-    if data.get("docs_issues_count", 0) > 0:
-        actions.append({
-            "id": 1,
-            "title": "문서화 개선",
-            "description": "README 및 CONTRIBUTING 가이드 보완",
-            "duration": "2시간",
-            "priority": "high" if data.get("documentation_quality", 100) < 50 else "medium",
-        })
+    all_issues = docs_issues + activity_issues
     
-    if data.get("activity_issues_count", 0) > 0:
-        actions.append({
-            "id": 2,
-            "title": "이슈 정리",
-            "description": "오래된 이슈 정리 및 라벨링",
-            "duration": "1시간",
-            "priority": "medium",
-        })
+    for issue in all_issues:
+        action_info = ISSUE_ACTIONS.get(issue)
+        if action_info:
+            actions.append({
+                "id": action_id,
+                "title": action_info["title"],
+                "description": ISSUE_DESCRIPTIONS.get(issue, issue),
+                "duration": action_info["duration"],
+                "priority": action_info["priority"],
+            })
+            action_id += 1
     
     if not actions:
         actions.append({
@@ -176,6 +214,7 @@ def _generate_mock_actions(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         })
     
     return actions
+
 
 
 # ============================================================
