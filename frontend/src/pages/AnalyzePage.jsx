@@ -28,7 +28,7 @@ const AnalyzePage = () => {
     try {
       // 실제 백엔드 API 호출
       const apiResponse = await analyzeRepository(profileData.repositoryUrl);
-      
+
       // API 응답을 프론트엔드 형식으로 변환
       const analysis = apiResponse.analysis || {};
       const transformedResult = {
@@ -36,14 +36,26 @@ const AnalyzePage = () => {
         analysisId: apiResponse.job_id || `analysis_${Date.now()}`,
         summary: {
           score: apiResponse.score || analysis.health_score || 0,
-          healthStatus: analysis.health_level === "good" ? "excellent" : 
-                       analysis.health_level === "warning" ? "moderate" : "needs-attention",
-          contributionOpportunities: (apiResponse.recommended_issues || []).length,
-          estimatedImpact: analysis.health_score >= 70 ? "high" : 
-                          analysis.health_score >= 50 ? "medium" : "low",
+          healthStatus:
+            analysis.health_level === "good"
+              ? "excellent"
+              : analysis.health_level === "warning"
+              ? "moderate"
+              : "needs-attention",
+          contributionOpportunities: (apiResponse.recommended_issues || [])
+            .length,
+          estimatedImpact:
+            analysis.health_score >= 70
+              ? "high"
+              : analysis.health_score >= 50
+              ? "medium"
+              : "low",
         },
-        projectSummary: apiResponse.readme_summary || 
-          `이 저장소의 건강 점수는 ${apiResponse.score}점입니다. ${analysis.health_score_interpretation || ""}`,
+        projectSummary:
+          apiResponse.readme_summary ||
+          `이 저장소의 건강 점수는 ${apiResponse.score}점입니다. ${
+            analysis.health_score_interpretation || ""
+          }`,
         recommendations: (apiResponse.actions || []).map((action, idx) => ({
           id: `rec_${idx + 1}`,
           title: action.title,
@@ -66,9 +78,10 @@ const AnalyzePage = () => {
           framework: "Unknown",
           testCoverage: 0,
           dependencies: analysis.dependency_complexity_score || 0,
-          lastCommit: analysis.days_since_last_commit !== null 
-            ? `${analysis.days_since_last_commit}일 전` 
-            : "알 수 없음",
+          lastCommit:
+            analysis.days_since_last_commit !== null
+              ? `${analysis.days_since_last_commit}일 전`
+              : "알 수 없음",
           openIssues: analysis.open_issues_count || 0,
           contributors: analysis.unique_contributors || 0,
           stars: 0,
@@ -99,13 +112,11 @@ const AnalyzePage = () => {
       {step === "profile" && (
         <UserProfileForm onSubmit={handleProfileSubmit} error={error} />
       )}
-      
-      {step === "loading" && (
-        <AnalysisLoading userProfile={userProfile} />
-      )}
-      
+
+      {step === "loading" && <AnalysisLoading userProfile={userProfile} />}
+
       {step === "chat" && (
-        <AnalysisChat 
+        <AnalysisChat
           userProfile={userProfile}
           analysisResult={analysisResult}
         />
@@ -115,4 +126,3 @@ const AnalyzePage = () => {
 };
 
 export default AnalyzePage;
-
