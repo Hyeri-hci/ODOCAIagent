@@ -455,7 +455,7 @@ async def chat_with_assistant(request: ChatRequest) -> ChatResponse:
             temperature=0.7,
         )
         
-        response = client.chat(llm_request, timeout=30)
+        response = client.chat(llm_request, timeout=60)
         
         return ChatResponse(
             ok=True,
