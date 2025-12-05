@@ -18,7 +18,7 @@ from typing import List, Tuple, Dict, Any
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from backend.api.diagnosis_service import diagnose_repository
+from backend.api.agent_service import run_agent_task
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -103,7 +103,13 @@ def run_benchmark(repos: List[Tuple[str, str, str]]) -> List[Dict[str, Any]]:
         try:
             # diagnose_repository 호출 (use_llm_summary=False로 속도 우선)
             # 벤치마크는 점수 위주이므로 LLM 요약 불필요
-            response = diagnose_repository(owner, repo, ref, use_llm_summary=False)
+            response = run_agent_task(
+                task_type="diagnose_repo",
+                owner=owner,
+                repo=repo,
+                ref=ref,
+                use_llm_summary=False
+            )
             
             if not response["ok"]:
                 entry["error"] = True

@@ -15,7 +15,7 @@ from typing import Tuple, Dict, Any
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from backend.api.diagnosis_service import diagnose_repository
+from backend.api.agent_service import run_agent_task
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -51,7 +51,13 @@ def run_diagnosis_safe(repo_str: str) -> Dict[str, Any]:
         # 하지만 compare_repos는 상세 비교이므로 LLM 요약이 있으면 좋을 수도 있음.
         # 일단 속도를 위해 False로 설정하거나, 인자로 받을 수 있게 확장 가능.
         # 여기서는 사용자 요청에 따라 "점수 계산은 항상 빠르게, LLM 요약은 선택 사항" 취지를 살려 False로 둠.
-        response = diagnose_repository(owner, repo, ref, use_llm_summary=False)
+        response = run_agent_task(
+            task_type="diagnose_repo",
+            owner=owner,
+            repo=repo,
+            ref=ref,
+            use_llm_summary=False
+        )
         
         if not response["ok"]:
             logger.error(f"Failed to diagnose {repo_str}: {response['error']}")
