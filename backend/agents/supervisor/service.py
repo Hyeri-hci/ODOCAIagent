@@ -1,9 +1,10 @@
 
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from backend.agents.supervisor.graph import get_supervisor_graph
 from backend.core.models import DiagnosisCoreResult, ProjectRules, UserGuidelines
 import logging
 from backend.agents.supervisor.models import SupervisorInput, SupervisorState
+from backend.agents.supervisor.trace import TracingCallbackHandler
 from backend.common.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -32,20 +33,38 @@ def run_supervisor_diagnosis(
     owner: str,
     repo: str,
     ref: str = "main",
-    use_llm_summary: bool = True
-) -> tuple[Optional[dict], Optional[str]]:
+    use_llm_summary: bool = True,
+    debug_trace: bool = False
+) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
     """
     Supervisor를 통해 저장소 진단을 실행하는 엔트리 포인트.
+    
+    Args:
+        owner: GitHub 저장소 소유자
+        repo: 저장소 이름
+        ref: 브랜치 또는 커밋 (기본: main)
+        use_llm_summary: LLM 요약 사용 여부
+        debug_trace: 노드 실행 추적 활성화 여부
+        
+    Returns:
+        tuple: (diagnosis_result, error_msg, trace)
+            - trace는 debug_trace=True일 때만 포함됨
     """
 
     task_info = f"task=diagnose_repo owner={owner} repo={repo} ref={ref}"
-    logger.info(f"[{task_info}] Starting diagnosis (LLM Summary: {use_llm_summary})")
+    logger.info(f"[{task_info}] Starting diagnosis (LLM Summary: {use_llm_summary}, Trace: {debug_trace})")
     
     # 1. 그래프 생성
     graph = get_supervisor_graph()
     
     # 2. 초기 상태 구성
     config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
+    
+    # 3. Trace 모드 설정
+    trace_handler = None
+    if debug_trace:
+        trace_handler = TracingCallbackHandler()
+        config["callbacks"] = [trace_handler]
     
     # SupervisorInput 생성
     inp = SupervisorInput(
@@ -57,18 +76,19 @@ def run_supervisor_diagnosis(
     
     initial_state = init_state_from_input(inp)
     
-    # 3. 그래프 실행
-    # invoke를 사용하여 동기적으로 실행 완료 대기
+    # 4. 그래프 실행
     result = graph.invoke(initial_state, config=config)
     
-    # 4. 결과 추출
+    # 5. 결과 추출
     if result.get("error"):
         logger.error(f"[{task_info}] Diagnosis failed: {result.get('error')}")
     else:
         logger.info(f"[{task_info}] Diagnosis completed successfully")
 
-    # SupervisorState에서 diagnosis_result와 error 반환
-    return result.get("diagnosis_result"), result.get("error")
+    # 6. Trace 수집
+    trace = trace_handler.get_trace() if trace_handler else None
+    
+    return result.get("diagnosis_result"), result.get("error"), trace
 
 
 def run_supervisor_diagnosis_with_guidelines(
@@ -77,7 +97,8 @@ def run_supervisor_diagnosis_with_guidelines(
     ref: str = "main",
     project_rules: Optional[ProjectRules] = None,
     session_guidelines: Optional[UserGuidelines] = None,
-) -> tuple[Optional[dict], Optional[str]]:
+    debug_trace: bool = False
+) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
     """
     지침(Rules/Guidelines)을 포함하여 Supervisor 진단을 실행하는 확장 엔트리 포인트.
     """
@@ -86,6 +107,12 @@ def run_supervisor_diagnosis_with_guidelines(
     
     # 2. 초기 상태 구성
     config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
+    
+    # 3. Trace 모드 설정
+    trace_handler = None
+    if debug_trace:
+        trace_handler = TracingCallbackHandler()
+        config["callbacks"] = [trace_handler]
     
     inp = SupervisorInput(
         task_type="diagnose_repo",
@@ -99,27 +126,37 @@ def run_supervisor_diagnosis_with_guidelines(
     
     initial_state = init_state_from_input(inp)
     
-    # 3. 그래프 실행
+    # 4. 그래프 실행
     result = graph.invoke(initial_state, config=config)
     
-    # 4. 결과 반환
-    return result.get("diagnosis_result"), result.get("error")
+    # 5. Trace 수집
+    trace = trace_handler.get_trace() if trace_handler else None
+    
+    return result.get("diagnosis_result"), result.get("error"), trace
 
 def run_supervisor_onboarding(
     owner: str,
     repo: str,
-    user_context: dict
-) -> tuple[Optional[dict], Optional[str]]:
+    user_context: dict,
+    debug_trace: bool = False
+) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
     """
     온보딩 플랜 생성을 실행하는 엔트리 포인트.
-    Returns: (result_dict, error_msg)
-    result_dict includes: diagnosis, onboarding_plan, onboarding_summary, candidate_issues
+    
+    Returns: (result_dict, error_msg, trace)
+        result_dict includes: diagnosis, onboarding_plan, onboarding_summary, candidate_issues
     """
     task_info = f"task=build_onboarding_plan owner={owner} repo={repo}"
-    logger.info(f"[{task_info}] Starting onboarding plan generation")
+    logger.info(f"[{task_info}] Starting onboarding plan generation (Trace: {debug_trace})")
     
     graph = get_supervisor_graph()
     config = {"configurable": {"thread_id": f"{owner}/{repo}@onboarding"}}
+    
+    # Trace 모드 설정
+    trace_handler = None
+    if debug_trace:
+        trace_handler = TracingCallbackHandler()
+        config["callbacks"] = [trace_handler]
     
     inp = SupervisorInput(
         task_type="build_onboarding_plan",
@@ -131,9 +168,12 @@ def run_supervisor_onboarding(
     initial_state = init_state_from_input(inp)
     result = graph.invoke(initial_state, config=config)
     
+    # Trace 수집
+    trace = trace_handler.get_trace() if trace_handler else None
+    
     if result.get("error"):
         logger.error(f"[{task_info}] Onboarding plan failed: {result.get('error')}")
-        return None, result.get("error")
+        return None, result.get("error"), trace
         
     logger.info(f"[{task_info}] Onboarding plan completed successfully")
     
@@ -143,4 +183,5 @@ def run_supervisor_onboarding(
         "onboarding_summary": result.get("onboarding_summary"),
         "candidate_issues": result.get("candidate_issues")
     }
-    return output, None
+    return output, None, trace
+
