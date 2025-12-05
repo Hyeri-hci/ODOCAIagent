@@ -1,73 +1,39 @@
-"""Supervisor Graph - 메인 오케스트레이터 (Refactored)."""
+"""Supervisor Graph - 메인 오케스트레이터 (Hero Scenarios)."""
 from __future__ import annotations
 
 import logging
 from typing import Any, Dict, Literal
 
 from langgraph.graph import StateGraph, END
-# from langgraph.checkpoint.sqlite import SqliteSaver # Import inside function to avoid error if missing
-
-from backend.agents.supervisor.state import SupervisorState
+from backend.agents.supervisor.models import SupervisorState
+from backend.agents.supervisor.nodes.diagnosis_nodes import run_diagnosis_node
+from backend.agents.supervisor.nodes.onboarding_nodes import (
+    fetch_issues_node,
+    plan_onboarding_node,
+    summarize_onboarding_plan_node
+)
 
 logger = logging.getLogger(__name__)
 
 
 def router_start_node(state: SupervisorState) -> Dict[str, Any]:
     """라우팅 결정 노드."""
-    task_type = state.get("task_type", "diagnosis")
+    task_type = state.task_type
     logger.info(f"Router: Starting task {task_type}")
-    # 여기서는 상태 변경 없이 로깅만 하고, 조건부 엣지에서 분기 처리
     return {}
 
 
-def diagnosis_agent_entry(state: SupervisorState) -> Dict[str, Any]:
-    """DiagnosisAgent 서브그래프 실행."""
-    logger.info("Entering DiagnosisAgent...")
-    from backend.agents.diagnosis.graph import get_diagnosis_agent
-    diagnosis_agent = get_diagnosis_agent()
-    result = diagnosis_agent.invoke(state)
-    
-    # 서브그래프 결과를 상위 상태에 병합
-    return {
-        "repo_snapshot": result.get("repo_snapshot"),
-        "dependency_snapshot": result.get("dependency_snapshot"),
-        "diagnosis_result": result.get("diagnosis_result"),
-        "docs_result": result.get("docs_result"),
-        "activity_result": result.get("activity_result"),
-        "messages": result.get("messages"),
-        "last_answer_kind": result.get("last_answer_kind"),
-        "error_message": result.get("error_message"), # Propagate error
-    }
-
-
-def security_agent_entry(state: SupervisorState) -> Dict[str, Any]:
-    """SecurityAgent 서브그래프 실행 (Placeholder)."""
-    logger.info("Entering SecurityAgent (Placeholder)...")
-    # 실제 구현은 생략됨 (요구사항)
-    return {
-        "security_result": {"status": "skipped", "reason": "Not implemented yet"},
-        "last_answer_kind": "security",
-    }
-
-
-def route_after_start(state: SupervisorState) -> Literal["diagnosis_agent_entry", "security_agent_entry"]:
+def route_after_start(state: SupervisorState) -> Literal["run_diagnosis_node", "__end__"]:
     """시작 후 라우팅."""
-    task_type = state.get("task_type", "diagnosis")
+    task_type = state.task_type
     
-    if task_type == "security":
-        return "security_agent_entry"
+    if task_type == "diagnose_repo":
+        return "run_diagnosis_node"
+    elif task_type == "build_onboarding_plan":
+        # 진단 -> 이슈 수집 -> 플랜 생성 -> 요약
+        return "run_diagnosis_node"
     
-    # diagnosis, diagnosis_and_security, explain 등은 diagnosis 먼저
-    return "diagnosis_agent_entry"
-
-
-def route_after_diagnosis(state: SupervisorState) -> Literal["security_agent_entry", "__end__"]:
-    """진단 후 라우팅."""
-    task_type = state.get("task_type", "diagnosis")
-    
-    if task_type == "diagnosis_and_security":
-        return "security_agent_entry"
-    
+    logger.warning(f"Unknown task_type: {task_type}")
     return "__end__"
 
 
@@ -76,8 +42,10 @@ def build_supervisor_graph() -> StateGraph:
     graph = StateGraph(SupervisorState)
 
     graph.add_node("router_start_node", router_start_node)
-    graph.add_node("diagnosis_agent_entry", diagnosis_agent_entry)
-    graph.add_node("security_agent_entry", security_agent_entry)
+    graph.add_node("run_diagnosis_node", run_diagnosis_node)
+    graph.add_node("fetch_issues_node", fetch_issues_node)
+    graph.add_node("plan_onboarding_node", plan_onboarding_node)
+    graph.add_node("summarize_onboarding_plan_node", summarize_onboarding_plan_node)
 
     graph.set_entry_point("router_start_node")
 
@@ -85,21 +53,34 @@ def build_supervisor_graph() -> StateGraph:
         "router_start_node",
         route_after_start,
         {
-            "diagnosis_agent_entry": "diagnosis_agent_entry",
-            "security_agent_entry": "security_agent_entry",
-        }
-    )
-
-    graph.add_conditional_edges(
-        "diagnosis_agent_entry",
-        route_after_diagnosis,
-        {
-            "security_agent_entry": "security_agent_entry",
+            "run_diagnosis_node": "run_diagnosis_node",
             "__end__": END,
         }
     )
 
-    graph.add_edge("security_agent_entry", END)
+    # run_diagnosis_node 이후 분기
+    def route_after_diagnosis(state: SupervisorState) -> Literal["fetch_issues_node", "__end__"]:
+        # 진단 실패 시 온보딩 플로우로 넘어가지 않도록 조기 종료
+        if state.error:
+            return "__end__"
+            
+        if state.task_type == "build_onboarding_plan":
+            return "fetch_issues_node"
+        return "__end__"
+
+    graph.add_conditional_edges(
+        "run_diagnosis_node",
+        route_after_diagnosis,
+        {
+            "fetch_issues_node": "fetch_issues_node",
+            "__end__": END,
+        }
+    )
+
+    # Onboarding Flow 연결
+    graph.add_edge("fetch_issues_node", "plan_onboarding_node")
+    graph.add_edge("plan_onboarding_node", "summarize_onboarding_plan_node")
+    graph.add_edge("summarize_onboarding_plan_node", END)
 
     return graph
 
