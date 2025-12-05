@@ -96,6 +96,13 @@ class ActivityCoreResult:
     days_since_last_commit: Optional[int]
     total_commits_in_window: int
     unique_authors: int
+    
+    # 상세 메트릭 (UX 개선용)
+    issue_close_rate: float = 0.0  # 이슈 해결률 (0-1)
+    median_pr_merge_days: Optional[float] = None  # PR 병합 중간값 (일)
+    median_issue_close_days: Optional[float] = None  # 이슈 해결 중간값 (일)
+    open_issues_count: int = 0  # 열린 이슈 수
+    open_prs_count: int = 0  # 열린 PR 수
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -106,6 +113,11 @@ class ActivityCoreResult:
             "days_since_last_commit": self.days_since_last_commit,
             "total_commits_in_window": self.total_commits_in_window,
             "unique_authors": self.unique_authors,
+            "issue_close_rate": self.issue_close_rate,
+            "median_pr_merge_days": self.median_pr_merge_days,
+            "median_issue_close_days": self.median_issue_close_days,
+            "open_issues_count": self.open_issues_count,
+            "open_prs_count": self.open_prs_count,
         }
 
 

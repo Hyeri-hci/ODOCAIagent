@@ -26,6 +26,13 @@ class DiagnosisSummaryDTO:
     total_commits_30d: int = 0
     unique_contributors: int = 0
     
+    # 상세 메트릭 (UX 개선용)
+    issue_close_rate: float = 0.0  # 이슈 해결률 (0-1)
+    median_pr_merge_days: Optional[float] = None  # PR 병합 중간값 (일)
+    median_issue_close_days: Optional[float] = None  # 이슈 해결 중간값 (일)
+    open_issues_count: int = 0  # 열린 이슈 수
+    open_prs_count: int = 0  # 열린 PR 수
+    
     # 문서 상세
     readme_sections: Optional[Dict[str, bool]] = None
     
@@ -44,6 +51,13 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
     total_commits_30d = 0
     unique_contributors = 0
     readme_sections = None
+    
+    # 새 상세 메트릭 기본값
+    issue_close_rate = 0.0
+    median_pr_merge_days = None
+    median_issue_close_days = None
+    open_issues_count = 0
+    open_prs_count = 0
     
     if isinstance(res, dict):
         if "scores" in res:
@@ -80,6 +94,13 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
             total_commits_30d = activity_data.get("total_commits_in_window", 0)
             unique_contributors = activity_data.get("unique_authors", 0)
             
+            # 새 상세 메트릭 추출
+            issue_close_rate = activity_data.get("issue_close_rate", 0.0)
+            median_pr_merge_days = activity_data.get("median_pr_merge_days")
+            median_issue_close_days = activity_data.get("median_issue_close_days")
+            open_issues_count = activity_data.get("open_issues_count", 0)
+            open_prs_count = activity_data.get("open_prs_count", 0)
+            
             # README 섹션 추출
             docs_data = res.get("docs", {})
             category_scores = docs_data.get("category_scores", {})
@@ -113,6 +134,12 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
             days_since_last_commit = res.activity_result.days_since_last_commit
             total_commits_30d = res.activity_result.total_commits_in_window
             unique_contributors = res.activity_result.unique_authors
+            # 새 상세 메트릭 추출
+            issue_close_rate = res.activity_result.issue_close_rate
+            median_pr_merge_days = res.activity_result.median_pr_merge_days
+            median_issue_close_days = res.activity_result.median_issue_close_days
+            open_issues_count = res.activity_result.open_issues_count
+            open_prs_count = res.activity_result.open_prs_count
         
         if res.docs_result and res.docs_result.category_scores:
             readme_sections = {}
@@ -147,5 +174,10 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
         days_since_last_commit=days_since_last_commit,
         total_commits_30d=total_commits_30d,
         unique_contributors=unique_contributors,
+        issue_close_rate=issue_close_rate,
+        median_pr_merge_days=median_pr_merge_days,
+        median_issue_close_days=median_issue_close_days,
+        open_issues_count=open_issues_count,
+        open_prs_count=open_prs_count,
         readme_sections=readme_sections,
     )

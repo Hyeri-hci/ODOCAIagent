@@ -72,15 +72,66 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
 def _generate_summary(diagnosis, docs_result, use_llm_summary: bool) -> str:
     """진단 결과 요약 생성 (Fallback + LLM)"""
     
+    # 활동성 상세 메트릭 가져오기
+    activity_result = diagnosis.activity_result if hasattr(diagnosis, 'activity_result') else None
+    days_since_last_commit = activity_result.days_since_last_commit if activity_result else None
+    issue_close_rate = activity_result.issue_close_rate if activity_result else 0.0
+    median_pr_merge_days = activity_result.median_pr_merge_days if activity_result else None
+    open_issues_count = activity_result.open_issues_count if activity_result else 0
+    
+    # 구체적 수치가 포함된 fallback 요약 생성
+    commit_status = ""
+    if days_since_last_commit is not None:
+        if days_since_last_commit <= 7:
+            commit_status = f"최근 활동: {days_since_last_commit}일 전 커밋 (활성)"
+        elif days_since_last_commit <= 30:
+            commit_status = f"최근 활동: {days_since_last_commit}일 전 커밋 (주의)"
+        else:
+            commit_status = f"최근 활동: {days_since_last_commit}일 전 커밋 (비활성)"
+    
+    pr_status = ""
+    if median_pr_merge_days is not None:
+        if median_pr_merge_days <= 7:
+            pr_status = f"PR 병합 속도: {median_pr_merge_days:.1f}일 (양호)"
+        elif median_pr_merge_days <= 14:
+            pr_status = f"PR 병합 속도: {median_pr_merge_days:.1f}일 (느림)"
+        else:
+            pr_status = f"PR 병합 속도: {median_pr_merge_days:.1f}일 (매우 느림)"
+
+    issue_status = f"이슈 해결률: {issue_close_rate * 100:.1f}% (미해결: {open_issues_count}개)"
+
+    # 점수 해석
+    health_interpretation = ""
+    if diagnosis.health_score >= 80:
+        health_interpretation = "상위 10% 수준 - 매우 건강한 프로젝트"
+    elif diagnosis.health_score >= 60:
+        health_interpretation = "평균 수준 (OSS 평균: 65점)"
+    elif diagnosis.health_score >= 40:
+        health_interpretation = "평균 이하 - 개선이 필요함"
+    else:
+        health_interpretation = "심각한 상태 - 즉각적인 조치 필요"
+    
+    # 상세 메트릭 목록 구성
+    detail_metrics = []
+    if commit_status:
+        detail_metrics.append(f"- {commit_status}")
+    if pr_status:
+        detail_metrics.append(f"- {pr_status}")
+    detail_metrics.append(f"- {issue_status}")
+    detail_section = "\n".join(detail_metrics)
+    
     fallback_summary = (
         f"### {diagnosis.repo_id} 진단 결과\n\n"
-        f"- **건강 점수**: {diagnosis.health_score}점 ({diagnosis.health_level})\n"
+        f"#### 종합 점수\n"
+        f"- **건강 점수**: {diagnosis.health_score}점 ({diagnosis.health_level}) - {health_interpretation}\n"
         f"- **문서 품질**: {diagnosis.documentation_quality}점\n"
         f"- **활동성**: {diagnosis.activity_maintainability}점\n"
         f"- **온보딩**: {diagnosis.onboarding_score}점 ({diagnosis.onboarding_level})\n\n"
-        f"**주요 이슈**:\n"
-        f"- 문서: {', '.join(diagnosis.docs_issues) or '없음'}\n"
-        f"- 활동성: {', '.join(diagnosis.activity_issues) or '없음'}"
+        f"#### 상세 메트릭\n"
+        f"{detail_section}\n\n"
+        f"#### 주요 이슈\n"
+        f"- 문서: {', '.join(diagnosis.docs_issues) or '발견된 이슈 없음'}\n"
+        f"- 활동성: {', '.join(diagnosis.activity_issues) or '발견된 이슈 없음'}"
     )
 
     if not use_llm_summary:
@@ -134,7 +185,7 @@ def _generate_summary(diagnosis, docs_result, use_llm_summary: bool) -> str:
             temperature=0.2,
         )
         
-        response = client.chat(request, timeout=10)
+        response = client.chat(request, timeout=30)
         return response.content
 
     except Exception as e:

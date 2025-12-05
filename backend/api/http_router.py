@@ -13,35 +13,7 @@ from backend.api.agent_service import run_agent_task
 router = APIRouter(prefix="/api", tags=["agent"])
 
 
-# ============================================================
 # Frontend Compatible Schemas (/api/analyze)
-# ============================================================
-
-class AnalyzeRequest(BaseModel):
-    """프론트엔드 호환 분석 요청."""
-    repo_url: str = Field(..., description="GitHub 저장소 URL (예: https://github.com/owner/repo)")
-
-
-class AnalyzeResponse(BaseModel):
-"""
-HTTP API 라우터 - 통합 에이전트 외부 인터페이스.
-
-UI, PlayMCP, 기타 클라이언트를 위한 HTTP 엔드포인트.
-"""
-import re
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Optional
-
-from backend.api.agent_service import run_agent_task
-
-router = APIRouter(prefix="/api", tags=["agent"])
-
-
-# ============================================================
-# Frontend Compatible Schemas (/api/analyze)
-# ============================================================
-
 class AnalyzeRequest(BaseModel):
     """프론트엔드 호환 분석 요청."""
     repo_url: str = Field(..., description="GitHub 저장소 URL (예: https://github.com/owner/repo)")
@@ -71,7 +43,7 @@ def parse_github_url(url: str) -> tuple[str, str, str]:
         if match:
             owner = match.group(1)
             repo = match.group(2).replace(".git", "")
-            ref = match.group(3) if match.lastindex >= 3 and match.group(3) else "main"
+            ref = match.group(3) if match.lastindex and match.lastindex >= 3 and match.group(3) else "main"
             return owner, repo, ref
     
     raise ValueError(f"Invalid GitHub URL format: {url}")
@@ -138,6 +110,13 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     unique_contributors = data.get("unique_contributors", 0)
     readme_sections = data.get("readme_sections", {})
     
+    # 새 상세 메트릭 (UX 개선)
+    issue_close_rate = data.get("issue_close_rate", 0.0)
+    median_pr_merge_days = data.get("median_pr_merge_days")
+    median_issue_close_days = data.get("median_issue_close_days")
+    open_issues_count = data.get("open_issues_count", 0)
+    open_prs_count = data.get("open_prs_count", 0)
+    
     # Good First Issues 가져오기
     try:
         recommended_issues = fetch_beginner_issues(owner, repo, max_count=5)
@@ -163,9 +142,18 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
             "total_commits_30d": total_commits_30d,
             "unique_contributors": unique_contributors,
             "readme_sections": readme_sections,
+            # 새 상세 메트릭 (UX 개선)
+            "issue_close_rate": issue_close_rate,
+            "issue_close_rate_pct": f"{issue_close_rate * 100:.1f}%" if issue_close_rate else "N/A",
+            "median_pr_merge_days": median_pr_merge_days,
+            "median_pr_merge_days_text": f"{median_pr_merge_days:.1f}일" if median_pr_merge_days else "N/A",
+            "median_issue_close_days": median_issue_close_days,
+            "median_issue_close_days_text": f"{median_issue_close_days:.1f}일" if median_issue_close_days else "N/A",
+            "open_issues_count": open_issues_count,
+            "open_prs_count": open_prs_count,
         },
         risks=_generate_risks_from_issues(docs_issues, activity_issues, data),
-        actions=_generate_actions_from_issues(docs_issues, activity_issues, data),
+        actions=_generate_actions_from_issues(docs_issues, activity_issues, data, recommended_issues),
         similar=[],
         recommended_issues=recommended_issues,
         readme_summary=data.get("summary_for_user"),
@@ -205,12 +193,16 @@ def _generate_risks_from_issues(
     activity_issues: List[str],
     data: Dict[str, Any]
 ) -> List[Dict[str, Any]]:
-    """실제 이슈 목록 기반 리스크 생성."""
+    """실제 이슈 목록 기반 리스크 생성 (구체적 수치 포함)."""
     risks = []
     risk_id = 1
     
     # 상세 메트릭 가져오기
     days_since_last_commit = data.get("days_since_last_commit")
+    median_pr_merge_days = data.get("median_pr_merge_days")
+    issue_close_rate = data.get("issue_close_rate", 0.0)
+    open_issues_count = data.get("open_issues_count", 0)
+    open_prs_count = data.get("open_prs_count", 0)
     
     # 문서 이슈
     for issue in docs_issues:
@@ -223,19 +215,34 @@ def _generate_risks_from_issues(
         })
         risk_id += 1
     
-    # 활동성 이슈
+    # 활동성 이슈 (구체적 수치 포함)
     for issue in activity_issues:
         desc = ISSUE_DESCRIPTIONS.get(issue, f"활동성 이슈: {issue}")
+        detail = ""
         
         # 상세 정보 추가
         if issue == "no_recent_commits" and days_since_last_commit is not None:
-            desc += f" (마지막 커밋: {days_since_last_commit}일 전)"
+            if days_since_last_commit <= 7:
+                detail = f" (마지막 커밋: {days_since_last_commit}일 전 - 양호)"
+            elif days_since_last_commit <= 30:
+                detail = f" (마지막 커밋: {days_since_last_commit}일 전 - 주의)"
+            else:
+                detail = f" (마지막 커밋: {days_since_last_commit}일 전 - 비활성)"
+        elif issue == "slow_pr_merge" and median_pr_merge_days is not None:
+            if median_pr_merge_days > 14:
+                detail = f" (PR 병합 중간값: {median_pr_merge_days:.1f}일 - 매우 느림, 권장: 7일 이내)"
+            elif median_pr_merge_days > 7:
+                detail = f" (PR 병합 중간값: {median_pr_merge_days:.1f}일 - 느림, 권장: 7일 이내)"
+            else:
+                detail = f" (PR 병합 중간값: {median_pr_merge_days:.1f}일)"
+        elif issue == "low_issue_closure":
+            detail = f" (이슈 해결률: {issue_close_rate * 100:.1f}%, 미해결 이슈: {open_issues_count}개)"
             
         risks.append({
             "id": risk_id,
             "type": "maintenance",
             "severity": "high" if issue == "inactive_project" else "medium",
-            "description": desc,
+            "description": desc + detail,
         })
         risk_id += 1
     
@@ -263,9 +270,10 @@ def _generate_risks_from_issues(
 def _generate_actions_from_issues(
     docs_issues: List[str],
     activity_issues: List[str],
-    data: Dict[str, Any]
+    data: Dict[str, Any],
+    recommended_issues: Optional[List[Dict[str, Any]]] = None
 ) -> List[Dict[str, Any]]:
-    """실제 이슈 목록 기반 액션 생성."""
+    """실제 이슈 목록 기반 액션 생성 (Good First Issue 연결)."""
     actions = []
     action_id = 1
     
@@ -283,6 +291,26 @@ def _generate_actions_from_issues(
             })
             action_id += 1
     
+    # Good First Issue 연결 - 추천 이슈가 있으면 액션으로 추가
+    if recommended_issues:
+        for idx, gh_issue in enumerate(recommended_issues[:3]):  # 최대 3개
+            issue_title = gh_issue.get("title", "제목 없음")
+            issue_url = gh_issue.get("url", "")
+            issue_number = gh_issue.get("number", "?")
+            labels = gh_issue.get("labels", [])
+            label_text = ", ".join(labels[:2]) if labels else "good first issue"
+            
+            actions.append({
+                "id": action_id,
+                "title": f"추천 이슈 #{issue_number} 작업",
+                "description": f"[{label_text}] {issue_title}",
+                "duration": "가변",
+                "priority": "high" if idx == 0 else "medium",
+                "url": issue_url,
+                "issue_number": issue_number,
+            })
+            action_id += 1
+    
     if not actions:
         actions.append({
             "id": 0,
@@ -296,9 +324,7 @@ def _generate_actions_from_issues(
 
 
 
-# ============================================================
 # Agent Task API (신규 통합 API)
-# ============================================================
 
 class AgentTaskRequest(BaseModel):
     """에이전트 작업 요청 스키마."""
