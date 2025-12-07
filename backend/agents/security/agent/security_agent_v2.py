@@ -1,15 +1,3 @@
-"""
-Security Agent V2
-LLM 통합 자율 보안 분석 에이전트
-
-주요 개선사항:
-- 자연어 입력 지원
-- LLM 기반 계획 수립
-- 진짜 ReAct 패턴 (Think-Act-Observe)
-- 동적 도구 선택
-- 메타인지 및 전략 조정
-- 유연하고 자율적인 동작
-"""
 from typing import Dict, Any, Optional, Literal
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
@@ -30,7 +18,6 @@ import json
 
 # SecurityAgent 클래스
 class SecurityAgentV2:
-    # 초기화하기
     def __init__(
         self,
         llm_base_url: str,
@@ -38,22 +25,19 @@ class SecurityAgentV2:
         llm_model: str,
         llm_temperature: float,
         execution_mode: Literal["fast", "intelligent", "auto"] = "auto",
+            # 실행모드 : fast-규칙기반, intelligent-LLM기반, auto-자동
         max_iterations: int = 20,
+            # 최대 반복 횟수-ReAct 패턴에서 사용될 최대 반복 횟수
         enable_reflection: bool = True,
+            # 반성을 할 것인지 아닌지 활성화
     ):
-        """
-        Args:
-            llm: LLM 인스턴스
-            execution_mode: 실행 모드 (fast=규칙기반, intelligent=LLM기반, auto=자동선택)
-            max_iterations: 최대 반복 횟수
-            enable_reflection: 메타인지 활성화 여부
-        """
+        # LLM 선언을 위한 파라미터
         self.LLM_BASE_URL = llm_base_url
         self.LLM_API_KEY = llm_api_key
         self.LLM_MODEL = llm_model
         self.LLM_TEMPERATURE = llm_temperature
 
-        # LLM선언하기 (클래스 생성시 llm 클라이언트를 입력 받으면 그대로 사용, 없으면, 생성해서 사용하기)
+        # LLM 선언
         self.llm = ChatOpenAI(
             api_key=self.LLM_API_KEY,
             base_url=self.LLM_BASE_URL,
@@ -61,6 +45,7 @@ class SecurityAgentV2:
             temperature=self.LLM_TEMPERATURE,
         )
 
+        # 클래스 내부 필드 선언
         self.execution_mode = execution_mode
         self.max_iterations = max_iterations
         self.enable_reflection = enable_reflection
@@ -145,7 +130,7 @@ class SecurityAgentV2:
     async def _parse_intent_node(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
         """의도 파싱 노드"""
         print("\n" + "="*50)
-        print("[Node: Parse Intent]")
+        print("[Node: 의도 파악/Parse Intent]")
         print("="*50)
 
         user_request = state.get("user_request", "")
@@ -187,7 +172,7 @@ class SecurityAgentV2:
     async def _create_plan_node(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
         """계획 수립 노드"""
         print("\n" + "="*50)
-        print("[Node: Create Plan]")
+        print("[Node: 계획 수립/Create Plan]")
         print("="*50)
 
         # 동적 계획 생성
@@ -200,7 +185,7 @@ class SecurityAgentV2:
     async def _execute_react_node(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
         """ReAct 실행 노드"""
         print("\n" + "="*50)
-        print(f"[Node: Execute ReAct] Iteration {state.get('iteration', 0) + 1}")
+        print(f"[Node: ReAct 실행/Execute ReAct] Iteration {state.get('iteration', 0) + 1}")
         print("="*50)
 
         # ReAct 사이클 실행
@@ -211,7 +196,7 @@ class SecurityAgentV2:
     async def _reflect_node(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
         """반성/메타인지 노드"""
         print("\n" + "="*50)
-        print("[Node: Reflect]")
+        print("[Node: 반성|메타인지/Reflect]")
         print("="*50)
 
         # 메타인지 실행
@@ -256,7 +241,7 @@ class SecurityAgentV2:
     async def _finalize_node(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
         """최종화 노드"""
         print("\n" + "="*50)
-        print("[Node: Finalize]")
+        print("[Node: 최종(결과)/Finalize]")
         print("="*50)
 
         # 최종 결과 생성
