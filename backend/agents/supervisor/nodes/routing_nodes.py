@@ -21,9 +21,9 @@ INTENT_TO_TASK_TYPE = {
 
 # 의도 추론을 위한 키워드
 INTENT_KEYWORDS = {
-    "diagnose": ["진단", "분석", "건강", "health", "analyze", "diagnosis", "score"],
-    "onboard": ["온보딩", "시작", "기여", "onboard", "contribute", "plan", "플랜"],
-    "explain": ["설명", "왜", "무슨", "explain", "why", "what", "how"],
+    "diagnose": ["진단", "분석", "건강", "health", "analyze", "diagnosis", "score", "다시 분석", "재분석"],
+    "onboard": ["온보딩", "시작", "기여", "onboard", "contribute", "plan", "플랜", "참여", "초보", "beginner", "PR", "pull request", "이슈", "issue"],
+    "explain": ["설명", "왜", "무슨", "explain", "why", "what", "how", "점수가", "뭐야", "어떻게"],
     "compare": ["비교", "compare", "vs", "차이", "difference", "versus"],
 }
 
@@ -34,26 +34,24 @@ def map_task_type_to_intent(task_type: str) -> str:
 
 
 def infer_intent_from_context(state: SupervisorState) -> Tuple[str, float]:
-    """
-    user_context 또는 task_type에서 의도 추론.
+    """user_context, chat_message 또는 task_type에서 의도 추론."""
+    # 채팅 메시지가 있으면 우선 사용
+    user_msg = state.chat_message or state.user_context.get("message", "")
     
-    Returns:
-        (intent, confidence) 튜플
-    """
+    if user_msg:
+        user_msg_lower = user_msg.lower()
+        for intent, keywords in INTENT_KEYWORDS.items():
+            if any(kw in user_msg_lower for kw in keywords):
+                return intent, 0.8
+        # 키워드 매칭 안 되면 일반 채팅
+        if state.chat_message:
+            return "chat", 0.7
+    
+    # task_type 기반 매핑
     if state.task_type:
         intent = map_task_type_to_intent(state.task_type)
         if intent != "unknown":
             return intent, 1.0
-    
-    user_msg = state.user_context.get("message", "")
-    if not user_msg:
-        return map_task_type_to_intent(state.task_type), 1.0
-    
-    user_msg_lower = user_msg.lower()
-    
-    for intent, keywords in INTENT_KEYWORDS.items():
-        if any(kw in user_msg_lower for kw in keywords):
-            return intent, 0.8
     
     return "unknown", 0.0
 

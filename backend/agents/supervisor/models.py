@@ -10,11 +10,12 @@ TaskType = Literal[
 
 # 2. Intent Definition (Agentic Routing)
 Intent = Literal[
-    "diagnose",   # 저장소 진단
-    "onboard",    # 온보딩 플랜 요청
-    "explain",    # 메트릭/결과 설명 요청
-    "compare",    # 여러 저장소 비교 분석
-    "unknown",    # 분류 불가
+    "diagnose",
+    "onboard",
+    "explain",
+    "compare",
+    "chat",
+    "unknown",
 ]
 
 # 3. SupervisorInput Definition
@@ -114,4 +115,9 @@ class SupervisorState(BaseModel):
     compare_repos: List[str] = []
     compare_results: Dict[str, Any] = {}
     compare_summary: Optional[str] = None
+
+    # 13) 채팅
+    chat_message: Optional[str] = None
+    chat_response: Optional[str] = None
+    chat_context: Dict[str, Any] = {}
 
