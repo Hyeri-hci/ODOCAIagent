@@ -1,4 +1,4 @@
-# Security Agent V2 - 동작 검증 및 개선 보고서
+C:\Users\22138153\git\kakaoAgent\backend\agents\security\docs\dev_agent_ver02_report_02.md# Security Agent V2 - 동작 검증 및 개선 보고서
 
 **작성일**: 2025-12-04
 **버전**: V2.0

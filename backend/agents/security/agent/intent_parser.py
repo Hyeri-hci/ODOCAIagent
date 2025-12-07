@@ -13,10 +13,18 @@ from .state_v2 import TaskIntent
 class IntentParser:
     """자연어 요청 의도 파싱기"""
 
-    def __init__(self, llm: Optional[ChatOpenAI] = None):
-        self.llm = llm or ChatOpenAI(
-            model="gpt-4-turbo-preview",
-            temperature=0.1
+    def __init__(
+            self,
+            llm_base_url:str,
+            llm_api_key:str,
+            llm_model:str,
+            llm_temperature:float = 0.0,
+    ):
+        self.llm = ChatOpenAI(
+            model=llm_model,
+            api_key=llm_api_key,
+            base_url=llm_base_url,
+            temperature=llm_temperature
         )
 
         self.intent_prompt = ChatPromptTemplate.from_messages([

@@ -4,10 +4,25 @@ Tool Registry - Fixed Version
 """
 from typing import Dict, Any, Callable, List
 from .state_v2 import SecurityAnalysisStateV2
+from ..vulnerability.nvd_client import NvdClient
 import requests
 import base64
 import json
 import re
+
+# Import from dependencies_core.py
+from ....core.dependencies_core import parse_dependencies as core_parse_dependencies
+from ....core.models import RepoSnapshot
+
+# NVD Client 전역 인스턴스
+_nvd_client = None
+
+def get_nvd_client() -> NvdClient:
+    """NVD 클라이언트 싱글톤 인스턴스"""
+    global _nvd_client
+    if _nvd_client is None:
+        _nvd_client = NvdClient()
+    return _nvd_client
 
 
 class ToolRegistry:
@@ -331,19 +346,123 @@ async def parse_cargo_toml(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str
     return {"success": True, "dependencies": {}, "total_count": 0, "ecosystem": "cargo"}
 
 
+@register_tool(
+    "parse_dependencies",
+    "Parse all dependency files in repository (requirements.txt, package.json, pyproject.toml)",
+    "dependency"
+)
+async def parse_dependencies(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+    """
+    의존성 파일 파싱 (dependencies_core.py 사용)
+
+    RepoSnapshot을 생성하고 core_parse_dependencies를 호출하여
+    레포지토리의 모든 의존성 파일을 파싱합니다.
+    """
+    owner = kwargs.get("owner") or state.get("owner")
+    repo = kwargs.get("repo") or state.get("repository")
+
+    print(f"[parse_dependencies] Parsing dependencies for {owner}/{repo}")
+
+    try:
+        # RepoSnapshot 생성 (최소한의 정보만)
+        repo_snapshot = RepoSnapshot(
+            owner=owner,
+            repo=repo,
+            ref="main",  # 기본 브랜치
+            full_name=f"{owner}/{repo}",
+            description=None,
+            stars=0,
+            forks=0,
+            open_issues=0,
+            primary_language=None,
+            created_at=None,
+            pushed_at=None,
+            is_archived=False,
+            is_fork=False,
+            readme_content=None,
+            has_readme=False,
+            license_spdx=None
+        )
+
+        # core_parse_dependencies 호출
+        dependency_snapshot = core_parse_dependencies(repo_snapshot)
+
+        # 결과를 tool_registry 형식으로 변환
+        dependencies = {}
+        for dep in dependency_snapshot.dependencies:
+            ecosystem = "npm" if "package.json" in dep.source else "pip"
+            if ecosystem not in dependencies:
+                dependencies[ecosystem] = {}
+            dependencies[ecosystem][dep.name] = dep.version or "latest"
+
+        return {
+            "success": True,
+            "dependencies": dependencies,
+            "total_count": dependency_snapshot.total_count,
+            "analyzed_files": dependency_snapshot.analyzed_files,
+            "parse_errors": dependency_snapshot.parse_errors,
+            "state_update": {
+                "dependencies": dependencies,
+                "dependency_count": dependency_snapshot.total_count,
+                "analyzed_files": dependency_snapshot.analyzed_files
+            }
+        }
+
+    except Exception as e:
+        error_msg = f"Failed to parse dependencies: {str(e)}"
+        print(f"[parse_dependencies] Error: {error_msg}")
+        return {
+            "success": False,
+            "error": error_msg,
+            "dependencies": {},
+            "total_count": 0
+        }
+
+
 # ===== Vulnerability Tools =====
 
 @register_tool(
     "search_cve_by_cpe",
-    "Search CVE vulnerabilities by CPE",
+    "Search CVE vulnerabilities by product and version",
     "vulnerability"
 )
 async def search_cve_by_cpe(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
-    """CPE로 CVE 검색 (Mock)"""
+    """
+    Product/Version으로 CVE 검색
+
+    Args:
+        product: 제품명 (예: lodash, react, node.js)
+        version: 버전 (예: 4.17.0, 선택적)
+        vendor: 벤더 (선택적)
+    """
+    product = kwargs.get("product")
+    version = kwargs.get("version", "*")
+    vendor = kwargs.get("vendor", "*")
+
+    if not product:
+        return {
+            "success": False,
+            "error": "Product name is required",
+            "vulnerabilities": [],
+            "count": 0
+        }
+
+    print(f"[search_cve_by_cpe] Searching vulnerabilities for {product}@{version}")
+
+    # NVD Client 사용
+    client = get_nvd_client()
+    result = client.get_product_vulnerabilities(
+        product=product,
+        version=version,
+        vendor=vendor
+    )
+
     return {
-        "success": True,
-        "vulnerabilities": [],
-        "count": 0
+        "success": result.get("success", False),
+        "vulnerabilities": result.get("vulnerabilities", []),
+        "count": result.get("total_count", 0),
+        "cpe_uri": result.get("cpe_uri"),
+        "error": result.get("error")
     }
 
 
@@ -353,8 +472,26 @@ async def search_cve_by_cpe(state: SecurityAnalysisStateV2, **kwargs) -> Dict[st
     "vulnerability"
 )
 async def fetch_cve_details(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
-    """CVE 상세 정보 (Mock)"""
-    return {"success": True, "details": {}}
+    """
+    CVE ID로 상세 정보 조회
+
+    Args:
+        cve_id: CVE ID (예: CVE-2021-44228)
+    """
+    cve_id = kwargs.get("cve_id")
+
+    if not cve_id:
+        return {
+            "success": False,
+            "error": "CVE ID is required"
+        }
+
+    print(f"[fetch_cve_details] Fetching details for {cve_id}")
+
+    client = get_nvd_client()
+    result = client.get_vulnerability_by_cve_id(cve_id)
+
+    return result
 
 
 @register_tool(
@@ -365,6 +502,96 @@ async def fetch_cve_details(state: SecurityAnalysisStateV2, **kwargs) -> Dict[st
 async def assess_severity(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
     """취약점 심각도 평가 (Mock)"""
     return {"success": True, "severity": "LOW", "score": 3.0}
+
+
+@register_tool(
+    "search_vulnerabilities",
+    "Search vulnerabilities for all dependencies in state",
+    "vulnerability"
+)
+async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+    """
+    전체 의존성에 대한 취약점 검색 (nvd_client.py 사용)
+
+    state에서 dependencies를 가져와서 NVD API로 취약점 조회
+    """
+    print("[search_vulnerabilities] Starting vulnerability search...")
+
+    # State에서 의존성 가져오기
+    dependencies = state.get("dependencies", {})
+
+    if not dependencies:
+        print("[search_vulnerabilities] No dependencies found in state")
+        return {
+            "success": True,
+            "vulnerabilities": [],
+            "total_count": 0,
+            "severity_counts": {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0},
+            "summary": "No dependencies to scan",
+            "state_update": {
+                "vulnerabilities": [],
+                "vulnerability_count": 0,
+                "critical_count": 0,
+                "high_count": 0,
+                "medium_count": 0,
+                "low_count": 0
+            }
+        }
+
+    # 의존성 데이터를 analyze_dependency_vulnerabilities 형식으로 변환
+    # dependencies = {"npm": {"react": "^18.0.0", ...}, "pip": {...}}
+    # -> {"npm": [{"name": "react", "version": "18.0.0"}, ...], ...}
+    formatted_deps = {}
+    for ecosystem, packages in dependencies.items():
+        formatted_deps[ecosystem] = []
+        if isinstance(packages, dict):
+            for name, version in packages.items():
+                # 버전 문자열에서 ^, ~, >= 등 제거
+                clean_version = version.replace("^", "").replace("~", "").replace(">=", "").strip()
+                formatted_deps[ecosystem].append({
+                    "name": name,
+                    "version": clean_version if clean_version else "*"
+                })
+
+    # NVD Client로 취약점 분석
+    client = get_nvd_client()
+    result = client.analyze_dependency_vulnerabilities(formatted_deps)
+
+    if not result.get("success"):
+        return {
+            "success": False,
+            "error": result.get("error", "Unknown error"),
+            "vulnerabilities": [],
+            "total_count": 0
+        }
+
+    # 결과 파싱
+    vulnerabilities = result.get("vulnerabilities", [])
+    severity_counts = result.get("severity_counts", {})
+    total_count = result.get("total_count", 0)
+
+    print(f"[search_vulnerabilities] Found {total_count} vulnerabilities")
+    print(f"[search_vulnerabilities] Severity: {severity_counts}")
+
+    # State 업데이트 데이터
+    state_update = {
+        "vulnerabilities": vulnerabilities,
+        "vulnerability_count": total_count,
+        "critical_count": severity_counts.get("CRITICAL", 0),
+        "high_count": severity_counts.get("HIGH", 0),
+        "medium_count": severity_counts.get("MEDIUM", 0),
+        "low_count": severity_counts.get("LOW", 0),
+        "unknown_count": severity_counts.get("UNKNOWN", 0)
+    }
+
+    return {
+        "success": True,
+        "vulnerabilities": vulnerabilities,
+        "total_count": total_count,
+        "severity_counts": severity_counts,
+        "summary": result.get("summary", ""),
+        "state_update": state_update
+    }
 
 
 # ===== Assessment Tools =====
@@ -513,22 +740,84 @@ async def analyze_dependencies_full(state: SecurityAnalysisStateV2, **kwargs) ->
 
 @register_tool(
     "scan_vulnerabilities_full",
-    "Complete vulnerability scan",
+    "Complete vulnerability scan for all dependencies",
     "vulnerability"
 )
 async def scan_vulnerabilities_full(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
-    """전체 취약점 스캔 (Mock)"""
+    """
+    전체 의존성에 대한 취약점 스캔
+
+    state에서 dependencies를 가져와서 NVD API로 취약점 조회
+
+    Returns:
+        {
+            "success": bool,
+            "vulnerabilities": List[Dict],
+            "total_count": int,
+            "severity_counts": Dict,
+            "summary": str,
+            "state_update": Dict
+        }
+    """
+    print("[scan_vulnerabilities_full] Starting full vulnerability scan...")
+
+    # State에서 의존성 가져오기
+    dependencies = state.get("dependencies", {})
+
+    if not dependencies:
+        print("[scan_vulnerabilities_full] No dependencies found in state")
+        return {
+            "success": True,
+            "vulnerabilities": [],
+            "total_count": 0,
+            "severity_counts": {"CRITICAL": 0, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0},
+            "summary": "No dependencies to scan",
+            "state_update": {
+                "vulnerabilities": [],
+                "vulnerability_count": 0,
+                "critical_count": 0,
+                "high_count": 0,
+                "medium_count": 0,
+                "low_count": 0
+            }
+        }
+
+    # NVD Client로 취약점 분석
+    client = get_nvd_client()
+    result = client.analyze_dependency_vulnerabilities(dependencies)
+
+    if not result.get("success"):
+        return {
+            "success": False,
+            "error": result.get("error", "Unknown error"),
+            "vulnerabilities": [],
+            "total_count": 0
+        }
+
+    # 결과 파싱
+    vulnerabilities = result.get("vulnerabilities", [])
+    severity_counts = result.get("severity_counts", {})
+    total_count = result.get("total_count", 0)
+
+    print(f"[scan_vulnerabilities_full] Found {total_count} vulnerabilities")
+    print(f"[scan_vulnerabilities_full] Severity: {severity_counts}")
+
+    # State 업데이트 데이터
+    state_update = {
+        "vulnerabilities": vulnerabilities,
+        "vulnerability_count": total_count,
+        "critical_count": severity_counts.get("CRITICAL", 0),
+        "high_count": severity_counts.get("HIGH", 0),
+        "medium_count": severity_counts.get("MEDIUM", 0),
+        "low_count": severity_counts.get("LOW", 0),
+        "unknown_count": severity_counts.get("UNKNOWN", 0)
+    }
+
     return {
         "success": True,
-        "vulnerabilities": [],
-        "total_count": 0,
-        "severity_counts": {"critical": 0, "high": 0, "medium": 0, "low": 0},
-        "state_update": {
-            "vulnerabilities": [],
-            "vulnerability_count": 0,
-            "critical_count": 0,
-            "high_count": 0,
-            "medium_count": 0,
-            "low_count": 0
-        }
+        "vulnerabilities": vulnerabilities,
+        "total_count": total_count,
+        "severity_counts": severity_counts,
+        "summary": result.get("summary", ""),
+        "state_update": state_update
     }

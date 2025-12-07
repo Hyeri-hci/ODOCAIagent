@@ -1,6 +1,7 @@
 """
-ReAct Executor
+ReAct Executor (Improved)
 진짜 ReAct 패턴 구현: Think -> Act -> Observe 사이클
+개선사항: 재시도 로직, 대안 도구 시도, 연속 실패 추적
 """
 from typing import Dict, Any, List, Optional, Callable
 from langchain_openai import ChatOpenAI
@@ -11,16 +12,77 @@ import json
 import re
 
 
+# 대안 도구 매핑 (도구 실패 시 시도할 대안)
+TOOL_ALTERNATIVES = {
+    "fetch_repository_info": ["fetch_directory_structure", "detect_lock_files"],
+    "detect_lock_files": ["fetch_directory_structure"],
+    "parse_package_json": ["fetch_file_content"],
+    "parse_requirements_txt": ["fetch_file_content"],
+    "analyze_dependencies_full": ["detect_lock_files", "parse_package_json"],
+}
+
+# 최소 시도 횟수 설정
+MIN_ATTEMPTS_BEFORE_STOP = 5  # 최소 5회는 시도
+MAX_CONSECUTIVE_FAILURES = 3  # 연속 3회 실패 시 대안 시도
+MAX_SAME_TOOL_RETRIES = 2     # 같은 도구 최대 2회 재시도
+
+
+class ToolExecutionTracker:
+    """도구 실행 추적"""
+
+    def __init__(self):
+        self.tool_attempts = {}  # {tool_name: {"success": int, "failure": int}}
+        self.consecutive_failures = 0
+        self.last_tool = None
+        self.last_success = None
+
+    def record_attempt(self, tool_name: str, success: bool):
+        """도구 실행 결과 기록"""
+        if tool_name not in self.tool_attempts:
+            self.tool_attempts[tool_name] = {"success": 0, "failure": 0}
+
+        if success:
+            self.tool_attempts[tool_name]["success"] += 1
+            self.consecutive_failures = 0
+            self.last_success = tool_name
+        else:
+            self.tool_attempts[tool_name]["failure"] += 1
+            self.consecutive_failures += 1
+
+        self.last_tool = tool_name
+
+    def should_try_alternative(self, tool_name: str) -> bool:
+        """대안 도구를 시도해야 하는지 판단"""
+        if tool_name not in self.tool_attempts:
+            return False
+
+        failures = self.tool_attempts[tool_name]["failure"]
+        return failures >= MAX_SAME_TOOL_RETRIES
+
+    def should_stop_early(self) -> bool:
+        """조기 종료해야 하는지 판단"""
+        return self.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+
+    def get_summary(self) -> Dict[str, Any]:
+        """실행 요약"""
+        return {
+            "tool_attempts": self.tool_attempts,
+            "consecutive_failures": self.consecutive_failures,
+            "last_tool": self.last_tool,
+            "last_success": self.last_success
+        }
+
+
 class ReActExecutor:
-    """ReAct 패턴 기반 실행기"""
+    """ReAct 패턴 기반 실행기 (개선 버전)"""
 
     def __init__(
-            self,
-            llm_base_url: str,
-            llm_api_key: str,
-            llm_model: str,
-            llm_temperature: float = 0.0,
-            tools: Optional[Dict[str, Callable]] = None
+        self,
+        llm_base_url: str,
+        llm_api_key: str,
+        llm_model: str,
+        llm_temperature: float = 0.0,
+        tools: Optional[Dict[str, Callable]] = None
     ):
         self.llm = ChatOpenAI(
             model=llm_model,
@@ -29,8 +91,9 @@ class ReActExecutor:
             temperature=llm_temperature
         )
         self.tools = tools or {}
+        self.tracker = ToolExecutionTracker()  # 추적기 추가
 
-        # ReAct 사고 프롬프트
+        # ReAct 사고 프롬프트 (개선)
         self.thought_prompt = ChatPromptTemplate.from_messages([
             ("system", """You are a security analysis agent using the ReAct (Reasoning + Acting) pattern.
 
@@ -41,6 +104,7 @@ Progress so far:
 - Completed steps: {completed_steps}
 - Current step: {current_step}
 - Observations: {observations}
+- Failed tools: {failed_tools}
 
 Available Tools:
 {available_tools}
@@ -48,10 +112,16 @@ Available Tools:
 Current State:
 {current_state}
 
+IMPORTANT RULES:
+1. If a tool has failed multiple times, try an ALTERNATIVE tool instead
+2. Do NOT give up early - explore at least 5-10 different approaches
+3. If stuck, try a different category of tools (e.g., if GitHub API fails, try file parsing)
+4. Only set "continue": false if you've exhausted all reasonable options
+
 Your task:
 1. THINK: Analyze the current situation
 2. Decide what to do next
-3. Choose the appropriate tool
+3. Choose the appropriate tool (avoid recently failed tools)
 4. Specify parameters
 
 Return JSON:
@@ -64,7 +134,7 @@ Return JSON:
     "continue": true/false
 }}
 
-If the task is complete or stuck, set "continue": false"""),
+Only set "continue": false if the task is TRULY complete or ALL options exhausted."""),
             ("user", "What should I do next?")
         ])
 
@@ -82,13 +152,15 @@ Analyze:
 1. What did we learn?
 2. Did it meet expectations?
 3. What should we do next?
+4. If failed, what alternative approach should we try?
 
 Return JSON:
 {{
     "observation": "What you observed",
     "learned": "What you learned from this",
     "meets_expectation": true/false,
-    "next_step_suggestion": "What to do next"
+    "next_step_suggestion": "What to do next",
+    "alternative_tool": "tool_name or null"
 }}"""),
             ("user", "Analyze this action result.")
         ])
@@ -103,6 +175,9 @@ Steps Remaining: {remaining_count}
 Errors Encountered: {errors}
 Current Results:
 {current_results}
+
+Execution Summary:
+{execution_summary}
 
 Reflect:
 1. Are we making good progress?
@@ -127,8 +202,9 @@ Return JSON:
         state: SecurityAnalysisStateV2
     ) -> Dict[str, Any]:
         """
-        ReAct 사이클 1회 실행
+        ReAct 사이클 1회 실행 (개선)
         Think -> Act -> Observe
+        재시도 로직 포함
 
         Args:
             state: 현재 상태
@@ -141,16 +217,24 @@ Return JSON:
         # 1. THINK
         thought_result = await self._think(state)
 
+        # 조기 종료 체크 (개선)
+        iteration = state.get("iteration", 0)
         if not thought_result.get("continue", True):
-            print("[ReAct] Agent decided to stop")
-            return {
-                "completed": True,
-                "current_step": "finished",
-                **update_thought(state, thought_result["thought"], thought_result["reasoning"])
-            }
+            # 최소 시도 횟수 미달 시 계속 진행
+            if iteration < MIN_ATTEMPTS_BEFORE_STOP:
+                print(f"[ReAct] Agent wants to stop but only {iteration} attempts made (min: {MIN_ATTEMPTS_BEFORE_STOP})")
+                print(f"[ReAct] Forcing continuation...")
+                thought_result["continue"] = True
+            else:
+                print(f"[ReAct] Agent decided to stop after {iteration} attempts")
+                return {
+                    "completed": True,
+                    "current_step": "finished",
+                    **update_thought(state, thought_result["thought"], thought_result["reasoning"])
+                }
 
-        # 2. ACT
-        action_result = await self._act(
+        # 2. ACT (대안 도구 시도 포함)
+        action_result = await self._act_with_fallback(
             state,
             thought_result["next_action"],
             thought_result["parameters"]
@@ -164,9 +248,19 @@ Return JSON:
             action_result
         )
 
+        # 실행 추적
+        self.tracker.record_attempt(
+            thought_result["next_action"],
+            action_result.get("success", False)
+        )
+
+        # 연속 실패 경고
+        if self.tracker.consecutive_failures >= 2:
+            print(f"[ReAct] ⚠️ {self.tracker.consecutive_failures} consecutive failures detected")
+
         # 상태 업데이트
         updates = {
-            "iteration": state.get("iteration", 0) + 1,
+            "iteration": iteration + 1,
             **update_thought(state, thought_result["thought"], thought_result["reasoning"]),
             **update_action(
                 state,
@@ -180,22 +274,12 @@ Return JSON:
         }
 
         # 도구가 반환한 state_update 반영
-        # Debug: action_result 구조 출력
-        print(f"[ReAct] DEBUG - action_result keys: {list(action_result.keys()) if isinstance(action_result, dict) else 'not a dict'}")
-        print(f"[ReAct] DEBUG - action_result.success: {action_result.get('success')}")
-        if action_result.get("result"):
-            print(f"[ReAct] DEBUG - result type: {type(action_result['result'])}")
-            if isinstance(action_result["result"], dict):
-                print(f"[ReAct] DEBUG - result keys: {list(action_result['result'].keys())}")
-
         if action_result.get("success") and action_result.get("result"):
             result = action_result["result"]
             if isinstance(result, dict) and "state_update" in result:
                 state_update = result["state_update"]
                 print(f"[ReAct] Applying state_update: {list(state_update.keys())}")
                 updates.update(state_update)
-            else:
-                print(f"[ReAct] DEBUG - No state_update in result")
 
         # 진행률 업데이트
         plan = state.get("execution_plan")
@@ -207,9 +291,65 @@ Return JSON:
 
         # 에러 처리
         if action_result.get("error"):
-            updates["errors"] = [action_result["error"]]
+            errors = state.get("errors", [])
+            errors.append({
+                "tool": thought_result["next_action"],
+                "error": action_result["error"],
+                "iteration": iteration + 1
+            })
+            updates["errors"] = errors
 
         return updates
+
+    async def _act_with_fallback(
+        self,
+        state: SecurityAnalysisStateV2,
+        tool_name: str,
+        parameters: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        도구 실행 (실패 시 대안 시도)
+
+        Args:
+            state: 현재 상태
+            tool_name: 도구 이름
+            parameters: 파라미터
+
+        Returns:
+            실행 결과
+        """
+        # 1차 시도
+        result = await self._act(state, tool_name, parameters)
+
+        if result["success"]:
+            return result
+
+        # 실패 시 대안 도구 시도
+        if tool_name in TOOL_ALTERNATIVES:
+            alternatives = TOOL_ALTERNATIVES[tool_name]
+            print(f"[ReAct] Tool '{tool_name}' failed, trying alternatives...")
+
+            for alt_tool in alternatives:
+                # 이미 여러 번 실패한 도구는 건너뛰기
+                if self.tracker.should_try_alternative(alt_tool):
+                    print(f"[ReAct]   ✗ Skipping '{alt_tool}' (already failed {MAX_SAME_TOOL_RETRIES} times)")
+                    continue
+
+                print(f"[ReAct]   → Trying alternative: '{alt_tool}'")
+                alt_result = await self._act(state, alt_tool, parameters)
+
+                if alt_result["success"]:
+                    print(f"[ReAct]   ✓ Alternative '{alt_tool}' succeeded!")
+                    # 추적기 업데이트
+                    self.tracker.record_attempt(alt_tool, True)
+                    return alt_result
+                else:
+                    print(f"[ReAct]   ✗ Alternative '{alt_tool}' also failed")
+                    self.tracker.record_attempt(alt_tool, False)
+
+            print(f"[ReAct] All alternatives exhausted for '{tool_name}'")
+
+        return result
 
     async def _think(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
         """사고 단계"""
@@ -223,6 +363,12 @@ Return JSON:
                 for a in state.get("actions", [])
             ]
             observations = state.get("observations", [])[-5:]  # 최근 5개
+
+            # 실패한 도구 목록
+            failed_tools = [
+                tool for tool, stats in self.tracker.tool_attempts.items()
+                if stats["failure"] > 0
+            ]
 
             # 사용 가능한 도구 목록
             available_tools = "\n".join([
@@ -244,6 +390,7 @@ Return JSON:
                 "completed_steps": "\n".join(completed_steps) or "None",
                 "current_step": state.get("current_step", "unknown"),
                 "observations": "\n".join(observations) or "None",
+                "failed_tools": ", ".join(failed_tools) if failed_tools else "None",
                 "available_tools": available_tools,
                 "current_state": json.dumps(current_state_summary, indent=2, ensure_ascii=False)
             })
@@ -392,13 +539,17 @@ Return JSON:
                 "warnings": len(state.get("warnings", []))
             }
 
+            # 실행 요약 추가
+            execution_summary = self.tracker.get_summary()
+
             chain = self.reflection_prompt | self.llm
             response = await chain.ainvoke({
                 "user_request": state.get("user_request", ""),
                 "completed_count": completed,
                 "remaining_count": remaining,
                 "errors": state.get("errors", [])[-5:],
-                "current_results": json.dumps(current_results, indent=2, ensure_ascii=False)
+                "current_results": json.dumps(current_results, indent=2, ensure_ascii=False),
+                "execution_summary": json.dumps(execution_summary, indent=2, ensure_ascii=False)
             })
 
             content = response.content
@@ -419,7 +570,7 @@ Return JSON:
             }
 
     def _fallback_think(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
-        """LLM 실패시 폴백 사고"""
+        """LLM 실패시 폴백 사고 (개선)"""
         print("[ReAct]   Using fallback thinking (rule-based)...")
 
         plan = state.get("execution_plan")
@@ -433,20 +584,43 @@ Return JSON:
                 "continue": False
             }
 
-        # 다음 미완료 단계 찾기
+        # 다음 미완료 단계 찾기 (실패한 도구 제외)
         completed_actions = {a["tool_name"] for a in state.get("actions", []) if a.get("success")}
+        failed_actions = {a["tool_name"] for a in state.get("actions", []) if not a.get("success")}
 
         for step in plan.get("steps", []):
-            if step["action"] not in completed_actions:
-                print(f"[ReAct]   → Following plan: Step {step['step_number']} - {step['action']}")
-                return {
-                    "thought": f"Following plan: Step {step['step_number']}",
-                    "reasoning": "Using predefined plan",
-                    "next_action": step["action"],
-                    "parameters": step.get("parameters", {}),
-                    "expected_outcome": step.get("description", ""),
-                    "continue": True
-                }
+            action_name = step["action"]
+
+            # 이미 성공한 단계는 건너뛰기
+            if action_name in completed_actions:
+                continue
+
+            # 여러 번 실패한 도구는 대안 시도
+            if self.tracker.should_try_alternative(action_name):
+                if action_name in TOOL_ALTERNATIVES:
+                    alternatives = TOOL_ALTERNATIVES[action_name]
+                    for alt in alternatives:
+                        if alt not in completed_actions and not self.tracker.should_try_alternative(alt):
+                            print(f"[ReAct]   → Using alternative '{alt}' instead of '{action_name}'")
+                            return {
+                                "thought": f"Using alternative tool {alt}",
+                                "reasoning": f"{action_name} failed multiple times",
+                                "next_action": alt,
+                                "parameters": step.get("parameters", {}),
+                                "expected_outcome": f"Alternative to {action_name}",
+                                "continue": True
+                            }
+
+            # 정상적으로 다음 단계 실행
+            print(f"[ReAct]   → Following plan: Step {step['step_number']} - {action_name}")
+            return {
+                "thought": f"Following plan: Step {step['step_number']}",
+                "reasoning": "Using predefined plan",
+                "next_action": action_name,
+                "parameters": step.get("parameters", {}),
+                "expected_outcome": step.get("description", ""),
+                "continue": True
+            }
 
         # 모든 단계 완료
         print("[ReAct]   → All planned steps completed")
@@ -477,7 +651,7 @@ Return JSON:
 
     def should_continue(self, state: SecurityAnalysisStateV2) -> bool:
         """
-        계속 실행할지 판단
+        계속 실행할지 판단 (개선)
 
         Args:
             state: 현재 상태
@@ -485,9 +659,11 @@ Return JSON:
         Returns:
             계속 실행 여부
         """
+        iteration = state.get("iteration", 0)
+
         # 최대 반복 횟수 체크
-        if state.get("iteration", 0) >= state.get("max_iterations", 20):
-            print("[ReAct] Max iterations reached")
+        if iteration >= state.get("max_iterations", 20):
+            print(f"[ReAct] Max iterations reached ({iteration})")
             return False
 
         # 완료 플래그 체크
@@ -501,14 +677,34 @@ Return JSON:
             total_steps = len(plan.get("steps", []))
             completed = len([a for a in state.get("actions", []) if a.get("success")])
 
-            if completed >= total_steps:
-                print("[ReAct] All planned steps completed")
+            if completed >= total_steps and iteration >= MIN_ATTEMPTS_BEFORE_STOP:
+                print(f"[ReAct] All planned steps completed ({completed}/{total_steps})")
                 return False
 
-        # 치명적 에러 체크
+        # 치명적 에러 체크 (개선)
         errors = state.get("errors", [])
-        if len(errors) > 5:  # 5개 이상 에러
-            print("[ReAct] Too many errors, stopping")
+        if len(errors) > 10:  # 10개 이상 에러 (5개에서 증가)
+            print(f"[ReAct] Too many errors ({len(errors)}), stopping")
             return False
 
+        # 최소 시도 횟수 미달 시 계속 진행
+        if iteration < MIN_ATTEMPTS_BEFORE_STOP:
+            print(f"[ReAct] Continuing (min attempts: {MIN_ATTEMPTS_BEFORE_STOP}, current: {iteration})")
+            return True
+
         return True
+
+    def get_execution_stats(self) -> Dict[str, Any]:
+        """실행 통계 반환"""
+        return {
+            "tracker_summary": self.tracker.get_summary(),
+            "tool_success_rates": {
+                tool: {
+                    "success": stats["success"],
+                    "failure": stats["failure"],
+                    "success_rate": stats["success"] / (stats["success"] + stats["failure"]) * 100
+                    if (stats["success"] + stats["failure"]) > 0 else 0
+                }
+                for tool, stats in self.tracker.tool_attempts.items()
+            }
+        }

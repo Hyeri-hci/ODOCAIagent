@@ -12,11 +12,18 @@ import re
 
 class DynamicPlanner:
     """LLM 기반 동적 계획 생성기"""
-
-    def __init__(self, llm: Optional[ChatOpenAI] = None):
-        self.llm = llm or ChatOpenAI(
-            model="gpt-4-turbo-preview",
-            temperature=0.2
+    def __init__(
+            self,
+            llm_base_url: str,
+            llm_api_key: str,
+            llm_model: str,
+            llm_temperature: float = 0.0
+    ):
+        self.llm = ChatOpenAI(
+            model=llm_model,
+            api_key=llm_api_key,
+            base_url=llm_base_url,
+            temperature=llm_temperature
         )
 
         # 계획 생성 프롬프트

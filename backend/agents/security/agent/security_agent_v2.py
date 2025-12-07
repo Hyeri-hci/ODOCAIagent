@@ -23,22 +23,20 @@ from .state_v2 import (
 )
 from .intent_parser import IntentParser
 from .planner_v2 import DynamicPlanner
-from .react_executor import ReActExecutor
+from .react_executor_improved import ReActExecutor
 from .tool_registry import get_registry
 from datetime import datetime
 import json
 
-
+# SecurityAgent 클래스
 class SecurityAgentV2:
-    """개선된 보안 분석 에이전트"""
-
+    # 초기화하기
     def __init__(
         self,
         llm_base_url: str,
         llm_api_key: str,
         llm_model: str,
         llm_temperature: float,
-        llm: Optional[ChatOpenAI] = None,
         execution_mode: Literal["fast", "intelligent", "auto"] = "auto",
         max_iterations: int = 20,
         enable_reflection: bool = True,
@@ -55,7 +53,8 @@ class SecurityAgentV2:
         self.LLM_MODEL = llm_model
         self.LLM_TEMPERATURE = llm_temperature
 
-        self.llm = llm or ChatOpenAI(
+        # LLM선언하기 (클래스 생성시 llm 클라이언트를 입력 받으면 그대로 사용, 없으면, 생성해서 사용하기)
+        self.llm = ChatOpenAI(
             api_key=self.LLM_API_KEY,
             base_url=self.LLM_BASE_URL,
             model=self.LLM_MODEL,
@@ -67,15 +66,29 @@ class SecurityAgentV2:
         self.enable_reflection = enable_reflection
 
         # 컴포넌트 초기화
-        self.intent_parser = IntentParser(self.llm)
-        self.planner = DynamicPlanner(self.llm)
+        self.intent_parser = IntentParser(
+            llm_model=self.LLM_MODEL,
+            llm_base_url=self.LLM_BASE_URL,
+            llm_api_key=self.LLM_API_KEY,
+            llm_temperature=self.LLM_TEMPERATURE
+        )
+
+        self.planner = DynamicPlanner(
+            llm_model=self.LLM_MODEL,
+            llm_base_url=self.LLM_BASE_URL,
+            llm_api_key=self.LLM_API_KEY,
+            llm_temperature=self.LLM_TEMPERATURE
+        )
 
         # 도구 레지스트리 가져오기
         self.tool_registry = get_registry()
 
         # ReAct 실행기 초기화
         self.executor = ReActExecutor(
-            llm=self.llm,
+            llm_model=self.LLM_MODEL,
+            llm_base_url=self.LLM_BASE_URL,
+            llm_api_key=self.LLM_API_KEY,
+            llm_temperature=self.LLM_TEMPERATURE,
             tools=self.tool_registry.get_all_tools()
         )
 
@@ -85,6 +98,7 @@ class SecurityAgentV2:
         print(f"[SecurityAgentV2] Initialized with mode: {execution_mode}")
         print(f"[SecurityAgentV2] Max iterations: {max_iterations}")
         print(f"[SecurityAgentV2] Reflection enabled: {enable_reflection}")
+
 
     def _build_graph(self) -> StateGraph:
         """LangGraph 구조 생성"""
