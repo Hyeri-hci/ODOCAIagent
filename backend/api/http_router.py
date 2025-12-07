@@ -799,3 +799,186 @@ async def analyze_repository_stream(request: StreamingAnalyzeRequest):
             "X-Accel-Buffering": "no",
         }
     )
+
+
+# GET 방식 SSE 엔드포인트 (프론트엔드 EventSource 호환)
+@router.get("/analyze/stream")
+async def analyze_repository_stream_get(
+    repo_url: str,
+    analysis_depth: Optional[str] = None,
+):
+    """
+    스트리밍 분석 API (GET) - 프론트엔드 EventSource 호환.
+    """
+    from backend.agents.supervisor.graph import get_supervisor_graph
+    from backend.agents.supervisor.models import SupervisorInput
+    from backend.agents.supervisor.service import init_state_from_input
+    from backend.common.github_client import fetch_beginner_issues
+    from backend.common.cache import analysis_cache
+    
+    try:
+        owner, repo, ref = parse_github_url(repo_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    # 프론트엔드 호환 단계 정의
+    FRONTEND_STEPS = {
+        "intent_analysis_node": {"step": "intent", "progress": 5, "message": "AI가 요청 의도 분석 중"},
+        "decision_node": {"step": "github", "progress": 15, "message": "저장소 정보 수집 중"},
+        "run_diagnosis_node": {"step": "docs", "progress": 35, "message": "문서 품질 분석 중"},
+        "activity": {"step": "activity", "progress": 55, "message": "활동성 분석 중"},
+        "structure": {"step": "structure", "progress": 70, "message": "구조 분석 중"},
+        "scoring": {"step": "scoring", "progress": 85, "message": "건강도 점수 계산 중"},
+        "quality_check_node": {"step": "quality", "progress": 92, "message": "AI가 결과 품질 검사 중"},
+        "summary": {"step": "llm", "progress": 97, "message": "AI 요약 생성 중"},
+    }
+    
+    async def event_generator():
+        def send_event(step: str, progress: int, message: str, data: dict = None):
+            event_data = {
+                "step": step,
+                "progress": progress,
+                "message": message,
+            }
+            if data:
+                event_data["data"] = data
+            return f"data: {json.dumps(event_data, ensure_ascii=False)}\n\n"
+        
+        # 시작 이벤트
+        yield send_event("github", 5, f"{owner}/{repo} 저장소 정보 수집 중...")
+        await asyncio.sleep(0.1)
+        
+        try:
+            # 캐시 확인
+            cached_response = analysis_cache.get_analysis(owner, repo, ref)
+            if cached_response:
+                yield send_event("github", 50, "캐시된 결과를 찾았습니다!")
+                yield send_event("complete", 100, "분석 완료!", {"result": cached_response})
+                return
+            
+            # 의도 분석
+            yield send_event("intent", 10, "AI가 요청 의도 분석 중...")
+            await asyncio.sleep(0.05)
+            
+            # 문서 분석
+            yield send_event("docs", 25, "문서 품질 분석 중...")
+            
+            # Supervisor 그래프 실행 준비
+            graph = get_supervisor_graph()
+            config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
+            
+            user_context = {"use_llm_summary": True}
+            if analysis_depth:
+                user_context["analysis_depth"] = analysis_depth
+            
+            inp = SupervisorInput(
+                task_type="diagnose_repo",
+                owner=owner,
+                repo=repo,
+                user_context=user_context,
+            )
+            
+            initial_state = init_state_from_input(inp)
+            
+            # 활동성 분석
+            yield send_event("activity", 45, "활동성 분석 중...")
+            
+            # 그래프 실행 (블로킹)
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(graph.invoke, initial_state, config=config)
+                
+                # 진행률 업데이트
+                progress_updates = [
+                    ("structure", 55, "구조 분석 중..."),
+                    ("structure", 65, "의존성 분석 중..."),
+                    ("scoring", 75, "건강도 점수 계산 중..."),
+                    ("scoring", 82, "온보딩 점수 계산 중..."),
+                ]
+                
+                for step, pct, msg in progress_updates:
+                    if not future.done():
+                        yield send_event(step, pct, msg)
+                        await asyncio.sleep(1.2)
+                
+                result = future.result(timeout=120)
+            
+            # 품질 검사
+            yield send_event("quality", 90, "AI가 결과 품질 검사 중...")
+            await asyncio.sleep(0.1)
+            
+            # 결과 처리
+            if result is None:
+                result = {}
+            elif hasattr(result, "model_dump"):
+                result = result.model_dump()
+            
+            # 에러 체크
+            if result.get("error"):
+                yield send_event("error", 0, result["error"], {"error": result["error"]})
+                return
+            
+            # LLM 요약
+            yield send_event("llm", 95, "AI 요약 생성 중...")
+            
+            # Good First Issues 수집
+            try:
+                recommended_issues = fetch_beginner_issues(owner, repo, max_count=5)
+            except Exception:
+                recommended_issues = []
+            
+            # 최종 응답 생성
+            data = result.get("diagnosis_result", {})
+            docs_issues = data.get("docs_issues", [])
+            activity_issues = data.get("activity_issues", [])
+            
+            response_data = {
+                "job_id": f"{owner}/{repo}@{ref}",
+                "score": data.get("health_score", 0),
+                "analysis": {
+                    "health_score": data.get("health_score", 0),
+                    "health_level": data.get("health_level", "unknown"),
+                    "documentation_quality": data.get("documentation_quality", 0),
+                    "activity_maintainability": data.get("activity_maintainability", 0),
+                    "onboarding_score": data.get("onboarding_score", 0),
+                    "onboarding_level": data.get("onboarding_level", "unknown"),
+                    "analysis_depth_used": data.get("analysis_depth_used", "standard"),
+                    "flow_adjustments": result.get("flow_adjustments", []),
+                    "warnings": result.get("warnings", []),
+                    "days_since_last_commit": data.get("days_since_last_commit"),
+                    "total_commits_30d": data.get("total_commits_30d", 0),
+                    "unique_contributors": data.get("unique_contributors", 0),
+                    "issue_close_rate": data.get("issue_close_rate", 0),
+                    "median_pr_merge_days": data.get("median_pr_merge_days"),
+                    "open_issues_count": data.get("open_issues_count", 0),
+                    "stars": data.get("stars", 0),
+                    "forks": data.get("forks", 0),
+                    "dependency_complexity_score": data.get("dependency_complexity_score", 0),
+                },
+                "risks": _generate_risks_from_issues(docs_issues, activity_issues, data),
+                "actions": _generate_actions_from_issues(docs_issues, activity_issues, data, recommended_issues),
+                "recommended_issues": recommended_issues,
+                "readme_summary": data.get("summary_for_user"),
+            }
+            
+            # 캐시에 저장
+            analysis_cache.set_analysis(owner, repo, ref, response_data)
+            
+            # 완료 이벤트
+            yield send_event("complete", 100, "분석 완료!", {"result": response_data})
+            
+        except Exception as e:
+            logger.exception(f"Streaming analysis (GET) failed: {e}")
+            yield send_event("error", 0, f"분석 중 오류 발생: {str(e)}", {"error": str(e)})
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
+

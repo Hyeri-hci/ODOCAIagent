@@ -35,24 +35,31 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
     const encodedUrl = encodeURIComponent(userProfile.repositoryUrl);
     const eventSourceUrl = `${apiBaseUrl}/api/analyze/stream?repo_url=${encodedUrl}`;
 
+    console.log("[SSE] Connecting to:", eventSourceUrl);
     const eventSource = new EventSource(eventSourceUrl);
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        console.log("[SSE] Event received:", data);
         
+        // 백엔드에서 보내는 형식: { step, progress, message, data? }
         setCurrentStep(data.step);
         setProgress(data.progress);
         setStatusMessage(data.message);
 
+        // 분석 완료
         if (data.step === "complete" && data.data?.result) {
+          console.log("[SSE] Analysis complete, result:", data.data.result);
           eventSource.close();
           if (onComplete) {
             onComplete(data.data.result);
           }
         }
 
+        // 에러 발생
         if (data.step === "error") {
+          console.error("[SSE] Error:", data.data?.error || data.message);
           eventSource.close();
           setIsError(true);
           if (onError) {
@@ -60,12 +67,12 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
           }
         }
       } catch (e) {
-        console.error("SSE parse error:", e);
+        console.error("[SSE] Parse error:", e, "Raw data:", event.data);
       }
     };
 
     eventSource.onerror = (error) => {
-      console.error("SSE connection error:", error);
+      console.error("[SSE] Connection error:", error);
       eventSource.close();
       setIsError(true);
       if (onError) {
@@ -73,7 +80,12 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
       }
     };
 
+    eventSource.onopen = () => {
+      console.log("[SSE] Connection opened");
+    };
+
     return () => {
+      console.log("[SSE] Closing connection");
       eventSource.close();
     };
   }, [userProfile?.repositoryUrl, useStream, onComplete, onError]);
