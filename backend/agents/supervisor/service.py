@@ -27,6 +27,15 @@ def init_state_from_input(inp: SupervisorInput) -> SupervisorState:
         last_answer_kind="none",
         last_explain_target=None,
         error=None,
+        detected_intent=None,
+        intent_confidence=0.0,
+        decision_reason=None,
+        next_node_override=None,
+        rerun_count=0,
+        max_rerun=2,
+        quality_issues=[],
+        use_cache=True,
+        cache_hit=False,
     )
 
 def run_supervisor_diagnosis(
