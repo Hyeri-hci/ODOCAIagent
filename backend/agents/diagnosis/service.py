@@ -57,9 +57,9 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         structure_result = analyze_structure(snapshot)
         timings["analyze_structure"] = round(time.time() - structure_start, 3)
         
-        # 3. 점수 계산
+        # 3. 점수 계산 (구조 점수 포함)
         scoring_start = time.time()
-        diagnosis = compute_scores(docs_result, activity_result, deps)
+        diagnosis = compute_scores(docs_result, activity_result, deps, structure_result)
         timings["compute_scores"] = round(time.time() - scoring_start, 3)
         
     except Exception as e:
@@ -70,7 +70,7 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
     logger.info(f"Diagnosis timings for {owner}/{repo}: {timings}")
 
     # 4. 사용자용 요약 생성 (snapshot에서 README 내용 가져옴)
-    summary_text = _generate_summary(diagnosis, docs_result, snapshot, input_data.use_llm_summary)
+    summary_text = _generate_summary(diagnosis, docs_result, structure_result, snapshot, input_data.use_llm_summary)
 
     # 5. DTO 반환
     return DiagnosisOutput(
@@ -90,7 +90,7 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         raw_metrics=diagnosis.to_dict()
     )
 
-def _generate_summary(diagnosis, docs_result, snapshot, use_llm_summary: bool) -> str:
+def _generate_summary(diagnosis, docs_result, structure_result, snapshot, use_llm_summary: bool) -> str:
     """진단 결과 요약 생성 (Fallback + LLM)"""
     
     # 활동성 상세 메트릭 가져오기
@@ -121,6 +121,24 @@ def _generate_summary(diagnosis, docs_result, snapshot, use_llm_summary: bool) -
 
     issue_status = f"이슈 해결률: {issue_close_rate * 100:.1f}% (미해결: {open_issues_count}개)"
 
+    # 구조 정보 요약
+    structure_summary = ""
+    if structure_result:
+        structure_items = []
+        if structure_result.has_tests:
+            structure_items.append("테스트")
+        if structure_result.has_ci:
+            structure_items.append("CI/CD")
+        if structure_result.has_docs_folder:
+            structure_items.append("문서 폴더")
+        if structure_result.has_build_config:
+            structure_items.append("빌드 설정")
+        
+        if structure_items:
+            structure_summary = f"프로젝트 구조: {', '.join(structure_items)} 존재 ({structure_result.structure_score}점)"
+        else:
+            structure_summary = "프로젝트 구조: 테스트/CI/문서 폴더 없음 (0점)"
+
     # 점수 해석
     health_interpretation = ""
     if diagnosis.health_score >= 80:
@@ -139,6 +157,8 @@ def _generate_summary(diagnosis, docs_result, snapshot, use_llm_summary: bool) -
     if pr_status:
         detail_metrics.append(f"- {pr_status}")
     detail_metrics.append(f"- {issue_status}")
+    if structure_summary:
+        detail_metrics.append(f"- {structure_summary}")
     detail_section = "\n".join(detail_metrics)
     
     fallback_summary = (
@@ -172,7 +192,7 @@ def _generate_summary(diagnosis, docs_result, snapshot, use_llm_summary: bool) -
             "## 프로젝트 소개\n"
             "이 프로젝트가 무엇인지, 어떤 역할/용도인지 2-3문장으로 설명.\n\n"
             "## 진단 요약\n"
-            "전체적인 건강도 평가와 주요 강점/약점.\n\n"
+            "전체적인 건강도 평가와 주요 강점/약점. 프로젝트 구조(테스트, CI, 문서 폴더 등) 관점에서의 성숙도도 언급.\n\n"
             "## 개선 권장사항\n"
             "개선이 필요한 부분과 구체적인 조치 제안."
         )
@@ -188,6 +208,16 @@ def _generate_summary(diagnosis, docs_result, snapshot, use_llm_summary: bool) -
             if missing:
                 docs_detail = f"누락된 문서 섹션: {missing}\n"
         
+        # 구조 정보 생성
+        structure_detail = ""
+        if structure_result:
+            struct_items = []
+            struct_items.append(f"테스트: {'있음' if structure_result.has_tests else '없음'}")
+            struct_items.append(f"CI/CD: {'있음' if structure_result.has_ci else '없음'}")
+            struct_items.append(f"문서 폴더: {'있음' if structure_result.has_docs_folder else '없음'}")
+            struct_items.append(f"빌드 설정: {'있음' if structure_result.has_build_config else '없음'}")
+            structure_detail = f"프로젝트 구조: {', '.join(struct_items)} (구조 점수: {structure_result.structure_score}점)\n"
+        
         user_prompt = (
             f"저장소: {diagnosis.repo_id}\n\n"
             f"=== README 내용 ===\n{readme_content or '(README 없음)'}\n\n"
@@ -196,10 +226,12 @@ def _generate_summary(diagnosis, docs_result, snapshot, use_llm_summary: bool) -
             f"문서 품질: {diagnosis.documentation_quality}점\n"
             f"활동성 점수: {diagnosis.activity_maintainability}점\n"
             f"온보딩 점수: {diagnosis.onboarding_score}점 ({diagnosis.onboarding_level})\n"
+            f"{structure_detail}"
             f"문서 이슈: {', '.join(diagnosis.docs_issues) or '없음'}\n"
             f"활동성 이슈: {', '.join(diagnosis.activity_issues) or '없음'}\n"
             f"{docs_detail}\n"
-            "위 정보를 바탕으로 프로젝트 소개, 진단 요약, 개선 권장사항을 한글로 작성해주세요."
+            "위 정보를 바탕으로 프로젝트 소개, 진단 요약, 개선 권장사항을 한글로 작성해주세요. "
+            "진단 요약에서는 프로젝트 구조(테스트/CI 유무 등)가 기여 용이성에 미치는 영향도 언급해주세요."
         )
 
         request = ChatRequest(

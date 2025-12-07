@@ -40,6 +40,13 @@ class DiagnosisSummaryDTO:
     stars: int = 0
     forks: int = 0
     
+    # 구조 분석 결과 (내부 처리용 - Frontend 표시 안 함)
+    structure_score: int = 0
+    has_tests: bool = False
+    has_ci: bool = False
+    has_docs_folder: bool = False
+    has_build_config: bool = False
+    
     # 추천 이슈
     recommended_issues: Optional[List[Dict[str, Any]]] = None
     
@@ -178,6 +185,21 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
         warnings = res.get("warnings", [])
         flow_adjustments = res.get("flow_adjustments", [])
     
+    # 구조 분석 결과 추출
+    structure_score = 0
+    has_tests = False
+    has_ci = False
+    has_docs_folder = False
+    has_build_config = False
+    if isinstance(res, dict):
+        structure_data = res.get("structure", {})
+        if structure_data:
+            structure_score = structure_data.get("structure_score", 0)
+            has_tests = structure_data.get("has_tests", False)
+            has_ci = structure_data.get("has_ci", False)
+            has_docs_folder = structure_data.get("has_docs_folder", False)
+            has_build_config = structure_data.get("has_build_config", False)
+    
     return DiagnosisSummaryDTO(
         repo_id=repo_id,
         documentation_quality=documentation_quality,
@@ -205,6 +227,11 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
         readme_sections=readme_sections,
         stars=stars,
         forks=forks,
+        structure_score=structure_score,
+        has_tests=has_tests,
+        has_ci=has_ci,
+        has_docs_folder=has_docs_folder,
+        has_build_config=has_build_config,
         warnings=warnings,
         flow_adjustments=flow_adjustments,
     )
