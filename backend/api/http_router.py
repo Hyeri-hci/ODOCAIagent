@@ -3,9 +3,12 @@ HTTP API 라우터 - 통합 에이전트 외부 인터페이스.
 
 UI, PlayMCP, 기타 클라이언트를 위한 HTTP 엔드포인트.
 """
+import asyncio
+import json
 import logging
 import re
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 
@@ -489,12 +492,6 @@ class CompareResponse(BaseModel):
 
 @router.post("/analyze/compare", response_model=CompareResponse)
 async def compare_repositories(request: CompareRequest) -> CompareResponse:
-    """
-    여러 저장소 비교 분석 API.
-    
-    2~5개의 저장소를 비교 분석하여 점수, 건강 상태 등을 비교합니다.
-    이미 캐시된 결과가 있으면 재사용합니다.
-    """
     from backend.agents.supervisor.graph import get_supervisor_graph
     from backend.agents.supervisor.models import SupervisorInput, SupervisorState
     from backend.agents.supervisor.service import init_state_from_input
@@ -580,11 +577,6 @@ async def compare_repositories(request: CompareRequest) -> CompareResponse:
 # Performance Metrics API
 @router.get("/admin/metrics")
 async def get_performance_metrics(limit: int = 50):
-    """
-    성능 메트릭 조회 API.
-    
-    최근 Task 수행 시간, Agent 결정 로그 등을 조회합니다.
-    """
     from backend.common.metrics import get_metrics_tracker
     
     tracker = get_metrics_tracker()
@@ -596,12 +588,214 @@ async def get_performance_metrics(limit: int = 50):
 
 @router.get("/admin/metrics/summary")
 async def get_metrics_summary():
-    """
-    성능 메트릭 요약 조회.
-    
-    전체 통계 (성공률, 캐시 히트율, 평균 소요시간 등)를 반환합니다.
-    """
     from backend.common.metrics import get_metrics_tracker
     
     tracker = get_metrics_tracker()
     return tracker.get_summary()
+
+
+# === Streaming Analysis API ===
+
+class StreamingAnalyzeRequest(BaseModel):
+    """스트리밍 분석 요청."""
+    repo_url: str = Field(..., description="GitHub 저장소 URL")
+    analysis_depth: Optional[str] = Field(
+        default=None, 
+        description="분석 깊이 (deep/standard/quick, None이면 자동 결정)"
+    )
+
+
+@router.post("/analyze/stream")
+async def analyze_repository_stream(request: StreamingAnalyzeRequest):
+    """
+    스트리밍 분석 API - SSE로 진행 상황을 실시간 전달.
+    """
+    from backend.agents.supervisor.streaming_handler import ProgressStreamHandler, ProgressEventType
+    from backend.agents.supervisor.graph import get_supervisor_graph
+    from backend.agents.supervisor.models import SupervisorInput
+    from backend.agents.supervisor.service import init_state_from_input
+    from backend.common.github_client import fetch_beginner_issues
+    from backend.common.cache import analysis_cache
+    
+    try:
+        owner, repo, ref = parse_github_url(request.repo_url)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    
+    async def event_generator():
+        handler = ProgressStreamHandler(owner=owner, repo=repo)
+        
+        # 분석 시작 이벤트
+        start_event = handler.on_analysis_start()
+        yield start_event.to_sse()
+        await asyncio.sleep(0.1)  # 클라이언트가 이벤트를 받을 시간
+        
+        try:
+            # 캐시 확인
+            cached_response = analysis_cache.get_analysis(owner, repo, ref)
+            if cached_response:
+                cache_event = handler.on_progress_update(
+                    "캐시된 결과를 찾았습니다!", 
+                    50
+                )
+                yield cache_event.to_sse()
+                
+                complete_event = handler.on_analysis_complete(cached_response)
+                yield complete_event.to_sse()
+                
+                # 최종 결과
+                yield f"data: {json.dumps({'type': 'result', 'data': cached_response}, ensure_ascii=False)}\n\n"
+                return
+            
+            # 의도 분석 시작
+            intent_start = handler.on_node_start("intent_analysis_node")
+            yield intent_start.to_sse()
+            await asyncio.sleep(0.05)
+            
+            # Supervisor 그래프 실행 준비
+            graph = get_supervisor_graph()
+            config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
+            
+            user_context = {"use_llm_summary": True}
+            if request.analysis_depth:
+                user_context["analysis_depth"] = request.analysis_depth
+            
+            inp = SupervisorInput(
+                task_type="diagnose_repo",
+                owner=owner,
+                repo=repo,
+                user_context=user_context,
+            )
+            
+            initial_state = init_state_from_input(inp)
+            
+            # 의도 분석 완료
+            intent_complete = handler.on_node_complete("intent_analysis_node", {
+                "detected_intent": "diagnose",
+                "analysis_depth": request.analysis_depth or "auto"
+            })
+            yield intent_complete.to_sse()
+            
+            # 결정 노드
+            decision_start = handler.on_node_start("decision_node")
+            yield decision_start.to_sse()
+            await asyncio.sleep(0.05)
+            
+            decision_complete = handler.on_node_complete("decision_node", {
+                "next_node": "run_diagnosis_node"
+            })
+            yield decision_complete.to_sse()
+            
+            # 진단 노드 시작
+            diagnosis_start = handler.on_node_start("run_diagnosis_node")
+            yield diagnosis_start.to_sse()
+            
+            # 실제 그래프 실행 (블로킹)
+            # Note: 실제 프로덕션에서는 비동기 실행이 필요하지만,
+            # 현재 LangGraph는 동기 실행이므로 스레드풀에서 실행
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(graph.invoke, initial_state, config=config)
+                
+                # 진행률 업데이트 (예상 시간 기반)
+                progress_steps = [30, 40, 50, 55]
+                for pct in progress_steps:
+                    if not future.done():
+                        progress_event = handler.on_progress_update(
+                            f"저장소 분석 중... ({pct}%)", 
+                            pct
+                        )
+                        yield progress_event.to_sse()
+                        await asyncio.sleep(1.5)
+                
+                # 결과 대기
+                result = future.result(timeout=120)
+            
+            # 결과 처리
+            if result is None:
+                result = {}
+            elif hasattr(result, "model_dump"):
+                result = result.model_dump()
+            
+            # 진단 완료
+            diagnosis_result = result.get("diagnosis_result", {})
+            diagnosis_complete = handler.on_node_complete("run_diagnosis_node", {
+                "diagnosis_result": diagnosis_result
+            })
+            yield diagnosis_complete.to_sse()
+            
+            # 품질 검사
+            quality_start = handler.on_node_start("quality_check_node")
+            yield quality_start.to_sse()
+            await asyncio.sleep(0.1)
+            
+            quality_complete = handler.on_node_complete("quality_check_node", {})
+            yield quality_complete.to_sse()
+            
+            # 에러 체크
+            if result.get("error"):
+                error_event = handler.on_node_error("run_diagnosis_node", result["error"])
+                yield error_event.to_sse()
+                yield f"data: {json.dumps({'type': 'error', 'error': result['error']}, ensure_ascii=False)}\n\n"
+                return
+            
+            # 경고 메시지 전송
+            for warning in result.get("warnings", []):
+                warning_event = handler.on_warning(warning)
+                yield warning_event.to_sse()
+            
+            # Good First Issues 수집
+            try:
+                recommended_issues = fetch_beginner_issues(owner, repo, max_count=5)
+            except Exception:
+                recommended_issues = []
+            
+            # 최종 응답 생성
+            data = result.get("diagnosis_result", {})
+            docs_issues = data.get("docs_issues", [])
+            activity_issues = data.get("activity_issues", [])
+            
+            response_data = {
+                "job_id": f"{owner}/{repo}@{ref}",
+                "score": data.get("health_score", 0),
+                "analysis": {
+                    "health_score": data.get("health_score", 0),
+                    "health_level": data.get("health_level", "unknown"),
+                    "documentation_quality": data.get("documentation_quality", 0),
+                    "activity_maintainability": data.get("activity_maintainability", 0),
+                    "onboarding_score": data.get("onboarding_score", 0),
+                    "analysis_depth_used": data.get("analysis_depth_used", "standard"),
+                    "flow_adjustments": result.get("flow_adjustments", []),
+                    "warnings": result.get("warnings", []),
+                },
+                "risks": _generate_risks_from_issues(docs_issues, activity_issues, data),
+                "actions": _generate_actions_from_issues(docs_issues, activity_issues, data, recommended_issues),
+                "recommended_issues": recommended_issues,
+                "readme_summary": data.get("summary_for_user"),
+            }
+            
+            # 캐시에 저장
+            analysis_cache.set_analysis(owner, repo, ref, response_data)
+            
+            # 분석 완료 이벤트
+            complete_event = handler.on_analysis_complete(response_data)
+            yield complete_event.to_sse()
+            
+            # 최종 결과
+            yield f"data: {json.dumps({'type': 'result', 'data': response_data}, ensure_ascii=False)}\n\n"
+            
+        except Exception as e:
+            logger.exception(f"Streaming analysis failed: {e}")
+            error_event = handler.on_node_error("analysis", str(e))
+            yield error_event.to_sse()
+            yield f"data: {json.dumps({'type': 'error', 'error': str(e)}, ensure_ascii=False)}\n\n"
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
