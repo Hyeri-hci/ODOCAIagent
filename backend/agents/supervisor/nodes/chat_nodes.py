@@ -52,13 +52,22 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
     from backend.llm.factory import fetch_llm_client
     from backend.llm.base import ChatRequest, ChatMessage
     from backend.common.config import LLM_MODEL_NAME
+    from backend.common.cache import analysis_cache
 
     intent = state.detected_intent
     message = state.chat_message or ""
     context = state.chat_context or {}
     diagnosis = state.diagnosis_result or {}
+    candidate_issues = list(state.candidate_issues)
 
-    logger.info(f"Chat response: intent={intent}, message={message[:50]}...")
+    if not diagnosis and state.owner and state.owner != "unknown":
+        cached = analysis_cache.get_analysis(state.owner, state.repo, "main")
+        if cached:
+            diagnosis = cached
+            logger.info(f"Chat loaded cached diagnosis for {state.owner}/{state.repo}")
+            candidate_issues = cached.get("recommended_issues", []) or []
+
+    logger.info(f"Chat response: intent={intent}, message={message[:50]}, has_diagnosis={bool(diagnosis)}...")
 
     try:
         client = fetch_llm_client()
@@ -66,7 +75,7 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
         if intent == "explain" and (context or diagnosis):
             system_prompt = _build_explain_prompt(context, diagnosis)
         elif intent == "onboard" and (context or diagnosis):
-            system_prompt = _build_onboard_prompt(context, diagnosis, state.candidate_issues)
+            system_prompt = _build_onboard_prompt(context, diagnosis, candidate_issues)
         else:
             system_prompt = _build_chat_prompt(context, diagnosis)
 
@@ -84,7 +93,7 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"LLM chat failed: {e}")
-        chat_response = _generate_fallback(intent, message, context, diagnosis, state.candidate_issues)
+        chat_response = _generate_fallback(intent, message, context, diagnosis, candidate_issues)
 
     return {
         "chat_response": chat_response,
