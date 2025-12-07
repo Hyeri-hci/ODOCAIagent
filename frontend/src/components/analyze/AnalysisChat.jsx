@@ -1,7 +1,8 @@
 import React, { useState, useRef, useEffect } from "react";
+import ReactMarkdown from "react-markdown";
 import { Send } from "lucide-react";
 import AnalysisReportSection from "./AnalysisReportSection";
-import { sendChatMessage } from "../../lib/api";
+import { sendChatMessage, analyzeRepository } from "../../lib/api";
 
 const AnalysisChat = ({
   userProfile,
@@ -56,7 +57,85 @@ const AnalysisChat = ({
     return null;
   };
 
-  // Mock: 다른 프로젝트 분석 결과 생성
+  // API 응답을 프론트엔드 형식으로 변환 (AnalyzePage.jsx와 동일한 로직)
+  const transformApiResponse = (apiResponse, repositoryUrl) => {
+    const analysis = apiResponse.analysis || apiResponse;
+    
+    return {
+      repositoryUrl: repositoryUrl,
+      analysisId: apiResponse.job_id || analysis.repo_id || `analysis_${Date.now()}`,
+      summary: {
+        score: apiResponse.score || analysis.health_score || 0,
+        healthStatus:
+          analysis.health_level === "good"
+            ? "excellent"
+            : analysis.health_level === "warning"
+            ? "moderate"
+            : "needs-attention",
+        contributionOpportunities: (apiResponse.recommended_issues || []).length,
+        estimatedImpact:
+          (analysis.health_score || 0) >= 70
+            ? "high"
+            : (analysis.health_score || 0) >= 50
+            ? "medium"
+            : "low",
+      },
+      projectSummary:
+        apiResponse.readme_summary || analysis.summary_for_user ||
+        `이 저장소의 건강 점수는 ${apiResponse.score || analysis.health_score}점입니다.`,
+      recommendations: [
+        // 기존 actions
+        ...(apiResponse.actions || []).map((action, idx) => ({
+          id: `action_${idx + 1}`,
+          title: action.title,
+          description: action.description,
+          difficulty: action.priority === "high" ? "easy" : "medium",
+          estimatedTime: action.duration,
+          impact: action.priority,
+          tags: action.url ? ["good-first-issue"] : ["improvement"],
+          url: action.url,
+          issueNumber: action.issue_number,
+        })),
+        // recommended_issues에서 추가 (analysis fallback 포함)
+        ...(apiResponse.recommended_issues || analysis.recommended_issues || []).map((issue, idx) => ({
+          id: `issue_${issue.number || idx}`,
+          title: issue.title,
+          description: `GitHub Issue #${issue.number}`,
+          difficulty: issue.labels?.some(l => l.toLowerCase().includes('easy') || l.toLowerCase().includes('first')) ? "easy" : "medium",
+          estimatedTime: "2-4시간",
+          impact: "medium",
+          tags: issue.labels || ["issue"],
+          url: issue.url,
+          issueNumber: issue.number,
+        })),
+      ],
+      risks: (apiResponse.risks || []).map((risk, idx) => ({
+        id: `risk_${idx + 1}`,
+        type: risk.type || "general",
+        severity: risk.severity || "medium",
+        description: risk.description,
+      })),
+      technicalDetails: {
+        languages: [],
+        framework: "Unknown",
+        testCoverage: 0,
+        dependencies: analysis.dependency_complexity_score || 0,
+        lastCommit: analysis.days_since_last_commit
+          ? `${analysis.days_since_last_commit}일 전`
+          : "알 수 없음",
+        openIssues: analysis.open_issues_count || 0,
+        contributors: analysis.unique_contributors || 0,
+        stars: analysis.stars || 0,
+        forks: analysis.forks || 0,
+        documentationQuality: analysis.documentation_quality || 0,
+        activityMaintainability: analysis.activity_maintainability || 0,
+      },
+      relatedProjects: [],
+      rawAnalysis: analysis,
+    };
+  };
+
+  // Mock: 다른 프로젝트 분석 결과 생성 (더 이상 사용되지 않음, 백업용으로 유지)
   const generateMockAnalysisForProject = (projectUrl) => {
     const projectName = projectUrl.split("/").slice(-2).join("/");
 
@@ -383,7 +462,7 @@ const AnalysisChat = ({
     const detectedUrl = detectGitHubUrl(userMessageContent);
 
     if (detectedUrl) {
-      // URL이 감지되면 새로운 프로젝트 분석 시작
+      // URL이 감지되면 새로운 프로젝트 분석 시작 (실제 API 호출)
       setIsAnalyzing(true);
       setIsTyping(true);
 
@@ -392,14 +471,15 @@ const AnalysisChat = ({
       const analyzingMessage = {
         id: analyzingMessageId,
         role: "assistant",
-        content: `${detectedUrl} 프로젝트를 분석하고 있습니다... 잠시만 기다려주세요.`,
+        content: `${detectedUrl} 프로젝트를 분석하고 있습니다... 잠시만 기다려주세요. (실제 API 호출 중)`,
         timestamp: new Date(),
       };
       setMessages((prev) => [...prev, analyzingMessage]);
 
-      // Mock: 2초 후 새로운 분석 결과 생성
-      setTimeout(() => {
-        const newAnalysisResult = generateMockAnalysisForProject(detectedUrl);
+      try {
+        // 실제 Backend API 호출
+        const apiResponse = await analyzeRepository(detectedUrl);
+        const newAnalysisResult = transformApiResponse(apiResponse, detectedUrl);
         setAnalysisResult(newAnalysisResult);
 
         // 분석 중 메시지를 완료 메시지로 교체
@@ -415,10 +495,24 @@ const AnalysisChat = ({
             },
           ];
         });
-
+      } catch (error) {
+        console.error("분석 실패:", error);
+        setMessages((prev) => {
+          const filtered = prev.filter((msg) => msg.id !== analyzingMessageId);
+          return [
+            ...filtered,
+            {
+              id: `ai_${Date.now()}`,
+              role: "assistant",
+              content: `죄송합니다. ${detectedUrl} 분석 중 오류가 발생했습니다. 다시 시도해주세요.`,
+              timestamp: new Date(),
+            },
+          ];
+        });
+      } finally {
         setIsTyping(false);
         setIsAnalyzing(false);
-      }, 2000);
+      }
     } else {
       // 일반 질문 처리 - 실제 LLM API 호출
       setIsTyping(true);
@@ -477,7 +571,7 @@ const AnalysisChat = ({
 
               {isTyping && (
                 <div className="flex items-start gap-3">
-                  <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center flex-shrink-0">
+                  <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
                     <span className="text-white font-bold text-sm">ODOC</span>
                   </div>
                   <div className="bg-gray-100 rounded-2xl rounded-tl-none px-5 py-3">
@@ -514,7 +608,7 @@ const AnalysisChat = ({
                 <button
                   onClick={handleSendMessage}
                   disabled={!inputValue.trim() || isTyping || isAnalyzing}
-                  className="bg-gradient-to-r from-blue-600 to-purple-600 text-white p-3 rounded-2xl hover:from-blue-700 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105"
+                  className="bg-blue-600 text-white p-3 rounded-2xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105"
                 >
                   <Send className="w-5 h-5" />
                 </button>
@@ -559,19 +653,36 @@ const ChatMessage = ({ message }) => {
   return (
     <div className={`flex ${isUser ? "justify-end" : "items-start gap-3"}`}>
       {!isUser && (
-        <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center flex-shrink-0">
+        <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
           <span className="text-white font-bold text-sm">ODOC</span>
         </div>
       )}
 
       <div
-        className={`max-w-[80%] rounded-2xl px-5 py-3 ${
+        className={`max-w-[80%] rounded-2xl px-5 py-3 break-words overflow-hidden ${
           isUser
-            ? "bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-tr-none"
+            ? "bg-blue-600 text-white rounded-tr-none"
             : "bg-gray-100 text-gray-900 rounded-tl-none"
         }`}
       >
-        <p className="whitespace-pre-wrap leading-relaxed">{message.content}</p>
+        {isUser ? (
+          <p className="whitespace-pre-wrap leading-relaxed break-words">{message.content}</p>
+        ) : (
+          <div className="prose prose-sm max-w-none">
+            <ReactMarkdown
+              components={{
+                p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+                strong: ({ children }) => <strong className="font-bold">{children}</strong>,
+                ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
+                ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                li: ({ children }) => <li className="text-sm">{children}</li>,
+                a: ({ href, children }) => <a href={href} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          </div>
+        )}
       </div>
     </div>
   );
