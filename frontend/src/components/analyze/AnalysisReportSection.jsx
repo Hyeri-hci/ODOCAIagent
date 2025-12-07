@@ -20,12 +20,14 @@ import { formatNumber } from "../../utils/formatNumber";
 
 const formatAdjustment = (adjustment) => {
   const adjustmentMap = {
-    recommend_deep_analysis: "심층 분석이 권장됩니다",
-    skip_optional_checks: "선택적 검사를 건너뛰었습니다",
-    prioritize_documentation: "문서화 분석을 우선 처리했습니다",
-    expand_activity_window: "활동성 분석 기간을 확장했습니다",
-    include_beginner_tips: "초보자 팁을 포함했습니다",
-    simplify_recommendations: "추천 항목을 단순화했습니다",
+    recommend_deep_analysis: "AI가 이 프로젝트에 대해 심층 분석을 권장합니다",
+    skip_optional_checks: "빠른 결과를 위해 일부 선택적 검사를 생략했습니다",
+    prioritize_documentation: "문서화 상태가 중요하여 우선 분석했습니다",
+    expand_activity_window: "더 정확한 분석을 위해 활동성 기간을 확장했습니다",
+    include_beginner_tips: "초보자를 위한 추가 팁이 포함되었습니다",
+    simplify_recommendations: "이해하기 쉽도록 추천 항목을 단순화했습니다",
+    add_health_warning: "이 프로젝트의 건강 상태에 주의가 필요합니다",
+    beginner_friendly_plan: "초보자 친화적인 온보딩 플랜이 적용되었습니다",
   };
   return adjustmentMap[adjustment] || adjustment;
 };
