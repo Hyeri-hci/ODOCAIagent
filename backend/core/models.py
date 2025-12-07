@@ -43,7 +43,7 @@ class DependencyInfo:
 
 
 @dataclass
-class DependencySnapshot:
+class DependenciesSnapshot:
     """저장소 의존성 스냅샷."""
     repo_id: str
     dependencies: List[DependencyInfo] = field(default_factory=list)
@@ -58,16 +58,20 @@ class DependencySnapshot:
     def runtime_count(self) -> int:
         return len([d for d in self.dependencies if d.dep_type == "runtime"])
 
+# Alias for backward compatibility
+DependencySnapshot = DependenciesSnapshot
+
 
 @dataclass
 class DocsCoreResult:
     """문서 분석 결과."""
     readme_present: bool
     readme_word_count: int
-    category_scores: Dict[str, float]  # WHAT, WHY, HOW 등
+    category_scores: Dict[str, Dict[str, Any]]  # WHAT, WHY, HOW 등 (CategoryInfo dict)
     total_score: int  # 0-100
     missing_sections: List[str]
     present_sections: List[str]
+    marketing_ratio: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -77,6 +81,7 @@ class DocsCoreResult:
             "total_score": self.total_score,
             "missing_sections": self.missing_sections,
             "present_sections": self.present_sections,
+            "marketing_ratio": self.marketing_ratio,
         }
 
 
@@ -91,6 +96,13 @@ class ActivityCoreResult:
     days_since_last_commit: Optional[int]
     total_commits_in_window: int
     unique_authors: int
+    
+    # 상세 메트릭 (UX 개선용)
+    issue_close_rate: float = 0.0  # 이슈 해결률 (0-1)
+    median_pr_merge_days: Optional[float] = None  # PR 병합 중간값 (일)
+    median_issue_close_days: Optional[float] = None  # 이슈 해결 중간값 (일)
+    open_issues_count: int = 0  # 열린 이슈 수
+    open_prs_count: int = 0  # 열린 PR 수
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -101,6 +113,11 @@ class ActivityCoreResult:
             "days_since_last_commit": self.days_since_last_commit,
             "total_commits_in_window": self.total_commits_in_window,
             "unique_authors": self.unique_authors,
+            "issue_close_rate": self.issue_close_rate,
+            "median_pr_merge_days": self.median_pr_merge_days,
+            "median_issue_close_days": self.median_issue_close_days,
+            "open_issues_count": self.open_issues_count,
+            "open_prs_count": self.open_prs_count,
         }
 
 
@@ -122,6 +139,10 @@ class DiagnosisCoreResult:
 
     docs_result: Optional[DocsCoreResult] = None
     activity_result: Optional[ActivityCoreResult] = None
+    dependency_snapshot: Optional[DependenciesSnapshot] = None
+    
+    dependency_complexity_score: int = 0
+    dependency_flags: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """기존 코드 호환용 dict 변환."""
@@ -138,6 +159,10 @@ class DiagnosisCoreResult:
                 "onboarding_level": self.onboarding_level,
                 "docs_issues": self.docs_issues,
                 "activity_issues": self.activity_issues,
+                "dependency_flags": self.dependency_flags,
+            },
+            "complexity": {
+                "dependency_complexity_score": self.dependency_complexity_score,
             },
         }
 

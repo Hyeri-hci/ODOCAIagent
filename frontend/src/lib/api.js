@@ -3,7 +3,8 @@ import axios from "axios";
 // API 기본 설정
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const MOCK_MODE = import.meta.env.VITE_MOCK_MODE === "true";
+// MOCK_MODE 비활성화 - 실제 백엔드 API 사용
+const MOCK_MODE = false; // import.meta.env.VITE_MOCK_MODE === "true";
 
 // Axios 인스턴스 생성
 const api = axios.create({
@@ -13,7 +14,7 @@ const api = axios.create({
   },
 });
 
-// Mock 데이터
+// Mock 데이터 (백업용 - MOCK_MODE가 true일 때만 사용)
 const mockData = {
   analyze: {
     job_id: "mock-job-123",
@@ -74,7 +75,7 @@ const mockData = {
       id: 1,
       title: "보안 취약점 스캐너",
       description: "의존성과 코드에서 보안 취약점을 자동으로 탐지",
-      icon: "🔒",
+      icon: "lock",
       features: ["CVE 데이터베이스 연동", "실시간 알림", "자동 패치 제안"],
     },
   ],
@@ -84,7 +85,7 @@ const mockData = {
       title: "GitHub URL 입력",
       description:
         "분석하고 싶은 오픈소스 프로젝트의 GitHub 리포지토리 URL을 입력하세요",
-      icon: "🔗",
+      icon: "link",
       duration: "10초",
     },
   ],
@@ -100,17 +101,69 @@ const mockData = {
 };
 
 // API 함수들
+
+// 캐시 관련 헬퍼 함수
+const CACHE_KEY_PREFIX = "odoc_analysis_";
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1시간
+
+const getCachedAnalysis = (repoUrl) => {
+  try {
+    const key = CACHE_KEY_PREFIX + btoa(repoUrl);
+    const cached = sessionStorage.getItem(key);
+    if (!cached) return null;
+    
+    const { data, timestamp } = JSON.parse(cached);
+    if (Date.now() - timestamp > CACHE_TTL_MS) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    console.log("[Cache] Hit for:", repoUrl);
+    return data;
+  } catch {
+    return null;
+  }
+};
+
+export const setCachedAnalysis = (repoUrl, data) => {
+  try {
+    const key = CACHE_KEY_PREFIX + btoa(repoUrl);
+    sessionStorage.setItem(key, JSON.stringify({
+      data,
+      timestamp: Date.now()
+    }));
+    console.log("[Cache] Stored for:", repoUrl);
+  } catch (e) {
+    console.warn("[Cache] Failed to store:", e);
+  }
+};
+
 export const analyzeRepository = async (repoUrl) => {
+  console.log("[analyzeRepository] repoUrl:", repoUrl);
+  
+  // 캐시 확인
+  const cached = getCachedAnalysis(repoUrl);
+  if (cached) {
+    console.log("[analyzeRepository] Returning cached result");
+    return cached;
+  }
+  
   if (MOCK_MODE) {
+    console.warn("[analyzeRepository] MOCK_MODE is ON! Returning mock data.");
     await new Promise((resolve) => setTimeout(resolve, 1000));
     return mockData.analyze;
   }
 
   try {
+    console.log("[analyzeRepository] Calling API (no cache)");
     const response = await api.post("/api/analyze", { repo_url: repoUrl });
+    console.log("[analyzeRepository] Response received");
+    
+    // 결과 캐시에 저장
+    setCachedAnalysis(repoUrl, response.data);
+    
     return response.data;
   } catch (error) {
-    console.error("분석 실패:", error);
+    console.error("[analyzeRepository] Failed:", error);
     throw error;
   }
 };
@@ -290,5 +343,104 @@ export const sendReportPDF = async (analysisData, userEmail) => {
     throw error;
   }
 };
+
+/**
+ * AI 어시스턴트와 채팅
+ * @param {string} message - 사용자 메시지
+ * @param {Object} context - 분석 컨텍스트
+ * @param {string} context.repoUrl - 분석 중인 저장소 URL
+ * @param {Object} context.analysisResult - 분석 결과
+ * @param {Array} conversationHistory - 이전 대화 기록
+ * @returns {Promise<{ok: boolean, message: string, error?: string}>}
+ */
+export const sendChatMessage = async (
+  message,
+  context = {},
+  conversationHistory = []
+) => {
+  if (MOCK_MODE) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    return {
+      ok: true,
+      message: getMockChatResponse(message, context),
+    };
+  }
+
+  try {
+    const response = await api.post("/api/chat", {
+      message,
+      repo_url: context.repoUrl || null,
+      analysis_context: context.analysisResult || null,
+      conversation_history: conversationHistory.map((msg) => ({
+        role: msg.type === "user" ? "user" : "assistant",
+        content: msg.content,
+      })),
+    });
+    return response.data;
+  } catch (error) {
+    console.error("채팅 실패:", error);
+    // Fallback response
+    return {
+      ok: false,
+      message:
+        "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+      error: error.message,
+    };
+  }
+};
+
+// Mock 채팅 응답 생성
+function getMockChatResponse(message, context) {
+  const messageLower = message.toLowerCase();
+
+  if (
+    messageLower.includes("기여") ||
+    messageLower.includes("contribute") ||
+    messageLower.includes("어떻게")
+  ) {
+    return (
+      "오픈소스 기여를 시작하는 방법을 안내해드릴게요:\n\n" +
+      "1. **저장소 Fork**: GitHub에서 저장소를 Fork합니다\n" +
+      "2. **로컬 Clone**: `git clone <your-fork-url>`\n" +
+      "3. **브랜치 생성**: `git checkout -b feature/your-feature`\n" +
+      "4. **변경 사항 작업**: 코드 수정 또는 문서 개선\n" +
+      "5. **커밋 & 푸시**: `git commit -m '설명'` 후 `git push`\n" +
+      "6. **PR 생성**: GitHub에서 Pull Request를 생성합니다\n\n" +
+      "처음이라면 'good first issue' 라벨이 붙은 이슈부터 시작하는 것을 추천드립니다!"
+    );
+  }
+
+  if (
+    messageLower.includes("점수") ||
+    messageLower.includes("score") ||
+    messageLower.includes("평가")
+  ) {
+    const score = context.analysisResult?.health_score || 0;
+    let scoreComment = "";
+    if (score >= 80) {
+      scoreComment = `현재 점수 ${score}점은 상위 10% 수준으로 매우 건강한 프로젝트입니다.`;
+    } else if (score >= 60) {
+      scoreComment = `현재 점수 ${score}점은 평균 수준입니다. 문서화나 활동성 개선으로 점수를 높일 수 있습니다.`;
+    } else {
+      scoreComment = `현재 점수 ${score}점은 개선이 필요합니다. 문서 보완과 이슈 해결에 집중하세요.`;
+    }
+    return (
+      `점수 해석을 도와드릴게요:\n\n${scoreComment}\n\n` +
+      "**점수 구성 요소:**\n" +
+      "- 문서 품질: README 완성도, 기여 가이드 유무\n" +
+      "- 활동성: 최근 커밋, PR 병합 속도, 이슈 해결률\n" +
+      "- 온보딩 용이성: 신규 기여자가 시작하기 쉬운 정도"
+    );
+  }
+
+  return (
+    "궁금한 점에 대해 답변드릴게요. 다음과 같은 주제로 질문해주시면 더 구체적인 답변을 드릴 수 있습니다:\n\n" +
+    "- **기여 방법**: 오픈소스에 어떻게 기여하나요?\n" +
+    "- **문서화**: README를 어떻게 개선하나요?\n" +
+    "- **보안**: 취약점은 어떻게 해결하나요?\n" +
+    "- **점수 해석**: 분석 점수의 의미는 무엇인가요?\n\n" +
+    "자유롭게 질문해주세요!"
+  );
+}
 
 export default api;

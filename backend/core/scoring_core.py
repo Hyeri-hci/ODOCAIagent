@@ -7,12 +7,11 @@ from .models import (
     DiagnosisCoreResult,
     DocsCoreResult,
     ActivityCoreResult,
+    DependenciesSnapshot,
     ProjectRules,
 )
 
-# -------------------------------------------------------------------------
 # 1. Constants (Thresholds)
-# -------------------------------------------------------------------------
 
 HEALTH_GOOD_THRESHOLD = 70
 HEALTH_WARNING_THRESHOLD = 50
@@ -23,9 +22,7 @@ ONBOARDING_NORMAL_THRESHOLD = 55
 WEAK_DOCS_THRESHOLD = 40
 INACTIVE_ACTIVITY_THRESHOLD = 30
 
-# -------------------------------------------------------------------------
 # 2. Score Computation Logic
-# -------------------------------------------------------------------------
 
 def compute_health_score(doc: int, activity: int) -> int:
     """모델 2: 운영/유지보수 Health (doc 30% + activity 70%)"""
@@ -106,9 +103,48 @@ def compute_activity_issues(
     return issues
 
 
-# -------------------------------------------------------------------------
+def compute_dependency_complexity(deps: DependenciesSnapshot) -> tuple[int, List[str]]:
+    """의존성 복잡도 점수 (0~100). 높을수록 관리 난이도가 높음.
+    
+    Note: 이것은 보안 취약점(Security Risk) 점수가 아님.
+    단순히 의존성 개수와 버전 고정 여부를 기반으로 한 '구조적 복잡도'를 의미함.
+    """
+    if not deps or not deps.dependencies:
+        return 0, []
+
+    total_deps = len(deps.dependencies)
+    pinned_count = 0
+    for d in deps.dependencies:
+        if d.version and (d.version.startswith("==") or d.version[0].isdigit()):
+            pinned_count += 1
+            
+    pinned_ratio = pinned_count / total_deps if total_deps > 0 else 0.0
+    
+    flags: List[str] = []
+    base_score = 0
+    
+    # 1. Total Dependencies Count Complexity
+    if total_deps < 30:
+        base_score = 20 + (total_deps / 30.0) * 20  # 20~40
+    elif total_deps < 100:
+        base_score = 40 + ((total_deps - 30) / 70.0) * 30  # 40~70
+    else:
+        base_score = 70 + min(((total_deps - 100) / 100.0) * 20, 20) # 70~90
+        flags.append("many_dependencies")
+
+    # 2. Pinned Ratio Complexity (Unpinned = Higher Complexity/Uncertainty)
+    if pinned_ratio < 0.3:
+        base_score += 15
+        flags.append("unpinned_dependencies")
+    elif pinned_ratio < 0.7:
+        base_score += 5
+
+    final_score = min(int(base_score), 100)
+    
+    return final_score, flags
+
+
 # 3. Main Computation Function
-# -------------------------------------------------------------------------
 
 def compute_diagnosis(
     repo_id: str,
@@ -153,3 +189,31 @@ def compute_diagnosis(
         docs_result=docs_result,
         activity_result=activity_result,
     )
+
+
+def compute_scores(
+    docs: DocsCoreResult,
+    activity: ActivityCoreResult,
+    deps: DependenciesSnapshot,
+) -> DiagnosisCoreResult:
+    """CoreResult 객체들을 사용하여 최종 진단을 수행합니다."""
+    # deps에서 repo_id를 가져와 진단 계산
+    result = compute_diagnosis(
+        repo_id=deps.repo_id,
+        docs_result=docs,
+        activity_result=activity,
+    )
+    
+    # 의존성 복잡도 계산
+    complexity_score, dep_flags = compute_dependency_complexity(deps)
+    
+    # 결과에 의존성 정보 추가 (dataclass replace 대신 직접 할당 또는 재생성)
+    # DiagnosisCoreResult는 frozen=False (default) 이므로 직접 수정 가능하지만,
+    # 안전하게 새로운 객체를 생성하거나 필드를 업데이트.
+    # 여기서는 compute_diagnosis가 반환한 객체에 필드를 설정.
+    
+    result.dependency_snapshot = deps
+    result.dependency_complexity_score = complexity_score
+    result.dependency_flags = dep_flags
+    
+    return result

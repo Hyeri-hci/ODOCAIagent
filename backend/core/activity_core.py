@@ -13,14 +13,12 @@ from backend.common.github_client import (
     fetch_recent_pull_requests,
     DEFAULT_ACTIVITY_DAYS,
 )
-from .models import ActivityCoreResult
+from .models import ActivityCoreResult, RepoSnapshot
 
 logger = logging.getLogger(__name__)
 
 
-# -------------------------------------------------------------------------
 # 1. Data Structures (CHAOSS Metrics)
-# -------------------------------------------------------------------------
 
 @dataclass
 class CommitActivityMetrics:
@@ -82,9 +80,7 @@ class ActivityScoreBreakdown:
         return asdict(self)
 
 
-# -------------------------------------------------------------------------
 # 2. Helper Functions
-# -------------------------------------------------------------------------
 
 def _parse_iso8601(dt_str: str) -> Optional[datetime]:
     if not isinstance(dt_str, str) or not dt_str:
@@ -129,16 +125,17 @@ def _extract_author_id(commit: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-# -------------------------------------------------------------------------
 # 3. Metric Computation Functions
-# -------------------------------------------------------------------------
 
-def compute_commit_activity(owner: str, repo: str, days: int = 90) -> CommitActivityMetrics:
-    try:
-        commits = fetch_recent_commits(owner, repo, days=days) or []
-    except Exception:
-        commits = []
+# 3. Metric Computation Functions
 
+def _compute_commit_metrics(
+    commits: List[Dict[str, Any]],
+    owner: str,
+    repo: str,
+    days: int
+) -> CommitActivityMetrics:
+    """Pure function to compute commit metrics from a list of commits."""
     total_commits = len(commits)
     author_ids = set()
     commit_dates: List[date] = []
@@ -177,12 +174,21 @@ def compute_commit_activity(owner: str, repo: str, days: int = 90) -> CommitActi
     )
 
 
-def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivityMetrics:
+def compute_commit_activity(owner: str, repo: str, days: int = 90) -> CommitActivityMetrics:
     try:
-        issues = fetch_recent_issues(owner, repo, days=days) or []
+        commits = fetch_recent_commits(owner, repo, days=days) or []
     except Exception:
-        issues = []
+        commits = []
+    return _compute_commit_metrics(commits, owner, repo, days)
 
+
+def _compute_issue_metrics(
+    issues: List[Dict[str, Any]],
+    owner: str,
+    repo: str,
+    days: int
+) -> IssueActivityMetrics:
+    """Pure function to compute issue metrics from a list of issues."""
     now = datetime.now(timezone.utc)
     since_dt = now - timedelta(days=days)
     
@@ -206,12 +212,16 @@ def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivi
         if state == "OPEN":
             open_issues += 1
             if created_dt:
-                open_ages.append((now - created_dt).total_seconds() / 86400.0)
+                # Ensure non-negative age
+                age = max(0.0, (now - created_dt).total_seconds() / 86400.0)
+                open_ages.append(age)
         elif state == "CLOSED" and closed_dt:
             if is_created_in_window:
                 closed_in_window += 1
             if created_dt:
-                close_times.append((closed_dt - created_dt).total_seconds() / 86400.0)
+                # Ensure non-negative duration
+                duration = max(0.0, (closed_dt - created_dt).total_seconds() / 86400.0)
+                close_times.append(duration)
 
     issue_closure_ratio = (float(closed_in_window) / float(opened_in_window)) if opened_in_window > 0 else 0.0
     
@@ -234,12 +244,21 @@ def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivi
     )
 
 
-def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestActivityMetrics:
+def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivityMetrics:
     try:
-        prs = fetch_recent_pull_requests(owner, repo, days=days) or []
+        issues = fetch_recent_issues(owner, repo, days=days) or []
     except Exception:
-        prs = []
+        issues = []
+    return _compute_issue_metrics(issues, owner, repo, days)
 
+
+def _compute_pr_metrics(
+    prs: List[Dict[str, Any]],
+    owner: str,
+    repo: str,
+    days: int
+) -> PullRequestActivityMetrics:
+    """Pure function to compute PR metrics from a list of PRs."""
     now = datetime.now(timezone.utc)
     prs_in_window = 0
     merged_in_window = 0
@@ -258,7 +277,8 @@ def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestAct
         if state == "OPEN":
             open_prs += 1
             if created_dt:
-                open_ages.append((now - created_dt).total_seconds() / 86400.0)
+                age = max(0.0, (now - created_dt).total_seconds() / 86400.0)
+                open_ages.append(age)
 
         if state == "MERGED" and created_dt and merged_dt:
             merged_in_window += 1
@@ -287,9 +307,15 @@ def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestAct
     )
 
 
-# -------------------------------------------------------------------------
+def compute_pr_activity(owner: str, repo: str, days: int = 90) -> PullRequestActivityMetrics:
+    try:
+        prs = fetch_recent_pull_requests(owner, repo, days=days) or []
+    except Exception:
+        prs = []
+    return _compute_pr_metrics(prs, owner, repo, days)
+
+
 # 4. Scoring Functions
-# -------------------------------------------------------------------------
 
 def score_commit_activity(m: CommitActivityMetrics) -> float:
     if m.total_commits == 0:
@@ -340,16 +366,26 @@ def activity_score_to_100(breakdown: ActivityScoreBreakdown) -> int:
     return round(breakdown.overall * 100)
 
 
-# -------------------------------------------------------------------------
 # 5. Main Analysis Function
-# -------------------------------------------------------------------------
+
+from typing import Union
 
 def analyze_activity(
-    owner: str,
-    repo: str,
+    snapshot_or_owner: Union[RepoSnapshot, str],
+    repo: Optional[str] = None,
     days: int = DEFAULT_ACTIVITY_DAYS,
 ) -> ActivityCoreResult:
     """CHAOSS 기반 활동성 분석 (Pure Python)."""
+    if hasattr(snapshot_or_owner, "owner") and hasattr(snapshot_or_owner, "repo"):
+        # It's a RepoSnapshot
+        owner = snapshot_or_owner.owner
+        repo = snapshot_or_owner.repo
+    else:
+        # It's an owner string
+        owner = str(snapshot_or_owner)
+        if repo is None:
+            raise ValueError("Repo argument is required when passing owner as string")
+
     commit = compute_commit_activity(owner, repo, days=days)
     issue = compute_issue_activity(owner, repo, days=days)
     pr = compute_pr_activity(owner, repo, days=days)
@@ -365,4 +401,10 @@ def analyze_activity(
         days_since_last_commit=commit.days_since_last_commit,
         total_commits_in_window=commit.total_commits,
         unique_authors=commit.unique_authors,
+        # 상세 메트릭 (UX 개선용)
+        issue_close_rate=issue.issue_closure_ratio,
+        median_pr_merge_days=pr.median_time_to_merge_days,
+        median_issue_close_days=issue.median_time_to_close_days,
+        open_issues_count=issue.open_issues,
+        open_prs_count=pr.open_prs,
     )

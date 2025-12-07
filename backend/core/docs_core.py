@@ -1,4 +1,4 @@
-"""문서 분석 Core 레이어 - README 구조 분석 및 8-카테고리 스코어 (Pure Python)."""
+"""문서 분석 Core 레이어 - README 구조 분석 및 8-카테고리 스코어 (Pure Python)"""
 from __future__ import annotations
 
 import re
@@ -8,14 +8,12 @@ from dataclasses import dataclass, asdict
 from enum import Enum
 from typing import Dict, List, Optional, Tuple, Any
 
-from .models import DocsCoreResult
+from .models import DocsCoreResult, RepoSnapshot
 
 logger = logging.getLogger(__name__)
 
 
-# -------------------------------------------------------------------------
 # 1. Data Structures
-# -------------------------------------------------------------------------
 
 class ReadmeCategory(Enum):
     WHAT = "WHAT"
@@ -50,11 +48,15 @@ class SectionClassification:
     score: float
 
 
-# -------------------------------------------------------------------------
 # 2. Constants & Keywords
-# -------------------------------------------------------------------------
 
 REQUIRED_SECTIONS = ["WHAT", "WHY", "HOW", "CONTRIBUTING", "REFERENCES", "WHEN", "WHO", "OTHER"]
+
+ESSENTIAL_CATEGORIES = {ReadmeCategory.WHAT, ReadmeCategory.WHY, ReadmeCategory.HOW, ReadmeCategory.CONTRIBUTING}
+OPTIONAL_CATEGORIES = {ReadmeCategory.WHO, ReadmeCategory.WHEN, ReadmeCategory.REFERENCES, ReadmeCategory.OTHER}
+
+ESSENTIAL_WEIGHT = 0.7
+OPTIONAL_WEIGHT = 0.3
 
 WEIGHT_HEADING = 3.0
 WEIGHT_BODY = 1.5
@@ -138,13 +140,17 @@ BODY_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
     ReadmeCategory.OTHER: [],
 }
 
+MARKETING_KEYWORDS = [
+    "revolutionary", "game-changing", "world's best", "best-in-class", "award-winning",
+    "cutting-edge", "state-of-the-art", "unrivaled", "unmatched", "superior",
+    "혁신적인", "세계 최고", "최고의", "혁명적", "압도적", "최첨단", "수상 경력",
+]
 
-# -------------------------------------------------------------------------
+
 # 3. Helper Functions
-# -------------------------------------------------------------------------
 
 def split_readme_into_sections(markdown_text: str) -> List[ReadmeSection]:
-    """마크다운 텍스트를 헤딩 기준으로 섹션 분리."""
+    """마크다운 텍스트를 헤딩 기준으로 섹션 분리"""
     lines = markdown_text.splitlines()
     sections: List[ReadmeSection] = []
     
@@ -184,7 +190,7 @@ def split_readme_into_sections(markdown_text: str) -> List[ReadmeSection]:
 
 
 def _classify_section_rule_based(section: ReadmeSection) -> SectionClassification:
-    """헤딩/본문 키워드 기반 섹션 분류."""
+    """헤딩/본문 키워드 기반 섹션 분류"""
     heading = (section.heading or "").strip()
     body = section.content or ""
 
@@ -235,6 +241,11 @@ def _classify_section_rule_based(section: ReadmeSection) -> SectionClassificatio
             best_cat = cat
 
     return SectionClassification(category=best_cat, score=min(best_raw_score / 10.0, 1.0))
+
+
+
+
+
 
 
 def _apply_last_section_bias(category: ReadmeCategory, section: ReadmeSection) -> ReadmeCategory:
@@ -292,38 +303,113 @@ def _compute_documentation_score(
     grouped: Dict[ReadmeCategory, List[ReadmeSection]],
     total_chars: int,
 ) -> int:
-    """문서 품질 점수 (0~100)."""
+    """문서 품질 점수 (0~100) - 가중치 및 구조 보너스 적용."""
     if total_chars <= 0:
         return 0
 
-    present_categories = 0
-    coverage_total = 0.0
+    essential_cov = 0.0
+    optional_cov = 0.0
 
-    for cat, sections in grouped.items():
-        if not sections:
+    # 1. Coverage Score Calculation (Presence-based)
+    # 텍스트 비중(fraction) 사용 시 카테고리 수로 나눌 때 점수가 너무 낮아짐
+    # "존재 여부(Presence)" 기준으로 가중치 적용
+    
+    for cat in ReadmeCategory:
+        sections = grouped.get(cat, [])
+        is_present = 1.0 if sections else 0.0
+        
+        if cat in ESSENTIAL_CATEGORIES:
+            essential_cov += is_present
+        else:
+            optional_cov += is_present
+
+    # 카테고리 수로 Normalize (Presence Ratio)
+    if ESSENTIAL_CATEGORIES:
+        essential_cov /= float(len(ESSENTIAL_CATEGORIES))
+    if OPTIONAL_CATEGORIES:
+        optional_cov /= float(len(OPTIONAL_CATEGORIES))
+
+    # Base Score (Weighted)
+    base_score = (
+        ESSENTIAL_WEIGHT * essential_cov +
+        OPTIONAL_WEIGHT * optional_cov
+    ) * 100.0
+
+    # 2. Structure Bonus Calculation
+    bonus = 0.0
+    target_sections = grouped.get(ReadmeCategory.HOW, []) + grouped.get(ReadmeCategory.WHAT, [])
+    
+    has_code_block = False
+    has_usage_keyword = False
+    
+    for sec in target_sections:
+        content_lower = sec.content.lower()
+        heading_lower = (sec.heading or "").lower()
+        
+        if "```" in sec.content:
+            has_code_block = True
+        
+        usage_keywords = ["quickstart", "usage", "example", "예제", "사용 예시", "사용법", "시작하기"]
+        if any(k in content_lower or k in heading_lower for k in usage_keywords):
+            has_usage_keyword = True
+
+    if has_code_block and has_usage_keyword:
+        bonus = 10.0
+    elif has_code_block:
+        bonus = 5.0
+    
+    final_score = base_score + bonus
+    
+    # Scale adjustment: 커버리지가 낮으면 점수가 너무 낮게 나올 수 있음
+    # 필수 카테고리 존재 시 기본 점수 보장 로직 추가 가능하나, 현재 요구사항에 따라 단순 클램핑만 수행
+    
+    # 커버리지 기반 점수는 텍스트 양이 적으면 매우 낮게 나올 수 있음
+    # 카테고리 존재 여부 자체에 대한 기본 점수 부여가 일반적임
+    # 요구사항("필수/옵션 coverage 기준으로만 계산")을 따르되, 커버리지 값이 너무 작아지는 것 방지 위해 Normalize 방식 유지
+    
+    return max(0, min(int(round(final_score)), 100))
+
+
+def _calculate_marketing_ratio(readme_content: str) -> float:
+    """마케팅 텍스트 비중 계산 (0~1)"""
+    if not readme_content:
+        return 0.0
+        
+    sentences = re.split(r'[.!?\n]', readme_content)
+    total_sentences = len([s for s in sentences if s.strip()])
+    if total_sentences == 0:
+        return 0.0
+        
+    marketing_sentences = 0
+    for sentence in sentences:
+        if not sentence.strip():
             continue
-        present_categories += 1
-        coverage_total += min(1.0, sum(len(sec.content) for sec in sections) / float(total_chars))
+        sentence_lower = sentence.lower()
+        if any(kw in sentence_lower for kw in MARKETING_KEYWORDS):
+            marketing_sentences += 1
+            
+    return min(1.0, marketing_sentences / float(total_sentences))
 
-    diversity = present_categories / float(len(ReadmeCategory))
-    score = int(round((coverage_total * 60.0) + (diversity * 40.0)))
-    return max(0, min(score, 100))
 
-
-# -------------------------------------------------------------------------
 # 4. Main Analysis Function
-# -------------------------------------------------------------------------
 
-def analyze_documentation(readme_content: Optional[str]) -> DocsCoreResult:
-    """README 기반 문서 품질 분석 (Pure Python)."""
+def analyze_documentation(
+    readme_content: Optional[str],
+    custom_required_sections: Optional[List[str]] = None
+) -> DocsCoreResult:
+    """README 기반 문서 품질 분석 (Pure Python)"""
+    
+    target_required = custom_required_sections if custom_required_sections else REQUIRED_SECTIONS
+    
     if not readme_content or not readme_content.strip():
         return DocsCoreResult(
             readme_present=False,
             readme_word_count=0,
             category_scores={},
             total_score=0,
-            missing_sections=REQUIRED_SECTIONS.copy(),
+            missing_sections=target_required.copy(),
             present_sections=[],
+            marketing_ratio=0.0,
         )
 
     sections = split_readme_into_sections(readme_content)
@@ -352,11 +438,16 @@ def analyze_documentation(readme_content: Optional[str]) -> DocsCoreResult:
         info = _summarize_category_sections(cat, grouped.get(cat, []), total_chars)
         cat_infos[cat.value] = asdict(info)
 
-    # 5) 전체 점수
+    # 5) 전체 점수 및 마케팅 비율
     total_score = _compute_documentation_score(grouped, total_chars)
+    marketing_ratio = _calculate_marketing_ratio(readme_content)
 
     present_sections = [k for k, v in cat_infos.items() if v["present"]]
-    missing_sections = [k for k in REQUIRED_SECTIONS if k not in present_sections]
+    
+    # Missing Sections 계산 (Custom Rule 적용)
+    # Note: ReadmeCategory Enum 값과 target_required 문자열 일치해야 함
+    # target_required가 ["WHAT", "HOW"] 형태라고 가정
+    missing_sections = [req for req in target_required if req not in present_sections]
 
     return DocsCoreResult(
         readme_present=True,
@@ -365,4 +456,13 @@ def analyze_documentation(readme_content: Optional[str]) -> DocsCoreResult:
         total_score=total_score,
         missing_sections=missing_sections,
         present_sections=present_sections,
+        marketing_ratio=marketing_ratio,
     )
+
+
+def analyze_docs(
+    snapshot: "RepoSnapshot",
+    custom_required_sections: Optional[List[str]] = None
+) -> DocsCoreResult:
+    """Wrapper for analyze_documentation using RepoSnapshot"""
+    return analyze_documentation(snapshot.readme_content, custom_required_sections)

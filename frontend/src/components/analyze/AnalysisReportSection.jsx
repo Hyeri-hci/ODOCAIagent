@@ -1,19 +1,17 @@
 import React, { useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   ChevronDown,
   ChevronUp,
   Star,
   GitFork,
   Users,
-  Shield,
-  Code,
   Activity,
   TrendingUp,
   CheckCircle,
   AlertTriangle,
   FileText,
   Search,
-  Clock,
   ArrowRight,
 } from "lucide-react";
 import { formatNumber } from "../../utils/formatNumber";
@@ -62,7 +60,11 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
 
   // 안전한 데이터 접근
   if (!analysisResult || !analysisResult.summary) {
-    return <div className="text-center text-gray-500 py-8">분석 결과를 불러오는 중...</div>;
+    return (
+      <div className="text-center text-gray-500 py-8">
+        분석 결과를 불러오는 중...
+      </div>
+    );
   }
 
   const statusConfig = getStatusConfig(analysisResult.summary.score);
@@ -77,8 +79,12 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
               <div className="absolute inset-0 border-4 border-blue-200 rounded-full"></div>
               <div className="absolute inset-0 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
             </div>
-            <p className="text-lg font-semibold text-gray-900 mb-1">분석 중입니다</p>
-            <p className="text-sm text-gray-600">새로운 프로젝트를 분석하고 있습니다...</p>
+            <p className="text-lg font-semibold text-gray-900 mb-1">
+              분석 중입니다
+            </p>
+            <p className="text-sm text-gray-600">
+              새로운 프로젝트를 분석하고 있습니다...
+            </p>
           </div>
         </div>
       )}
@@ -91,7 +97,7 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
           {/* 왼쪽: 점수 카드 */}
           <div className="lg:col-span-4">
-            <div className="bg-gradient-to-br from-[#4F46E5] to-[#6366F1] rounded-2xl p-8 h-full shadow-xl">
+            <div className="bg-indigo-600 rounded-2xl p-8 h-full shadow-xl">
               <div className="flex items-center gap-3 mb-6">
                 <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
                   <TrendingUp className="w-6 h-6 text-white" />
@@ -122,9 +128,7 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
               <div
                 className={`${statusConfig.bgColor} ${statusConfig.borderColor} border-2 px-4 py-3 rounded-xl flex items-center gap-2 justify-center`}
               >
-                <CheckCircle
-                  className={`w-5 h-5 ${statusConfig.textColor}`}
-                />
+                <CheckCircle className={`w-5 h-5 ${statusConfig.textColor}`} />
                 <span className={`${statusConfig.textColor} font-bold`}>
                   {statusConfig.label}
                 </span>
@@ -166,21 +170,29 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
             {/* Metric Bars */}
             <div className="space-y-5">
               <MetricBar
-                icon={Shield}
-                label="보안 점수"
-                value={85}
+                icon={FileText}
+                label="문서 품질"
+                value={
+                  analysisResult.technicalDetails?.documentationQuality ||
+                  analysisResult.rawAnalysis?.documentation_quality ||
+                  0
+                }
                 color="green"
               />
               <MetricBar
-                icon={Code}
-                label="코드 품질"
-                value={92}
+                icon={Activity}
+                label="활동성/유지보수"
+                value={
+                  analysisResult.technicalDetails?.activityMaintainability ||
+                  analysisResult.rawAnalysis?.activity_maintainability ||
+                  0
+                }
                 color="blue"
               />
               <MetricBar
-                icon={Activity}
-                label="커뮤니티 활성도"
-                value={78}
+                icon={Users}
+                label="온보딩 용이성"
+                value={analysisResult.rawAnalysis?.onboarding_score || 0}
                 color="purple"
               />
             </div>
@@ -195,21 +207,30 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
         isExpanded={expandedSections.projectSummary}
         onToggle={() => toggleSection("projectSummary")}
       >
-        <div className="text-sm text-gray-700 leading-relaxed">
-          {analysisResult.projectSummary || 
-           `이 저장소는 ${analysisResult.technicalDetails.framework} 프레임워크를 사용하며, 
-           ${analysisResult.technicalDetails.languages.join(", ")} 언어로 개발되었습니다. 
-           현재 ${analysisResult.technicalDetails.contributors}명의 기여자가 활동 중이며, 
-           테스트 커버리지는 ${analysisResult.technicalDetails.testCoverage}%입니다. 
-           전반적으로 ${statusConfig.label} 상태의 프로젝트입니다.`}
+        <div className="prose prose-sm max-w-none text-gray-700">
+          <ReactMarkdown
+            components={{
+              h1: ({ children }) => <h3 className="text-lg font-bold text-gray-900 mb-3">{children}</h3>,
+              h2: ({ children }) => <h4 className="text-base font-bold text-gray-900 mb-2 mt-4">{children}</h4>,
+              h3: ({ children }) => <h5 className="text-sm font-bold text-gray-900 mb-2 mt-3">{children}</h5>,
+              p: ({ children }) => <p className="text-sm text-gray-700 mb-3 leading-relaxed">{children}</p>,
+              ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
+              ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
+              li: ({ children }) => <li className="text-sm text-gray-700">{children}</li>,
+              strong: ({ children }) => <strong className="font-bold text-gray-900">{children}</strong>,
+            }}
+          >
+            {analysisResult.projectSummary ||
+              `이 저장소는 ${analysisResult.technicalDetails.framework || "알 수 없는"} 프레임워크를 사용하며, ${analysisResult.technicalDetails.contributors || 0}명의 기여자가 활동 중입니다. 전반적으로 ${statusConfig.label === "Excellent" ? "훌륭한" : statusConfig.label === "Good" ? "양호한" : "개선이 필요한"} 상태의 프로젝트입니다.`}
+          </ReactMarkdown>
         </div>
       </CollapsibleCard>
 
-      {/* Detected Risks */}
+      {/* 발견된 위험 요소 */}
       <CollapsibleCard
-        title="Detected Risks"
+        title="발견된 위험 요소"
         icon={<AlertTriangle className="w-5 h-5 text-orange-500" />}
-        subtitle={`${analysisResult.risks?.length || 0} issues found`}
+        subtitle={`${analysisResult.risks?.length || 0}개 발견`}
         isExpanded={expandedSections.risks}
         onToggle={() => toggleSection("risks")}
         headerBg="bg-gradient-to-r from-yellow-50 to-orange-50"
@@ -220,16 +241,18 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
               <RiskItem key={index} risk={risk} />
             ))
           ) : (
-            <p className="text-center text-gray-500 py-4">위험 요소가 발견되지 않았습니다</p>
+            <p className="text-center text-gray-500 py-4">
+              위험 요소가 발견되지 않았습니다
+            </p>
           )}
         </div>
       </CollapsibleCard>
 
-      {/* Recommended Contributions */}
+      {/* 추천 기여 작업 */}
       <CollapsibleCard
-        title="Recommended Contributions"
+        title="추천 기여 작업"
         icon={<CheckCircle className="w-5 h-5 text-green-500" />}
-        subtitle={`${analysisResult.recommendations.length} tasks available`}
+        subtitle={`${analysisResult.recommendations.length}개 작업 추천`}
         isExpanded={expandedSections.contributions}
         onToggle={() => toggleSection("contributions")}
         headerBg="bg-gradient-to-r from-green-50 to-emerald-50"
@@ -241,22 +264,23 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
         </div>
       </CollapsibleCard>
 
-      {/* Related Projects */}
-      {analysisResult.relatedProjects && analysisResult.relatedProjects.length > 0 && (
-        <CollapsibleCard
-          title="Related Projects"
-          icon={<Search className="w-5 h-5 text-blue-600" />}
-          subtitle="Explore similar repositories you might be interested in"
-          isExpanded={expandedSections.relatedProjects}
-          onToggle={() => toggleSection("relatedProjects")}
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {analysisResult.relatedProjects.map((project, index) => (
-              <RelatedProjectCard key={index} project={project} />
-            ))}
-          </div>
-        </CollapsibleCard>
-      )}
+      {/* 관련 프로젝트 */}
+      {analysisResult.relatedProjects &&
+        analysisResult.relatedProjects.length > 0 && (
+          <CollapsibleCard
+            title="관련 프로젝트"
+            icon={<Search className="w-5 h-5 text-blue-600" />}
+            subtitle="관심 있을 만한 유사 저장소를 확인해보세요"
+            isExpanded={expandedSections.relatedProjects}
+            onToggle={() => toggleSection("relatedProjects")}
+          >
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {analysisResult.relatedProjects.map((project, index) => (
+                <RelatedProjectCard key={index} project={project} />
+              ))}
+            </div>
+          </CollapsibleCard>
+        )}
     </div>
   );
 };
@@ -292,12 +316,8 @@ const CollapsibleCard = ({
           <ChevronDown className="w-6 h-6 text-gray-600" />
         )}
       </button>
-      
-      {isExpanded && (
-        <div className="p-6">
-          {children}
-        </div>
-      )}
+
+      {isExpanded && <div className="p-6">{children}</div>}
     </div>
   );
 };
@@ -328,7 +348,7 @@ const MetricBar = ({ icon: Icon, label, value, color }) => {
           <Icon className={`w-5 h-5 ${config.text}`} />
           <span className="font-bold text-gray-900">{label}</span>
         </div>
-        <span className={`text-lg font-bold ${config.text}`}>{value}%</span>
+        <span className={`text-lg font-bold ${config.text}`}>{value}점</span>
       </div>
       <div className="h-3 bg-gray-100 rounded-full overflow-hidden">
         <div
@@ -363,7 +383,9 @@ const RiskItem = ({ risk }) => {
     return configs[severity] || configs.medium;
   };
 
-  const severityConfig = getSeverityConfig(risk.severity || risk.impact || "medium");
+  const severityConfig = getSeverityConfig(
+    risk.severity || risk.impact || "medium"
+  );
 
   return (
     <div
@@ -374,10 +396,6 @@ const RiskItem = ({ risk }) => {
           className={`text-xs px-3 py-1 rounded-full font-bold ${severityConfig.badgeClass}`}
         >
           {severityConfig.label}
-        </span>
-        <span className="text-xs text-gray-500 flex items-center gap-1">
-          <Clock className="w-3 h-3" />
-          2 days ago
         </span>
       </div>
       <p className="text-sm font-medium text-gray-900 mb-2">
@@ -397,17 +415,17 @@ const ContributionItem = ({ recommendation }) => {
       easy: {
         containerClass: "border-green-500 bg-green-50",
         badgeClass: "bg-green-500 text-white",
-        label: "EASY",
+        label: "쉬움",
       },
       medium: {
         containerClass: "border-yellow-500 bg-yellow-50",
         badgeClass: "bg-yellow-500 text-white",
-        label: "MEDIUM",
+        label: "보통",
       },
       hard: {
         containerClass: "border-red-500 bg-red-50",
         badgeClass: "bg-red-500 text-white",
-        label: "HARD",
+        label: "어려움",
       },
     };
     return configs[difficulty] || configs.medium;
@@ -425,19 +443,15 @@ const ContributionItem = ({ recommendation }) => {
         >
           {priorityConfig.label}
         </span>
-        <span className="text-xs text-gray-500 flex items-center gap-1">
-          <Clock className="w-3 h-3" />
-          {recommendation.estimatedTime}
-        </span>
       </div>
       <h4 className="text-sm font-bold text-gray-900 mb-1">
         {recommendation.title}
       </h4>
-      <p className="text-xs text-gray-600">{recommendation.description}</p>
-      
-      {recommendation.tags && (
-        <div className="flex flex-wrap gap-2 mt-2">
-          {recommendation.tags.map((tag) => (
+      <p className="text-xs text-gray-600 mb-2">{recommendation.description}</p>
+
+      {recommendation.tags && recommendation.tags.length > 0 && (
+        <div className="flex flex-wrap gap-2 mb-2">
+          {recommendation.tags.slice(0, 3).map((tag) => (
             <span
               key={tag}
               className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded"
@@ -447,6 +461,21 @@ const ContributionItem = ({ recommendation }) => {
           ))}
         </div>
       )}
+
+      {/* GitHub 이슈 링크 */}
+      {recommendation.url && (
+        <a
+          href={recommendation.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 font-medium mt-1"
+        >
+          <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.012 8.012 0 0 0 16 8c0-4.42-3.58-8-8-8z"/>
+          </svg>
+          GitHub에서 보기 {recommendation.issueNumber ? `#${recommendation.issueNumber}` : ""}
+        </a>
+      )}
     </div>
   );
 };
@@ -454,7 +483,7 @@ const ContributionItem = ({ recommendation }) => {
 // 관련 프로젝트 카드
 const RelatedProjectCard = ({ project }) => {
   const healthScore = project.score || 75;
-  
+
   const getScoreConfig = (score) => {
     if (score >= 80)
       return {
@@ -524,7 +553,9 @@ const RelatedProjectCard = ({ project }) => {
           </div>
         )}
         {project.match && (
-          <span className="font-semibold text-gray-700">{project.match}% match</span>
+          <span className="font-semibold text-gray-700">
+            {project.match}% match
+          </span>
         )}
       </div>
 

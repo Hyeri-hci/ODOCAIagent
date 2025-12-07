@@ -1,6 +1,6 @@
 """DiagnosisAgent 서브그래프."""
-from .graph import (
-    build_diagnosis_agent_graph,
+from .graph_legacy import (
+    build_diagnosis_graph,
     get_diagnosis_agent,
     fetch_repo_data_node,
     run_diagnosis_core_node,
@@ -8,7 +8,7 @@ from .graph import (
 )
 
 __all__ = [
-    "build_diagnosis_agent_graph",
+    "build_diagnosis_graph",
     "get_diagnosis_agent",
     "fetch_repo_data_node",
     "run_diagnosis_core_node",
