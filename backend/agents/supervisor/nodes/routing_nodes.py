@@ -125,7 +125,12 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
             next_node = "run_diagnosis_node"
             reason = f"Intent is diagnose for {state.owner}/{state.repo}, cache disabled"
     elif intent == "onboard":
-        if state.use_cache:
+        if state.chat_message and (state.diagnosis_result or state.chat_context):
+            next_node = "chat_response_node"
+            reason = "Intent is onboard with chat message, routing to chat response"
+            if user_exp == "beginner":
+                adjustments.append("beginner_friendly_plan")
+        elif state.use_cache:
             cached = _check_cache(state.owner, state.repo)
             if cached:
                 next_node = "use_cached_result_node"

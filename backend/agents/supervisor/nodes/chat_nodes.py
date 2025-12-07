@@ -65,6 +65,8 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
 
         if intent == "explain" and (context or diagnosis):
             system_prompt = _build_explain_prompt(context, diagnosis)
+        elif intent == "onboard" and (context or diagnosis):
+            system_prompt = _build_onboard_prompt(context, diagnosis, state.candidate_issues)
         else:
             system_prompt = _build_chat_prompt(context, diagnosis)
 
@@ -132,6 +134,37 @@ def _build_chat_prompt(context: Dict, diagnosis: Dict) -> str:
             return f"{ODOC_SYSTEM_CONTEXT}{result_info}\n\n사용자 질문에 답변하세요."
 
     return f"{ODOC_SYSTEM_CONTEXT}\n사용자 질문에 답변하세요."
+
+
+def _build_onboard_prompt(context: Dict, diagnosis: Dict, candidate_issues: list = None) -> str:
+    """온보딩/기여 관련 프롬프트."""
+    repo = diagnosis.get("repo_id", context.get("repo_id", "알 수 없는 저장소"))
+    onboard_score = diagnosis.get("onboarding_score", context.get("onboarding_score", "N/A"))
+    docs = diagnosis.get("documentation_quality", context.get("documentation_quality", "N/A"))
+    
+    issues_info = ""
+    if candidate_issues and len(candidate_issues) > 0:
+        issues_info = "\n\n[추천 이슈 목록]\n"
+        for i, issue in enumerate(candidate_issues[:5], 1):
+            title = issue.get("title", "제목 없음")
+            url = issue.get("html_url", issue.get("url", ""))
+            labels = ", ".join(issue.get("labels", []))
+            issues_info += f"{i}. {title}"
+            if labels:
+                issues_info += f" (라벨: {labels})"
+            if url:
+                issues_info += f"\n   링크: {url}"
+            issues_info += "\n"
+    
+    return f"""{ODOC_SYSTEM_CONTEXT}
+
+[현재 저장소: {repo}]
+- 온보딩 점수: {onboard_score}점
+- 문서 품질: {docs}점
+{issues_info}
+오픈소스 기여를 처음 시작하는 초보자에게 도움이 되는 정보를 제공하세요.
+추천 이슈가 있으면 해당 이슈를 소개하고, 기여 시작 방법을 안내하세요.
+CONTRIBUTING.md 파일이나 프로젝트 문서를 먼저 읽도록 권장하세요."""
 
 
 def _generate_fallback(
