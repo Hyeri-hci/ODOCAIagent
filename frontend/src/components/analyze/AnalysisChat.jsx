@@ -2,7 +2,11 @@ import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { Send } from "lucide-react";
 import AnalysisReportSection from "./AnalysisReportSection";
-import { sendChatMessage, analyzeRepository } from "../../lib/api";
+import OnboardingPlanSection from "./OnboardingPlanSection";
+import { sendChatMessage, sendChatMessageStream, analyzeRepository } from "../../lib/api";
+
+// 스트리밍 모드 설정 (true: SSE 스트리밍, false: 기존 REST API)
+const USE_STREAM_MODE = true;
 
 const AnalysisChat = ({
   userProfile,
@@ -21,6 +25,9 @@ const AnalysisChat = ({
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [streamingMessage, setStreamingMessage] = useState(""); // 스트리밍 중인 메시지
+  const [isStreaming, setIsStreaming] = useState(false); // 스트리밍 중 여부
+  const streamCancelRef = useRef(null); // 스트림 취소 함수 참조
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -33,7 +40,16 @@ const AnalysisChat = ({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, streamingMessage]);
+  
+  // 컴포넌트 언마운트 시 스트림 취소
+  useEffect(() => {
+    return () => {
+      if (streamCancelRef.current) {
+        streamCancelRef.current();
+      }
+    };
+  }, []);
 
   // GitHub URL 감지 함수
   const detectGitHubUrl = (message) => {
@@ -132,6 +148,8 @@ const AnalysisChat = ({
       },
       relatedProjects: [],
       rawAnalysis: analysis,
+      // 온보딩 플랜 (API 응답에서 가져오기)
+      onboardingPlan: apiResponse.onboarding_plan || analysis.onboarding_plan || null,
     };
   };
 
@@ -443,9 +461,79 @@ const AnalysisChat = ({
       return "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.";
     }
   };
+  
+  // 스트리밍 AI 응답 요청
+  const fetchAIResponseStream = (userMessage) => {
+    // 채팅 히스토리 구성 (초기 메시지 제외)
+    const conversationHistory = messages
+      .filter((msg) => msg.id !== "initial")
+      .map((msg) => ({
+        type: msg.role === "assistant" ? "assistant" : "user",
+        content: msg.content,
+      }));
+    
+    const context = {
+      repoUrl: userProfile?.repositoryUrl,
+      analysisResult: analysisResult
+        ? {
+            health_score: analysisResult.summary?.score,
+            documentation_quality:
+              analysisResult.technicalDetails?.documentationQuality,
+            activity_maintainability:
+              analysisResult.technicalDetails?.activityMaintainability,
+            stars: analysisResult.technicalDetails?.stars,
+            forks: analysisResult.technicalDetails?.forks,
+          }
+        : null,
+    };
+    
+    setStreamingMessage("");
+    setIsStreaming(true);
+    
+    // 스트리밍 시작
+    streamCancelRef.current = sendChatMessageStream(
+      userMessage,
+      context,
+      conversationHistory,
+      // onToken 콜백
+      (token) => {
+        setStreamingMessage((prev) => prev + token);
+      },
+      // onComplete 콜백
+      (fullMessage, isFallback) => {
+        setIsStreaming(false);
+        setStreamingMessage("");
+        
+        const aiResponse = {
+          id: `ai_${Date.now()}`,
+          role: "assistant",
+          content: fullMessage,
+          timestamp: new Date(),
+          isFallback,
+        };
+        setMessages((prev) => [...prev, aiResponse]);
+        setIsTyping(false);
+      },
+      // onError 콜백
+      (error) => {
+        setIsStreaming(false);
+        setStreamingMessage("");
+        
+        const errorResponse = {
+          id: `ai_${Date.now()}`,
+          role: "assistant",
+          content: "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorResponse]);
+        setIsTyping(false);
+        console.error("Streaming error:", error);
+      }
+    );
+  };
 
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isAnalyzing) return;
+    if (!inputValue.trim() || isAnalyzing || isStreaming) return;
 
     const userMessageContent = inputValue;
     const userMessage = {
@@ -514,30 +602,36 @@ const AnalysisChat = ({
         setIsAnalyzing(false);
       }
     } else {
-      // 일반 질문 처리 - 실제 LLM API 호출
+      // 일반 질문 처리
       setIsTyping(true);
 
-      try {
-        const aiResponseContent = await fetchAIResponse(userMessageContent);
-        const aiResponse = {
-          id: `ai_${Date.now()}`,
-          role: "assistant",
-          content: aiResponseContent,
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, aiResponse]);
-      } catch (error) {
-        console.error("AI 응답 실패:", error);
-        const errorResponse = {
-          id: `ai_${Date.now()}`,
-          role: "assistant",
-          content:
-            "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, errorResponse]);
-      } finally {
-        setIsTyping(false);
+      if (USE_STREAM_MODE) {
+        // 스트리밍 모드: SSE로 토큰 단위 응답 받기
+        fetchAIResponseStream(userMessageContent);
+      } else {
+        // 기존 모드: REST API로 전체 응답 받기
+        try {
+          const aiResponseContent = await fetchAIResponse(userMessageContent);
+          const aiResponse = {
+            id: `ai_${Date.now()}`,
+            role: "assistant",
+            content: aiResponseContent,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, aiResponse]);
+        } catch (error) {
+          console.error("AI 응답 실패:", error);
+          const errorResponse = {
+            id: `ai_${Date.now()}`,
+            role: "assistant",
+            content:
+              "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, errorResponse]);
+        } finally {
+          setIsTyping(false);
+        }
       }
     }
   };
@@ -569,7 +663,23 @@ const AnalysisChat = ({
                 <ChatMessage key={message.id} message={message} />
               ))}
 
-              {isTyping && (
+              {/* 스트리밍 중인 메시지 표시 */}
+              {isStreaming && streamingMessage && (
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                    <span className="text-white font-bold text-sm">ODOC</span>
+                  </div>
+                  <div className="max-w-[85%] bg-gray-100 rounded-2xl rounded-tl-none px-5 py-3">
+                    <div className="prose prose-sm max-w-none text-gray-800">
+                      <ReactMarkdown>{streamingMessage}</ReactMarkdown>
+                      {/* 타이핑 커서 효과 */}
+                      <span className="inline-block w-2 h-4 bg-blue-600 ml-1 animate-pulse"></span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {isTyping && !isStreaming && (
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
                     <span className="text-white font-bold text-sm">ODOC</span>
@@ -595,6 +705,12 @@ const AnalysisChat = ({
                   분석 중입니다...
                 </div>
               )}
+              {isStreaming && (
+                <div className="mb-3 text-sm text-green-600 font-semibold flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin"></div>
+                  AI가 응답 중입니다...
+                </div>
+              )}
               <div className="flex gap-3">
                 <input
                   type="text"
@@ -602,12 +718,12 @@ const AnalysisChat = ({
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder="궁금한 점을 물어보세요... (GitHub URL 입력 시 바로 분석)"
-                  disabled={isAnalyzing}
+                  disabled={isAnalyzing || isStreaming}
                   className="flex-1 px-5 py-3 border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition-all disabled:bg-gray-100"
                 />
                 <button
                   onClick={handleSendMessage}
-                  disabled={!inputValue.trim() || isTyping || isAnalyzing}
+                  disabled={!inputValue.trim() || isTyping || isAnalyzing || isStreaming}
                   className="bg-blue-600 text-white p-3 rounded-2xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105"
                 >
                   <Send className="w-5 h-5" />
@@ -640,6 +756,17 @@ const AnalysisChat = ({
               analysisResult={analysisResult}
               isLoading={isAnalyzing}
             />
+            
+            {/* 온보딩 플랜 섹션 */}
+            {analysisResult?.onboardingPlan && (
+              <OnboardingPlanSection
+                plan={analysisResult.onboardingPlan}
+                userProfile={userProfile}
+                onTaskToggle={(week, taskIdx, completed) => {
+                  console.log(`Task toggled: Week ${week}, Task ${taskIdx}, Completed: ${completed}`);
+                }}
+              />
+            )}
           </div>
         </div>
       </div>

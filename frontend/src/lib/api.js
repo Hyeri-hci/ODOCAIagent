@@ -443,4 +443,131 @@ function getMockChatResponse(message, context) {
   );
 }
 
+/**
+ * AI 어시스턴트와 스트리밍 채팅
+ * 타이핑 효과를 위해 SSE로 토큰 단위 응답을 받습니다.
+ * 
+ * @param {string} message - 사용자 메시지
+ * @param {Object} context - 분석 컨텍스트
+ * @param {Array} conversationHistory - 이전 대화 기록
+ * @param {Function} onToken - 토큰 수신 콜백 (token: string) => void
+ * @param {Function} onComplete - 완료 콜백 (fullMessage: string, isFallback: boolean) => void
+ * @param {Function} onError - 에러 콜백 (error: string) => void
+ * @returns {Function} 스트림 취소 함수
+ */
+export const sendChatMessageStream = (
+  message,
+  context = {},
+  conversationHistory = [],
+  onToken,
+  onComplete,
+  onError
+) => {
+  // Mock 모드에서는 타이핑 시뮬레이션
+  if (MOCK_MODE) {
+    const mockResponse = getMockChatResponse(message, context);
+    let fullMessage = "";
+    let index = 0;
+    
+    const intervalId = setInterval(() => {
+      if (index < mockResponse.length) {
+        // 단어 단위로 전송
+        let endIndex = mockResponse.indexOf(' ', index);
+        if (endIndex === -1) endIndex = mockResponse.length;
+        
+        const token = mockResponse.slice(index, endIndex + 1);
+        fullMessage += token;
+        onToken?.(token);
+        index = endIndex + 1;
+      } else {
+        clearInterval(intervalId);
+        onComplete?.(fullMessage, false);
+      }
+    }, 50);
+    
+    return () => clearInterval(intervalId);
+  }
+  
+  // 실제 SSE 스트리밍
+  const abortController = new AbortController();
+  
+  const fetchStream = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message,
+          repo_url: context.repoUrl || null,
+          analysis_context: context.analysisResult || null,
+          conversation_history: conversationHistory.map((msg) => ({
+            role: msg.type === "user" ? "user" : "assistant",
+            content: msg.content,
+          })),
+        }),
+        signal: abortController.signal,
+      });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullMessage = "";
+      let isFallback = false;
+      
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        
+        const chunk = decoder.decode(value, { stream: true });
+        const lines = chunk.split('\n');
+        
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              
+              if (data.type === 'token') {
+                fullMessage += data.content;
+                isFallback = data.is_fallback || isFallback;
+                onToken?.(data.content);
+              } else if (data.type === 'done') {
+                onComplete?.(fullMessage, isFallback);
+                return;
+              } else if (data.type === 'error') {
+                onError?.(data.content);
+                return;
+              }
+            } catch (e) {
+              // JSON 파싱 실패 무시
+            }
+          }
+        }
+      }
+      
+      // 스트림 종료 시 완료 처리
+      if (fullMessage) {
+        onComplete?.(fullMessage, isFallback);
+      }
+      
+    } catch (error) {
+      if (error.name === 'AbortError') {
+        console.log('[Chat Stream] Aborted');
+        return;
+      }
+      console.error('[Chat Stream] Error:', error);
+      onError?.(error.message || '스트리밍 채팅 중 오류가 발생했습니다.');
+    }
+  };
+  
+  fetchStream();
+  
+  // 취소 함수 반환
+  return () => abortController.abort();
+};
+
 export default api;
