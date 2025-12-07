@@ -401,4 +401,10 @@ def analyze_activity(
         days_since_last_commit=commit.days_since_last_commit,
         total_commits_in_window=commit.total_commits,
         unique_authors=commit.unique_authors,
+        # 상세 메트릭 (UX 개선용)
+        issue_close_rate=issue.issue_closure_ratio,
+        median_pr_merge_days=pr.median_time_to_merge_days,
+        median_issue_close_days=issue.median_time_to_close_days,
+        open_issues_count=issue.open_issues,
+        open_prs_count=pr.open_prs,
     )

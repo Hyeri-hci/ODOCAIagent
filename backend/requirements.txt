@@ -5,3 +5,6 @@ langgraph
 langchain
 langchain-core
 pytest
+fastapi
+uvicorn[standard]
+pydantic
