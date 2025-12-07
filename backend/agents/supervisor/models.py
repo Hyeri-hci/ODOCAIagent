@@ -100,3 +100,7 @@ class SupervisorState(BaseModel):
     use_cache: bool = True
     cache_hit: bool = False
 
+    # 10) 세션 및 대화 컨텍스트
+    session_id: Optional[str] = None
+    long_term_context: Optional[str] = None
+

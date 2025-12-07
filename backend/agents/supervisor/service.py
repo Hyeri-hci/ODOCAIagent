@@ -5,14 +5,37 @@ from backend.core.models import DiagnosisCoreResult, ProjectRules, UserGuideline
 import logging
 from backend.agents.supervisor.models import SupervisorInput, SupervisorState
 from backend.agents.supervisor.trace import TracingCallbackHandler
+from backend.agents.supervisor.memory import get_conversation_memory, ConversationMemory
 from backend.common.logging_config import setup_logging
 
 logger = logging.getLogger(__name__)
-# Ensure logging is setup (idempotent-ish)
 setup_logging()
 
-def init_state_from_input(inp: SupervisorInput) -> SupervisorState:
-    """SupervisorInput을 기반으로 초기 SupervisorState를 생성합니다."""
+
+def init_state_from_input(
+    inp: SupervisorInput,
+    session_id: Optional[str] = None,
+    load_context: bool = True,
+) -> SupervisorState:
+    """
+    SupervisorInput을 기반으로 초기 SupervisorState를 생성합니다.
+    
+    Args:
+        inp: SupervisorInput 객체
+        session_id: 세션 식별자 (None이면 owner/repo 기반 생성)
+        load_context: True면 기존 대화 컨텍스트 로드
+    """
+    effective_session_id = session_id or f"{inp.owner}/{inp.repo}"
+    long_term_context = None
+    
+    if load_context:
+        try:
+            memory = get_conversation_memory()
+            context = memory.get_context(effective_session_id)
+            long_term_context = context.summary
+        except Exception as e:
+            logger.warning(f"Failed to load conversation context: {e}")
+    
     return SupervisorState(
         task_type=inp.task_type,
         owner=inp.owner,
@@ -36,7 +59,51 @@ def init_state_from_input(inp: SupervisorInput) -> SupervisorState:
         quality_issues=[],
         use_cache=True,
         cache_hit=False,
+        session_id=effective_session_id,
+        long_term_context=long_term_context,
     )
+
+
+def save_conversation_turn(
+    session_id: str,
+    user_message: str,
+    assistant_message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """대화 턴을 메모리에 저장합니다."""
+    try:
+        memory = get_conversation_memory()
+        memory.add_turn(session_id, user_message, assistant_message, metadata)
+    except Exception as e:
+        logger.warning(f"Failed to save conversation turn: {e}")
+
+
+def get_conversation_context(session_id: str) -> Dict[str, Any]:
+    """세션의 대화 컨텍스트를 조회합니다."""
+    try:
+        memory = get_conversation_memory()
+        context = memory.get_context(session_id)
+        return context.to_dict()
+    except Exception as e:
+        logger.warning(f"Failed to get conversation context: {e}")
+        return {"session_id": session_id, "recent_turns": [], "summary": None}
+
+
+def check_memory_status() -> Dict[str, Any]:
+    """메모리 백엔드 상태를 확인합니다."""
+    try:
+        memory = get_conversation_memory()
+        return {
+            "backend_type": memory.backend_type,
+            "redis_available": memory.is_redis_available(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to check memory status: {e}")
+        return {
+            "backend_type": "unknown",
+            "redis_available": False,
+            "error": str(e),
+        }
 
 def run_supervisor_diagnosis(
     owner: str,
