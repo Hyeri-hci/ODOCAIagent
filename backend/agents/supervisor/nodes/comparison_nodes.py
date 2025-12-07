@@ -91,10 +91,10 @@ def batch_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
 
 def compare_results_node(state: SupervisorState) -> Dict[str, Any]:
     """
-    여러 저장소의 분석 결과를 비교하여 요약 생성.
+    여러 저장소의 분석 결과를 비교하여 LLM 기반 요약 생성.
     
     설정하는 필드:
-    - compare_summary: 비교 요약 텍스트
+    - compare_summary: LLM이 생성한 비교 요약 텍스트
     - flow_adjustments: 비교 기반 조정
     """
     results = state.compare_results
@@ -106,8 +106,6 @@ def compare_results_node(state: SupervisorState) -> Dict[str, Any]:
             "step": state.step + 1,
         }
     
-    summary_lines = ["# 저장소 비교 분석\n"]
-    
     comparison_data = []
     for repo_str, data in results.items():
         comparison_data.append({
@@ -118,51 +116,150 @@ def compare_results_node(state: SupervisorState) -> Dict[str, Any]:
             "activity_score": data.get("activity_maintainability", data.get("activity", {}).get("total_score", 0)),
             "health_level": data.get("health_level", "unknown"),
             "onboarding_level": data.get("onboarding_level", "unknown"),
+            "summary": data.get("summary_for_user", ""),
+            "readme_exists": data.get("docs", {}).get("readme_exists", False),
+            "contributing_exists": data.get("docs", {}).get("contributing_exists", False),
         })
     
     comparison_data.sort(key=lambda x: x["health_score"], reverse=True)
     
-    summary_lines.append("## 점수 비교\n")
-    summary_lines.append("| 저장소 | 건강 점수 | 온보딩 점수 | 문서 | 활동성 |")
-    summary_lines.append("|--------|----------|------------|------|--------|")
-    
-    for item in comparison_data:
-        summary_lines.append(
-            f"| {item['repo']} | {item['health_score']} | "
-            f"{item['onboarding_score']} | {item['docs_score']} | {item['activity_score']} |"
-        )
-    
-    summary_lines.append("\n## 추천\n")
-    
-    if comparison_data:
-        best = comparison_data[0]
-        summary_lines.append(f"**가장 건강한 프로젝트**: {best['repo']} (점수: {best['health_score']})\n")
-        
-        best_onboard = max(comparison_data, key=lambda x: x["onboarding_score"])
-        summary_lines.append(
-            f"**온보딩하기 좋은 프로젝트**: {best_onboard['repo']} "
-            f"(온보딩 점수: {best_onboard['onboarding_score']})\n"
-        )
-    
-    summary_lines.append("\n## 주요 차이점\n")
-    if len(comparison_data) >= 2:
-        scores = [d["health_score"] for d in comparison_data]
-        diff = max(scores) - min(scores)
-        summary_lines.append(f"- 건강 점수 차이: {diff}점\n")
-        
-        onboard_scores = [d["onboarding_score"] for d in comparison_data]
-        onboard_diff = max(onboard_scores) - min(onboard_scores)
-        summary_lines.append(f"- 온보딩 점수 차이: {onboard_diff}점\n")
-    
-    compare_summary = "\n".join(summary_lines)
+    llm_summary = _generate_llm_comparison(comparison_data)
     
     logger.info(f"Comparison summary generated for {len(results)} repositories")
     
     return {
-        "compare_summary": compare_summary,
+        "compare_summary": llm_summary,
         "next_node_override": "__end__",
         "step": state.step + 1,
     }
+
+
+def _generate_llm_comparison(comparison_data: List[Dict[str, Any]]) -> str:
+    """LLM을 사용하여 비교 분석 전체 메시지 생성."""
+    from backend.llm.client import get_llm_client, ChatRequest, ChatMessage
+    
+    if len(comparison_data) < 2:
+        return "비교할 저장소가 2개 이상 필요합니다."
+    
+    repo1, repo2 = comparison_data[0], comparison_data[1]
+    
+    score_diff = abs(repo1['health_score'] - repo2['health_score'])
+    onboard_diff = abs(repo1['onboarding_score'] - repo2['onboarding_score'])
+    health_winner = repo1['repo'] if repo1['health_score'] > repo2['health_score'] else repo2['repo'] if repo2['health_score'] > repo1['health_score'] else "동점"
+    onboard_winner = repo1['repo'] if repo1['onboarding_score'] > repo2['onboarding_score'] else repo2['repo'] if repo2['onboarding_score'] > repo1['onboarding_score'] else "동점"
+    
+    prompt = f"""두 오픈소스 프로젝트를 비교 분석하여 사용자에게 보여줄 메시지를 작성해주세요.
+
+## 분석 데이터
+
+### {repo1['repo']}
+| 항목 | 점수 |
+|------|------|
+| 건강 점수 | {repo1['health_score']}점 |
+| 온보딩 점수 | {repo1['onboarding_score']}점 |
+| 문서 품질 | {repo1['docs_score']}점 |
+| 활동성 | {repo1['activity_score']}점 |
+
+### {repo2['repo']}
+| 항목 | 점수 |
+|------|------|
+| 건강 점수 | {repo2['health_score']}점 |
+| 온보딩 점수 | {repo2['onboarding_score']}점 |
+| 문서 품질 | {repo2['docs_score']}점 |
+| 활동성 | {repo2['activity_score']}점 |
+
+## 점수 차이 요약
+- 건강 점수 차이: {score_diff}점 ({health_winner} 우세)
+- 온보딩 점수 차이: {onboard_diff}점 ({onboard_winner} 우세)
+
+## 작성 요청
+
+위 데이터를 바탕으로 아래 형식의 비교 분석 메시지를 한국어로 작성해주세요.
+마크다운 형식을 사용하고, 자연스러운 대화체로 작성해주세요.
+
+**필수 포함 내용:**
+1. 제목: "**{repo1['repo']} vs {repo2['repo']} 비교 분석**"
+2. 점수 비교 테이블 (건강 점수, 온보딩 점수, 문서 품질, 활동성)
+3. 종합 평가 (어떤 프로젝트가 전반적으로 더 좋은지, 그 이유)
+4. 초보자 추천 (오픈소스 기여를 처음 시작하는 사람에게 어떤 프로젝트가 더 적합한지)
+5. 각 프로젝트의 강점과 약점 간단히 언급
+6. 최종 결론 한 문장
+
+응답은 전체 메시지만 출력해주세요. 추가 설명 없이 바로 메시지를 시작하세요."""
+
+    try:
+        client = get_llm_client()
+        request = ChatRequest(
+            messages=[ChatMessage(role="user", content=prompt)],
+            temperature=0.7,
+            max_tokens=800,
+        )
+        response = client.chat(request)
+        
+        if response.content:
+            return response.content.strip()
+        else:
+            logger.warning("LLM returned empty response for comparison")
+            return _generate_fallback_comparison(comparison_data)
+            
+    except Exception as e:
+        logger.error(f"LLM comparison failed: {e}")
+        return _generate_fallback_comparison(comparison_data)
+
+
+def _generate_fallback_comparison(comparison_data: List[Dict[str, Any]]) -> str:
+    """LLM 실패 시 템플릿 기반 비교 메시지 생성."""
+    if len(comparison_data) < 2:
+        return "비교할 데이터가 부족합니다."
+    
+    repo1, repo2 = comparison_data[0], comparison_data[1]
+    
+    score_diff = abs(repo1["health_score"] - repo2["health_score"])
+    onboard_diff = abs(repo1["onboarding_score"] - repo2["onboarding_score"])
+    
+    health_winner = repo1["repo"] if repo1["health_score"] > repo2["health_score"] else repo2["repo"] if repo2["health_score"] > repo1["health_score"] else None
+    onboard_winner = repo1["repo"] if repo1["onboarding_score"] > repo2["onboarding_score"] else repo2["repo"] if repo2["onboarding_score"] > repo1["onboarding_score"] else None
+    
+    lines = [
+        f"**{repo1['repo']} vs {repo2['repo']} 비교 분석**",
+        "",
+        "**점수 비교**",
+        "",
+        "| 항목 | " + repo1['repo'] + " | " + repo2['repo'] + " |",
+        "|------|---------|---------|",
+        f"| 건강 점수 | {repo1['health_score']}점 | {repo2['health_score']}점 |",
+        f"| 온보딩 점수 | {repo1['onboarding_score']}점 | {repo2['onboarding_score']}점 |",
+        f"| 문서 품질 | {repo1['docs_score']}점 | {repo2['docs_score']}점 |",
+        f"| 활동성 | {repo1['activity_score']}점 | {repo2['activity_score']}점 |",
+        "",
+        "**종합 평가**",
+        "",
+    ]
+    
+    if health_winner:
+        lines.append(f"전반적인 프로젝트 건강도는 **{health_winner}**가 {score_diff}점 더 높습니다.")
+    else:
+        lines.append("두 프로젝트의 건강 점수가 동일합니다.")
+    
+    lines.append("")
+    lines.append("**초보자 추천**")
+    lines.append("")
+    
+    if onboard_winner:
+        lines.append(f"오픈소스 기여를 처음 시작하는 분에게는 **{onboard_winner}**을 추천합니다. (온보딩 점수 {onboard_diff}점 차이)")
+    else:
+        lines.append("두 프로젝트 모두 온보딩 측면에서 비슷한 수준입니다.")
+    
+    lines.append("")
+    lines.append("**결론**")
+    lines.append("")
+    
+    if health_winner:
+        lines.append(f"종합적으로 **{health_winner}**가 더 안정적이고 관리가 잘 되는 프로젝트입니다.")
+    else:
+        lines.append("두 프로젝트 모두 좋은 선택입니다. 관심 분야에 따라 선택하세요.")
+    
+    return "\n".join(lines)
 
 
 def _parse_repo_string(repo_str: str) -> tuple:

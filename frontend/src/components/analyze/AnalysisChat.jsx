@@ -37,6 +37,8 @@ const AnalysisChat = ({
   const [planGenerateError, setPlanGenerateError] = useState(null); // 플랜 생성 오류
   const [isComparing, setIsComparing] = useState(false); // 비교 분석 중
   const [compareResult, setCompareResult] = useState(null); // 비교 분석 결과
+  const [showCompareSelector, setShowCompareSelector] = useState(false); // 비교 선택 패널 표시
+  const [selectedForCompare, setSelectedForCompare] = useState(new Set()); // 비교 선택된 저장소
 
   // 분석 히스토리 관리
   const [analysisHistory, setAnalysisHistory] = useState(() => {
@@ -171,41 +173,59 @@ const AnalysisChat = ({
     }
   };
 
+  // 비교 선택 토글
+  const toggleCompareSelection = (repoKey) => {
+    setSelectedForCompare((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(repoKey)) {
+        newSet.delete(repoKey);
+      } else if (newSet.size < 2) {
+        newSet.add(repoKey);
+      }
+      return newSet;
+    });
+  };
+
+  // 히스토리에서 유니크한 저장소 목록 추출
+  const getUniqueRepositories = () => {
+    const seen = new Set();
+    return analysisHistory
+      .map((result, index) => {
+        const url = result.repositoryUrl;
+        const info = parseGitHubUrl(url);
+        if (!info) return null;
+        const repoKey = `${info.owner}/${info.repo}`;
+        if (seen.has(repoKey)) return null;
+        seen.add(repoKey);
+        return {
+          key: repoKey,
+          owner: info.owner,
+          repo: info.repo,
+          healthScore: result.healthScore || 0,
+          index,
+        };
+      })
+      .filter(Boolean);
+  };
+
   // 비교 분석 핸들러
   const handleCompareAnalysis = async () => {
-    if (analysisHistory.length < 2) {
+    const repositories = Array.from(selectedForCompare);
+    
+    if (repositories.length !== 2) {
+      const errorMessage = {
+        id: `compare_error_${Date.now()}`,
+        role: "assistant",
+        content: "비교하려면 2개의 저장소를 선택해주세요.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
       return;
     }
 
     setIsComparing(true);
     setCompareResult(null);
-
-    // 히스토리에서 저장소 목록 추출 (최대 5개, 중복 제거)
-    const seen = new Set();
-    const repositories = analysisHistory
-      .map((result) => {
-        const url = result.repositoryUrl;
-        const info = parseGitHubUrl(url);
-        return info ? `${info.owner}/${info.repo}` : null;
-      })
-      .filter((repo) => {
-        if (!repo || seen.has(repo)) return false;
-        seen.add(repo);
-        return true;
-      })
-      .slice(0, 5); // 최대 5개
-
-    if (repositories.length < 2) {
-      const errorMessage = {
-        id: `compare_error_${Date.now()}`,
-        role: "assistant",
-        content: "비교하려면 2개 이상의 서로 다른 저장소가 필요합니다.",
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, errorMessage]);
-      setIsComparing(false);
-      return;
-    }
+    setShowCompareSelector(false);
 
     try {
       console.log("[handleCompareAnalysis] repositories:", repositories);
@@ -215,18 +235,11 @@ const AnalysisChat = ({
       if (response.ok) {
         setCompareResult(response);
 
-        // 채팅에 비교 결과 메시지 추가
-        const comparisonSummary = response.summary || "비교 분석이 완료되었습니다.";
+        // Backend에서 생성한 비교 분석 메시지 표시
         const compareMessage = {
           id: `compare_${Date.now()}`,
           role: "assistant",
-          content: `**저장소 비교 분석 결과**\n\n${comparisonSummary}\n\n` +
-            (response.comparison?.ranking
-              ? `**건강 점수 순위:**\n${response.comparison.ranking.map((repo, idx) => {
-                  const data = response.comparison.repositories?.[repo];
-                  return `${idx + 1}. ${repo}: ${data?.health_score || '?'}점`;
-                }).join('\n')}`
-              : ''),
+          content: response.summary || `${repositories[0]}과 ${repositories[1]}의 비교 분석이 완료되었습니다.`,
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, compareMessage]);
@@ -234,7 +247,7 @@ const AnalysisChat = ({
         const errorMessage = {
           id: `compare_error_${Date.now()}`,
           role: "assistant",
-          content: `비교 분석 중 오류가 발생했습니다: ${response.error || '알 수 없는 오류'}`,
+          content: `비교 분석 중 오류가 발생했습니다: ${response.error || '결과를 가져올 수 없습니다'}`,
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorMessage]);
@@ -250,6 +263,7 @@ const AnalysisChat = ({
       setMessages((prev) => [...prev, errorMessage]);
     } finally {
       setIsComparing(false);
+      setSelectedForCompare(new Set());
     }
   };
 
@@ -1014,30 +1028,92 @@ const AnalysisChat = ({
 
                 <div className="flex items-center gap-2">
                   {/* 비교 분석 버튼 */}
-                  <button
-                    onClick={handleCompareAnalysis}
-                    disabled={isComparing || analysisHistory.length < 2}
-                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                      isComparing
-                        ? "bg-purple-100 text-purple-600"
-                        : "bg-purple-600 hover:bg-purple-700 text-white"
-                    }`}
-                    title={`${Math.min(analysisHistory.length, 5)}개 저장소 비교`}
-                  >
-                    {isComparing ? (
-                      <>
-                        <div className="w-3 h-3 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
-                        비교 중...
-                      </>
-                    ) : (
-                      <>
-                        비교 분석
-                        <span className="bg-purple-500 text-white text-xs px-1.5 py-0.5 rounded-full ml-1">
-                          {Math.min(analysisHistory.length, 5)}
-                        </span>
-                      </>
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowCompareSelector(!showCompareSelector)}
+                      disabled={isComparing || getUniqueRepositories().length < 2}
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                        isComparing
+                          ? "bg-purple-100 text-purple-600"
+                          : getUniqueRepositories().length < 2
+                          ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                          : showCompareSelector
+                          ? "bg-purple-700 text-white"
+                          : "bg-purple-600 hover:bg-purple-700 text-white"
+                      }`}
+                      title="저장소 비교 분석"
+                    >
+                      {isComparing ? (
+                        <>
+                          <div className="w-3 h-3 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+                          비교 중...
+                        </>
+                      ) : (
+                        <>1:1 비교</>
+                      )}
+                    </button>
+                    
+                    {/* 비교 선택 패널 */}
+                    {showCompareSelector && (
+                      <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden">
+                        <div className="p-3 bg-purple-50 border-b border-purple-100">
+                          <h4 className="font-semibold text-purple-800 text-sm">비교할 저장소 선택</h4>
+                          <p className="text-xs text-purple-600 mt-0.5">2개를 선택하세요 ({selectedForCompare.size}/2)</p>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto">
+                          {getUniqueRepositories().map((item) => (
+                            <label
+                              key={item.key}
+                              className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-gray-50 transition-colors ${
+                                selectedForCompare.has(item.key) ? "bg-purple-50" : ""
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedForCompare.has(item.key)}
+                                onChange={() => toggleCompareSelection(item.key)}
+                                disabled={!selectedForCompare.has(item.key) && selectedForCompare.size >= 2}
+                                className="w-4 h-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-sm font-medium text-gray-800 truncate">{item.repo}</p>
+                                <p className="text-xs text-gray-500">{item.owner}</p>
+                              </div>
+                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                                item.healthScore >= 70 ? "bg-green-100 text-green-700" :
+                                item.healthScore >= 40 ? "bg-yellow-100 text-yellow-700" :
+                                "bg-red-100 text-red-700"
+                              }`}>
+                                {item.healthScore}점
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="p-2 bg-gray-50 border-t border-gray-200 flex gap-2">
+                          <button
+                            onClick={() => {
+                              setShowCompareSelector(false);
+                              setSelectedForCompare(new Set());
+                            }}
+                            className="flex-1 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-200 rounded-lg transition-colors"
+                          >
+                            취소
+                          </button>
+                          <button
+                            onClick={handleCompareAnalysis}
+                            disabled={selectedForCompare.size !== 2}
+                            className={`flex-1 px-3 py-1.5 text-sm rounded-lg transition-colors ${
+                              selectedForCompare.size === 2
+                                ? "bg-purple-600 text-white hover:bg-purple-700"
+                                : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                            }`}
+                          >
+                            비교 시작
+                          </button>
+                        </div>
+                      </div>
                     )}
-                  </button>
+                  </div>
                   <button
                     onClick={goToPreviousAnalysis}
                     disabled={!canGoBack}
