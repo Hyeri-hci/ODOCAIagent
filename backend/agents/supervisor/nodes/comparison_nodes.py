@@ -136,7 +136,8 @@ def compare_results_node(state: SupervisorState) -> Dict[str, Any]:
 
 def _generate_llm_comparison(comparison_data: List[Dict[str, Any]]) -> str:
     """LLM을 사용하여 비교 분석 전체 메시지 생성."""
-    from backend.llm.client import get_llm_client, ChatRequest, ChatMessage
+    from backend.llm.factory import fetch_llm_client
+    from backend.llm.base import ChatRequest, ChatMessage
     
     if len(comparison_data) < 2:
         return "비교할 저장소가 2개 이상 필요합니다."
@@ -188,7 +189,7 @@ def _generate_llm_comparison(comparison_data: List[Dict[str, Any]]) -> str:
 응답은 전체 메시지만 출력해주세요. 추가 설명 없이 바로 메시지를 시작하세요."""
 
     try:
-        client = get_llm_client()
+        client = fetch_llm_client()
         request = ChatRequest(
             messages=[ChatMessage(role="user", content=prompt)],
             temperature=0.7,
