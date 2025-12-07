@@ -8,6 +8,7 @@ import {
   sendChatMessageStream,
   analyzeRepository,
   generateOnboardingPlan,
+  compareRepositories,
 } from "../../lib/api";
 
 // 스트리밍 모드 설정 (true: SSE 스트리밍, false: 기존 REST API)
@@ -34,6 +35,8 @@ const AnalysisChat = ({
   const [isStreaming, setIsStreaming] = useState(false); // 스트리밍 중 여부
   const [isGeneratingPlan, setIsGeneratingPlan] = useState(false); // 온보딩 플랜 생성 중
   const [planGenerateError, setPlanGenerateError] = useState(null); // 플랜 생성 오류
+  const [isComparing, setIsComparing] = useState(false); // 비교 분석 중
+  const [compareResult, setCompareResult] = useState(null); // 비교 분석 결과
 
   // 분석 히스토리 관리
   const [analysisHistory, setAnalysisHistory] = useState(() => {
@@ -165,6 +168,69 @@ const AnalysisChat = ({
       );
     } finally {
       setIsGeneratingPlan(false);
+    }
+  };
+
+  // 비교 분석 핸들러
+  const handleCompareAnalysis = async () => {
+    if (analysisHistory.length < 2) {
+      return;
+    }
+
+    setIsComparing(true);
+    setCompareResult(null);
+
+    // 히스토리에서 저장소 목록 추출
+    const repositories = analysisHistory
+      .map((result) => {
+        const url = result.repositoryUrl;
+        const info = parseGitHubUrl(url);
+        return info ? `${info.owner}/${info.repo}` : null;
+      })
+      .filter(Boolean);
+
+    try {
+      const response = await compareRepositories(repositories);
+      console.log("비교 분석 결과:", response);
+
+      if (response.ok) {
+        setCompareResult(response);
+
+        // 채팅에 비교 결과 메시지 추가
+        const comparisonSummary = response.summary || "비교 분석이 완료되었습니다.";
+        const compareMessage = {
+          id: `compare_${Date.now()}`,
+          role: "assistant",
+          content: `**저장소 비교 분석 결과**\n\n${comparisonSummary}\n\n` +
+            (response.comparison?.ranking
+              ? `**건강 점수 순위:**\n${response.comparison.ranking.map((repo, idx) => {
+                  const data = response.comparison.repositories?.[repo];
+                  return `${idx + 1}. ${repo}: ${data?.health_score || '?'}점`;
+                }).join('\n')}`
+              : ''),
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, compareMessage]);
+      } else {
+        const errorMessage = {
+          id: `compare_error_${Date.now()}`,
+          role: "assistant",
+          content: `비교 분석 중 오류가 발생했습니다: ${response.error || '알 수 없는 오류'}`,
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorMessage]);
+      }
+    } catch (error) {
+      console.error("비교 분석 오류:", error);
+      const errorMessage = {
+        id: `compare_error_${Date.now()}`,
+        role: "assistant",
+        content: `비교 분석 중 오류가 발생했습니다: ${error.message}`,
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+    } finally {
+      setIsComparing(false);
     }
   };
 
@@ -928,6 +994,25 @@ const AnalysisChat = ({
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {/* 비교 분석 버튼 */}
+                  <button
+                    onClick={handleCompareAnalysis}
+                    disabled={isComparing || analysisHistory.length < 2}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      isComparing
+                        ? "bg-purple-100 text-purple-600"
+                        : "bg-purple-600 hover:bg-purple-700 text-white"
+                    }`}
+                  >
+                    {isComparing ? (
+                      <>
+                        <div className="w-3 h-3 border-2 border-purple-600 border-t-transparent rounded-full animate-spin"></div>
+                        비교 중...
+                      </>
+                    ) : (
+                      <>비교 분석</>
+                    )}
+                  </button>
                   <button
                     onClick={goToPreviousAnalysis}
                     disabled={!canGoBack}
