@@ -380,3 +380,119 @@ class TestDynamicFlowAdjustments:
         result = quality_check_node(state)
         count = result["flow_adjustments"].count("recommend_deep_analysis")
         assert count <= 1
+
+
+class TestCacheAwareDecision:
+    """캐시 인식 라우팅 테스트."""
+
+    def test_cache_disabled_routes_to_diagnosis(self):
+        state = SupervisorState(
+            task_type="diagnose_repo",
+            owner="test",
+            repo="repo",
+            detected_intent="diagnose",
+            use_cache=False
+        )
+        result = decision_node(state)
+        assert result["next_node_override"] == "run_diagnosis_node"
+        assert result["cache_hit"] == False
+
+    def test_cache_hit_field_set(self):
+        state = SupervisorState(
+            task_type="diagnose_repo",
+            owner="nonexistent",
+            repo="repo",
+            detected_intent="diagnose",
+            use_cache=True
+        )
+        result = decision_node(state)
+        assert "cache_hit" in result
+
+
+class TestCompareIntent:
+    """비교 분석 Intent 테스트."""
+
+    def test_compare_keyword_inference(self):
+        state = SupervisorState(
+            task_type="diagnose_repo",
+            owner="test",
+            repo="repo",
+            user_context={"message": "두 프로젝트를 비교해주세요"}
+        )
+        intent, confidence = infer_intent_from_context(state)
+        assert intent == "compare"
+
+    def test_decision_node_compare_intent(self):
+        state = SupervisorState(
+            task_type="diagnose_repo",
+            owner="test",
+            repo="repo",
+            detected_intent="compare",
+            compare_repos=["owner1/repo1", "owner2/repo2"]
+        )
+        result = decision_node(state)
+        assert result["next_node_override"] == "batch_diagnosis_node"
+
+    def test_decision_node_compare_empty_repos_warning(self):
+        state = SupervisorState(
+            task_type="diagnose_repo",
+            owner="test",
+            repo="repo",
+            detected_intent="compare",
+            compare_repos=[]
+        )
+        result = decision_node(state)
+        assert result["next_node_override"] == "__end__"
+        assert any("비교할 저장소" in w for w in result["warnings"])
+
+
+class TestComparisonNodes:
+    """비교 분석 노드 테스트."""
+
+    def test_compare_results_node_empty(self):
+        from backend.agents.supervisor.nodes.comparison_nodes import compare_results_node
+        
+        state = SupervisorState(
+            task_type="diagnose_repo",
+            owner="test",
+            repo="repo",
+            compare_results={}
+        )
+        result = compare_results_node(state)
+        assert "비교할 결과가 없습니다" in result["compare_summary"]
+
+    def test_compare_results_node_with_data(self):
+        from backend.agents.supervisor.nodes.comparison_nodes import compare_results_node
+        
+        state = SupervisorState(
+            task_type="diagnose_repo",
+            owner="test",
+            repo="repo",
+            compare_results={
+                "owner1/repo1": {
+                    "health_score": 80,
+                    "onboarding_score": 70,
+                    "health_level": "good",
+                    "onboarding_level": "easy"
+                },
+                "owner2/repo2": {
+                    "health_score": 60,
+                    "onboarding_score": 50,
+                    "health_level": "warning",
+                    "onboarding_level": "medium"
+                }
+            }
+        )
+        result = compare_results_node(state)
+        assert "owner1/repo1" in result["compare_summary"]
+        assert "owner2/repo2" in result["compare_summary"]
+        assert "가장 건강한 프로젝트" in result["compare_summary"]
+
+    def test_parse_repo_string(self):
+        from backend.agents.supervisor.nodes.comparison_nodes import _parse_repo_string
+        
+        assert _parse_repo_string("owner/repo") == ("owner", "repo")
+        assert _parse_repo_string("https://github.com/owner/repo") == ("owner", "repo")
+        
+        with pytest.raises(ValueError):
+            _parse_repo_string("invalid")
