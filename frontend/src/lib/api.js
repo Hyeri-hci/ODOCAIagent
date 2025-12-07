@@ -250,6 +250,56 @@ export const getOnboarding = async () => {
   }
 };
 
+/**
+ * 온보딩 플랜 생성 API
+ * @param {string} owner - 저장소 소유자
+ * @param {string} repo - 저장소 이름
+ * @param {Object} userContext - 사용자 컨텍스트 (경험 레벨, 목표 등)
+ * @returns {Promise<Object>} - 온보딩 플랜 결과
+ */
+export const generateOnboardingPlan = async (owner, repo, userContext = {}) => {
+  if (MOCK_MODE) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    return {
+      ok: true,
+      data: {
+        onboarding_plan: [
+          {
+            week: 1,
+            goals: ["프로젝트 구조 이해", "개발 환경 설정"],
+            tasks: ["README.md 읽기", "로컬 환경 설정", "첫 번째 테스트 실행"],
+          },
+          {
+            week: 2,
+            goals: ["코드베이스 탐색", "이슈 파악"],
+            tasks: [
+              "good first issue 확인",
+              "관련 코드 분석",
+              "PR 프로세스 이해",
+            ],
+          },
+        ],
+      },
+    };
+  }
+
+  try {
+    console.log("[generateOnboardingPlan] Calling API for:", owner, repo);
+    const response = await api.post("/api/agent/task", {
+      task_type: "build_onboarding_plan",
+      owner,
+      repo,
+      user_context: userContext,
+      use_llm_summary: true,
+    });
+    console.log("[generateOnboardingPlan] Response:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("온보딩 플랜 생성 실패:", error);
+    throw error;
+  }
+};
+
 export const getBenchmarks = async () => {
   if (MOCK_MODE) {
     return { benchmarks: mockData.benchmarks };
