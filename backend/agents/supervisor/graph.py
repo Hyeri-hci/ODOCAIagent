@@ -26,6 +26,13 @@ from backend.agents.supervisor.nodes.comparison_nodes import (
     compare_results_node,
 )
 from backend.agents.supervisor.nodes.chat_nodes import chat_response_node
+from backend.agents.supervisor.nodes.error_recovery_nodes import (
+    smart_error_recovery_node,
+    partial_result_recovery_node,
+)
+from backend.agents.supervisor.nodes.reflection_nodes import (
+    self_reflection_node,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,13 @@ def build_supervisor_graph() -> StateGraph:
     
     # 노드 등록 - 채팅 노드
     graph.add_node("chat_response_node", chat_response_node)
+    
+    # 노드 등록 - 에러 복구 노드
+    graph.add_node("smart_error_recovery_node", smart_error_recovery_node)
+    graph.add_node("partial_result_recovery_node", partial_result_recovery_node)
+    
+    # 노드 등록 - 자기 성찰 노드
+    graph.add_node("self_reflection_node", self_reflection_node)
 
     # Entry Point
     graph.set_entry_point("intent_analysis_node")
@@ -87,20 +101,89 @@ def build_supervisor_graph() -> StateGraph:
         }
     )
 
-    # run_diagnosis_node -> quality_check_node
-    graph.add_edge("run_diagnosis_node", "quality_check_node")
+    # run_diagnosis_node -> conditional routing (에러 복구 또는 품질 검사)
+    def _route_after_diagnosis(state: SupervisorState) -> Literal[
+        "smart_error_recovery_node", "quality_check_node"
+    ]:
+        if state.error:
+            return "smart_error_recovery_node"
+        return "quality_check_node"
+    
+    graph.add_conditional_edges(
+        "run_diagnosis_node",
+        _route_after_diagnosis,
+        {
+            "smart_error_recovery_node": "smart_error_recovery_node",
+            "quality_check_node": "quality_check_node",
+        }
+    )
 
-    # quality_check_node -> conditional routing
+    # smart_error_recovery_node -> conditional routing
+    def _route_after_error_recovery(state: SupervisorState) -> Literal[
+        "run_diagnosis_node", "partial_result_recovery_node", "__end__"
+    ]:
+        next_node = state.next_node_override
+        if next_node == "run_diagnosis_node":
+            return "run_diagnosis_node"
+        elif next_node == "__end__" or state.error:
+            return "__end__"
+        # fallback이나 skip인 경우
+        return "partial_result_recovery_node"
+    
+    graph.add_conditional_edges(
+        "smart_error_recovery_node",
+        _route_after_error_recovery,
+        {
+            "run_diagnosis_node": "run_diagnosis_node",
+            "partial_result_recovery_node": "partial_result_recovery_node",
+            "__end__": END,
+        }
+    )
+    
+    # partial_result_recovery_node -> END
+    graph.add_edge("partial_result_recovery_node", END)
+
+    # quality_check_node -> conditional routing (성찰 또는 다음 단계)
     def _route_after_quality(state: SupervisorState) -> Literal[
-        "run_diagnosis_node", "fetch_issues_node", "compare_results_node", "__end__"
+        "run_diagnosis_node", "self_reflection_node", "fetch_issues_node", "compare_results_node", "__end__"
     ]:
         if state.error:
             return "__end__"
+        
+        # deep 분석이거나 reflection 활성화된 경우 성찰 노드로
+        if state.analysis_depth == "deep" or state.user_context.get("enable_reflection"):
+            return "self_reflection_node"
+        
         return route_after_quality_check(state)
 
     graph.add_conditional_edges(
         "quality_check_node",
         _route_after_quality,
+        {
+            "run_diagnosis_node": "run_diagnosis_node",
+            "self_reflection_node": "self_reflection_node",
+            "fetch_issues_node": "fetch_issues_node",
+            "compare_results_node": "compare_results_node",
+            "__end__": END,
+        }
+    )
+    
+    # self_reflection_node -> conditional routing
+    def _route_after_reflection(state: SupervisorState) -> Literal[
+        "run_diagnosis_node", "fetch_issues_node", "compare_results_node", "__end__"
+    ]:
+        next_node = state.next_node_override
+        if next_node == "run_diagnosis_node":
+            return "run_diagnosis_node"
+        elif next_node == "fetch_issues_node":
+            return "fetch_issues_node"
+        elif next_node == "compare_results_node":
+            return "compare_results_node"
+        return "__end__"
+    
+    graph.add_conditional_edges(
+        "self_reflection_node",
+        _route_after_reflection,
         {
             "run_diagnosis_node": "run_diagnosis_node",
             "fetch_issues_node": "fetch_issues_node",
@@ -147,3 +230,4 @@ def get_supervisor_graph():
         checkpointer = MemorySaver()
 
     return graph.compile(checkpointer=checkpointer)
+
