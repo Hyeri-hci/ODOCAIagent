@@ -27,6 +27,91 @@ INTENT_KEYWORDS = {
     "compare": ["비교", "compare", "vs", "차이", "difference", "versus"],
 }
 
+# 분석 깊이 임계값 설정
+ANALYSIS_DEPTH_THRESHOLDS = {
+    "deep": {
+        "min_stars": 5000,        # 5000+ 스타 프로젝트
+        "min_files": 500,         # 500+ 파일
+        "description": "대규모 프로젝트 심층 분석"
+    },
+    "standard": {
+        "min_stars": 100,         # 100-5000 스타 프로젝트
+        "min_files": 50,          # 50-500 파일
+        "description": "일반 프로젝트 표준 분석"
+    },
+    "quick": {
+        "min_stars": 0,           # 100 미만 스타 프로젝트
+        "min_files": 0,           # 50 미만 파일
+        "description": "소규모 프로젝트 빠른 분석"
+    }
+}
+
+# 분석 깊이별 키워드
+DEPTH_KEYWORDS = {
+    "deep": ["자세히", "심층", "깊이", "상세", "detailed", "deep", "thorough", "comprehensive"],
+    "quick": ["빠르게", "간단히", "요약", "quick", "fast", "brief", "simple", "summary"],
+}
+
+
+def determine_analysis_depth(state: SupervisorState) -> str:
+    """
+    저장소 특성과 사용자 요청에 따라 분석 깊이를 결정.
+    
+    결정 우선순위:
+    1. 사용자 명시적 요청 (user_context, chat_message)
+    2. 저장소 크기/특성 기반 자동 결정
+    3. 기본값 "standard"
+    
+    Returns:
+        str: "deep", "standard", "quick" 중 하나
+    """
+    # 1. 사용자가 명시적으로 분석 깊이를 지정한 경우
+    if state.user_context.get("analysis_depth"):
+        depth = state.user_context["analysis_depth"]
+        if depth in ["deep", "standard", "quick"]:
+            logger.info(f"Analysis depth from user_context: {depth}")
+            return depth
+    
+    # 2. 채팅 메시지에서 깊이 관련 키워드 탐색
+    user_msg = state.chat_message or state.user_context.get("message", "")
+    if user_msg:
+        user_msg_lower = user_msg.lower()
+        for depth, keywords in DEPTH_KEYWORDS.items():
+            if any(kw in user_msg_lower for kw in keywords):
+                logger.info(f"Analysis depth inferred from message keyword: {depth}")
+                return depth
+    
+    # 3. quick_scan 플래그 확인
+    if state.user_context.get("quick_scan") or state.user_context.get("quick"):
+        logger.info("Analysis depth: quick (quick_scan flag)")
+        return "quick"
+    
+    # 4. 저장소 스냅샷 기반 자동 결정
+    if state.repo_snapshot:
+        stars = getattr(state.repo_snapshot, 'stars', 0) or 0
+        # 파일 수는 tree에서 추정 (있는 경우)
+        file_count = len(getattr(state.repo_snapshot, 'tree', []) or [])
+        
+        if stars >= ANALYSIS_DEPTH_THRESHOLDS["deep"]["min_stars"]:
+            logger.info(f"Analysis depth: deep (stars={stars})")
+            return "deep"
+        elif stars < ANALYSIS_DEPTH_THRESHOLDS["standard"]["min_stars"]:
+            logger.info(f"Analysis depth: quick (stars={stars})")
+            return "quick"
+    
+    # 5. 진단 결과가 이미 있고 explain/chat 의도인 경우 quick
+    if state.diagnosis_result and state.detected_intent in ["explain", "chat"]:
+        logger.info("Analysis depth: quick (existing diagnosis + explain/chat intent)")
+        return "quick"
+    
+    # 6. 비교 분석인 경우 quick (여러 저장소를 빠르게 분석)
+    if state.detected_intent == "compare" and len(state.compare_repos) > 2:
+        logger.info(f"Analysis depth: quick (comparing {len(state.compare_repos)} repos)")
+        return "quick"
+    
+    logger.info("Analysis depth: standard (default)")
+    return "standard"
+
 
 def map_task_type_to_intent(task_type: str) -> str:
     """task_type에서 intent로 직접 매핑."""
@@ -65,28 +150,32 @@ def intent_analysis_node(state: SupervisorState) -> Dict[str, Any]:
     설정하는 필드:
     - detected_intent: 분류된 의도
     - intent_confidence: 분류 신뢰도
+    - analysis_depth: 분석 깊이 (deep/standard/quick)
     """
+    result = {"step": state.step + 1}
+    
     # 이미 intent가 설정되어 있으면 유지 (API에서 직접 설정한 경우)
     if state.detected_intent and state.detected_intent != "unknown":
         logger.info(
             f"Intent already set: {state.detected_intent}, skipping analysis"
         )
-        return {
-            "step": state.step + 1,
-        }
+    else:
+        intent, confidence = infer_intent_from_context(state)
+        result["detected_intent"] = intent
+        result["intent_confidence"] = confidence
+        logger.info(
+            f"Intent analysis: task_type={state.task_type}, "
+            f"detected_intent={intent}, confidence={confidence}"
+        )
     
-    intent, confidence = infer_intent_from_context(state)
+    # 분석 깊이 결정 (아직 설정되지 않은 경우에만)
+    if state.analysis_depth == "standard":  # 기본값인 경우에만 재계산
+        depth = determine_analysis_depth(state)
+        if depth != state.analysis_depth:
+            result["analysis_depth"] = depth
+            logger.info(f"Analysis depth determined: {depth}")
     
-    logger.info(
-        f"Intent analysis: task_type={state.task_type}, "
-        f"detected_intent={intent}, confidence={confidence}"
-    )
-    
-    return {
-        "detected_intent": intent,
-        "intent_confidence": confidence,
-        "step": state.step + 1,
-    }
+    return result
 
 
 def decision_node(state: SupervisorState) -> Dict[str, Any]:
@@ -96,13 +185,6 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
     Agentic 기능:
     - 캐시 확인하여 이미 분석된 결과 재사용
     - 비교 분석 요청 시 여러 저장소 처리
-    
-    설정하는 필드:
-    - next_node_override: 다음 노드명
-    - decision_reason: 결정 근거
-    - flow_adjustments: 동적 플로우 조정 목록
-    - warnings: 사용자 경고 메시지
-    - cache_hit: 캐시 히트 여부
     """
     intent = state.detected_intent or "unknown"
     adjustments = []
@@ -248,13 +330,6 @@ def quality_check_node(state: SupervisorState) -> Dict[str, Any]:
     동적 조정:
     - 낮은 점수 시 경고 추가
     - 활동성/문서 이슈 시 관련 조정 추가
-    
-    설정하는 필드:
-    - quality_issues: 발견된 품질 문제 목록
-    - rerun_count: 재실행 횟수 (증가)
-    - next_node_override: 재실행 또는 종료
-    - flow_adjustments: 동적 플로우 조정
-    - warnings: 사용자 경고
     """
     issues = []
     adjustments = list(state.flow_adjustments)

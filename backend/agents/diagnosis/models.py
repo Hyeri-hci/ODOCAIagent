@@ -1,11 +1,16 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Literal
 from pydantic import BaseModel
+
+# 분석 깊이 타입 정의
+AnalysisDepth = Literal["deep", "standard", "quick"]
 
 class DiagnosisInput(BaseModel):
     owner: str
     repo: str
     ref: str = "main"
     use_llm_summary: bool = True
+    analysis_depth: AnalysisDepth = "standard"  # 분석 깊이 (deep/standard/quick)
+
 
 class DiagnosisOutput(BaseModel):
     repo_id: str
