@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.http_router import router as api_router
+from backend.api.sse_analyze import router as sse_router
 
 app = FastAPI(
     title="ODOCAIagent API",
@@ -31,6 +32,7 @@ app.add_middleware(
 
 # 라우터 등록
 app.include_router(api_router)
+app.include_router(sse_router)
 
 
 @app.get("/")
@@ -42,7 +44,10 @@ async def root():
         "docs": "/docs",
         "endpoints": {
             "analyze": "POST /api/analyze",
+            "analyze_stream": "GET /api/analyze/stream",
+            "chat": "POST /api/chat",
             "agent_task": "POST /api/agent/task",
             "health": "GET /api/health",
         }
     }
+

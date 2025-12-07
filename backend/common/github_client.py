@@ -691,20 +691,59 @@ def fetch_beginner_issues(
     Args:
         owner: 저장소 소유자
         repo: 저장소 이름
-        labels: 필터링할 라벨 목록 (기본: good first issue, help wanted)
+        labels: 필터링할 라벨 목록 (기본: 여러 초보자 친화적 라벨)
         max_count: 반환할 최대 이슈 수
         
     Returns:
         이슈 목록 [{number, title, labels, url, created_at}, ...]
     """
+    # 다양한 초보자 친화적 라벨 (프로젝트마다 다를 수 있음)
     if labels is None:
-        labels = ["good first issue", "help wanted"]
+        labels = [
+            "good first issue",
+            "help wanted", 
+            "beginner",
+            "easy",
+            "starter",
+            "first-timers-only",
+            "good-first-issue",
+            "help-wanted",
+            "low-hanging-fruit",
+            "hacktoberfest",
+            "docs",
+            "documentation",
+        ]
     
     logger.debug(
         "GitHub GraphQL: fetch_beginner_issues %s/%s (labels=%s)",
-        owner, repo, labels,
+        owner, repo, labels[:3],  # 로그에는 처음 3개만 표시
     )
     
+    # 먼저 라벨 있는 이슈 검색
+    result = _fetch_issues_with_labels(owner, repo, labels, max_count)
+    
+    # 라벨 있는 이슈가 부족하면 최근 열린 이슈 추가
+    if len(result) < 3:
+        recent_issues = _fetch_recent_open_issues(owner, repo, max_count - len(result))
+        # 중복 제거
+        existing_numbers = {issue["number"] for issue in result}
+        for issue in recent_issues:
+            if issue["number"] not in existing_numbers:
+                result.append(issue)
+                if len(result) >= max_count:
+                    break
+    
+    logger.info("Fetched %d beginner issues for %s/%s", len(result), owner, repo)
+    return result[:max_count]
+
+
+def _fetch_issues_with_labels(
+    owner: str,
+    repo: str,
+    labels: List[str],
+    max_count: int = 10,
+) -> List[Dict[str, Any]]:
+    """라벨이 있는 이슈 검색."""
     query = """
     query($owner: String!, $name: String!, $labels: [String!], $first: Int!) {
       repository(owner: $owner, name: $name) {
@@ -744,32 +783,92 @@ def fetch_beginner_issues(
         data = _github_graphql(query, variables)
         repo_data = data.get("repository")
         if not repo_data:
-            logger.warning("Repository not found: %s/%s", owner, repo)
             return []
         
         issues_data = repo_data.get("issues") or {}
         nodes = issues_data.get("nodes") or []
         
-        result = []
-        for node in nodes:
-            label_nodes = (node.get("labels") or {}).get("nodes") or []
-            label_names = [ln.get("name") for ln in label_nodes if ln.get("name")]
-            
-            result.append({
-                "number": node.get("number"),
-                "title": node.get("title"),
-                "url": node.get("url"),
-                "labels": label_names,
-                "created_at": node.get("createdAt"),
-                "author": (node.get("author") or {}).get("login"),
-            })
-        
-        logger.info("Fetched %d beginner issues for %s/%s", len(result), owner, repo)
-        return result
+        return _format_issues(nodes)
         
     except GitHubClientError as e:
-        logger.warning("Failed to fetch beginner issues: %s", e)
+        logger.warning("Failed to fetch labeled issues: %s", e)
         return []
     except Exception as e:
-        logger.error("Unexpected error fetching beginner issues: %s", e)
+        logger.error("Unexpected error fetching labeled issues: %s", e)
         return []
+
+
+def _fetch_recent_open_issues(
+    owner: str,
+    repo: str,
+    max_count: int = 5,
+) -> List[Dict[str, Any]]:
+    """최근 열린 이슈 검색 (라벨 무관)."""
+    query = """
+    query($owner: String!, $name: String!, $first: Int!) {
+      repository(owner: $owner, name: $name) {
+        issues(
+          first: $first
+          states: OPEN
+          orderBy: { field: CREATED_AT, direction: DESC }
+        ) {
+          nodes {
+            number
+            title
+            url
+            createdAt
+            labels(first: 10) {
+              nodes {
+                name
+              }
+            }
+            author {
+              login
+            }
+          }
+        }
+      }
+    }
+    """
+    
+    variables = {
+        "owner": owner,
+        "name": repo,
+        "first": max_count,
+    }
+    
+    try:
+        data = _github_graphql(query, variables)
+        repo_data = data.get("repository")
+        if not repo_data:
+            return []
+        
+        issues_data = repo_data.get("issues") or {}
+        nodes = issues_data.get("nodes") or []
+        
+        return _format_issues(nodes)
+        
+    except GitHubClientError as e:
+        logger.warning("Failed to fetch recent issues: %s", e)
+        return []
+    except Exception as e:
+        logger.error("Unexpected error fetching recent issues: %s", e)
+        return []
+
+
+def _format_issues(nodes: List[Dict]) -> List[Dict[str, Any]]:
+    """이슈 노드를 표준 형식으로 변환."""
+    result = []
+    for node in nodes:
+        label_nodes = (node.get("labels") or {}).get("nodes") or []
+        label_names = [ln.get("name") for ln in label_nodes if ln.get("name")]
+        
+        result.append({
+            "number": node.get("number"),
+            "title": node.get("title"),
+            "url": node.get("url"),
+            "labels": label_names,
+            "created_at": node.get("createdAt"),
+            "author": (node.get("author") or {}).get("login"),
+        })
+    return result
