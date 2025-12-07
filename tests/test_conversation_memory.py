@@ -1,4 +1,8 @@
 """ConversationMemory 테스트."""
+import os
+import sys
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import pytest
 import time
 from backend.agents.supervisor.memory import (
@@ -8,7 +12,6 @@ from backend.agents.supervisor.memory import (
     InMemoryConversationBackend,
     RedisConversationBackend,
 )
-
 
 class TestConversationTurn:
     """ConversationTurn 데이터 클래스 테스트."""

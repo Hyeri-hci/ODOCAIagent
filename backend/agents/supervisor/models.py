@@ -104,3 +104,8 @@ class SupervisorState(BaseModel):
     session_id: Optional[str] = None
     long_term_context: Optional[str] = None
 
+    # 11) 동적 플로우 조정
+    flow_adjustments: List[str] = []
+    warnings: List[str] = []
+    analysis_depth: str = "standard"
+

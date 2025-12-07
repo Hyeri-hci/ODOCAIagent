@@ -86,8 +86,14 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
     설정하는 필드:
     - next_node_override: 다음 노드명
     - decision_reason: 결정 근거
+    - flow_adjustments: 동적 플로우 조정 목록
+    - warnings: 사용자 경고 메시지
     """
     intent = state.detected_intent or "unknown"
+    adjustments = []
+    warnings = []
+    
+    user_exp = state.user_context.get("experience_level", "beginner")
     
     if intent == "diagnose":
         next_node = "run_diagnosis_node"
@@ -95,6 +101,8 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
     elif intent == "onboard":
         next_node = "run_diagnosis_node"
         reason = f"Intent is onboard, starting with diagnosis for {state.owner}/{state.repo}"
+        if user_exp == "beginner":
+            adjustments.append("beginner_friendly_plan")
     elif intent == "explain":
         if state.diagnosis_result:
             next_node = "__end__"
@@ -106,30 +114,46 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
         next_node = "__end__"
         reason = f"Unknown intent: {intent}, ending flow"
     
-    logger.info(f"Decision: next_node={next_node}, reason={reason}")
+    if state.diagnosis_result:
+        health = state.diagnosis_result.get("health_score", 100)
+        if health < 30:
+            warnings.append("이 프로젝트는 건강 상태가 좋지 않아 기여 시 주의가 필요합니다.")
+            adjustments.append("add_health_warning")
+    
+    logger.info(f"Decision: next_node={next_node}, reason={reason}, adjustments={adjustments}")
     
     return {
         "next_node_override": next_node,
         "decision_reason": reason,
+        "flow_adjustments": adjustments,
+        "warnings": warnings,
         "step": state.step + 1,
     }
 
 
 def quality_check_node(state: SupervisorState) -> Dict[str, Any]:
     """
-    결과 품질을 자체 평가하여 재실행 여부 결정.
+    결과 품질을 자체 평가하여 재실행 여부 결정 및 동적 플로우 조정.
     
     검사 항목:
     - diagnosis_result 존재 여부
     - health_score 범위 유효성 (0-100)
     - 필수 필드 존재 여부
     
+    동적 조정:
+    - 낮은 점수 시 경고 추가
+    - 활동성/문서 이슈 시 관련 조정 추가
+    
     설정하는 필드:
     - quality_issues: 발견된 품질 문제 목록
     - rerun_count: 재실행 횟수 (증가)
     - next_node_override: 재실행 또는 종료
+    - flow_adjustments: 동적 플로우 조정
+    - warnings: 사용자 경고
     """
     issues = []
+    adjustments = list(state.flow_adjustments)
+    warnings = list(state.warnings)
     diagnosis = state.diagnosis_result
     
     if diagnosis is None:
@@ -145,6 +169,23 @@ def quality_check_node(state: SupervisorState) -> Dict[str, Any]:
         for field in required_fields:
             if field not in diagnosis or diagnosis[field] is None:
                 issues.append(f"required field missing: {field}")
+        
+        if health_score is not None and 0 <= health_score <= 100:
+            if health_score < 30:
+                if "add_health_warning" not in adjustments:
+                    adjustments.append("recommend_deep_analysis")
+                    warnings.append("프로젝트 건강 점수가 매우 낮습니다 (30점 미만).")
+            elif health_score < 50:
+                if "moderate_health_notice" not in adjustments:
+                    adjustments.append("moderate_health_notice")
+        
+        activity_issues = diagnosis.get("activity_issues", [])
+        if activity_issues and "enhance_issue_recommendations" not in adjustments:
+            adjustments.append("enhance_issue_recommendations")
+        
+        docs_issues = diagnosis.get("docs_issues", [])
+        if docs_issues and "add_docs_improvement_guide" not in adjustments:
+            adjustments.append("add_docs_improvement_guide")
     
     if issues:
         logger.warning(f"Quality issues found: {issues}")
@@ -157,6 +198,8 @@ def quality_check_node(state: SupervisorState) -> Dict[str, Any]:
                 "quality_issues": issues,
                 "rerun_count": state.rerun_count + 1,
                 "next_node_override": "run_diagnosis_node",
+                "flow_adjustments": adjustments,
+                "warnings": warnings,
                 "step": state.step + 1,
             }
         else:
@@ -164,9 +207,13 @@ def quality_check_node(state: SupervisorState) -> Dict[str, Any]:
                 f"Max rerun reached ({state.max_rerun}), proceeding with issues"
             )
     
+    logger.info(f"Quality check passed, adjustments={adjustments}")
+    
     return {
         "quality_issues": issues,
         "next_node_override": "__end__",
+        "flow_adjustments": adjustments,
+        "warnings": warnings,
         "step": state.step + 1,
     }
 

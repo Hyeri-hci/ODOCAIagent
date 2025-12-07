@@ -61,6 +61,9 @@ def init_state_from_input(
         cache_hit=False,
         session_id=effective_session_id,
         long_term_context=long_term_context,
+        flow_adjustments=[],
+        warnings=[],
+        analysis_depth="standard",
     )
 
 
