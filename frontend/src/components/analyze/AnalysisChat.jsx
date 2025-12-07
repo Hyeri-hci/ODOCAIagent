@@ -180,16 +180,35 @@ const AnalysisChat = ({
     setIsComparing(true);
     setCompareResult(null);
 
-    // 히스토리에서 저장소 목록 추출
+    // 히스토리에서 저장소 목록 추출 (최대 5개, 중복 제거)
+    const seen = new Set();
     const repositories = analysisHistory
       .map((result) => {
         const url = result.repositoryUrl;
         const info = parseGitHubUrl(url);
         return info ? `${info.owner}/${info.repo}` : null;
       })
-      .filter(Boolean);
+      .filter((repo) => {
+        if (!repo || seen.has(repo)) return false;
+        seen.add(repo);
+        return true;
+      })
+      .slice(0, 5); // 최대 5개
+
+    if (repositories.length < 2) {
+      const errorMessage = {
+        id: `compare_error_${Date.now()}`,
+        role: "assistant",
+        content: "비교하려면 2개 이상의 서로 다른 저장소가 필요합니다.",
+        timestamp: new Date(),
+      };
+      setMessages((prev) => [...prev, errorMessage]);
+      setIsComparing(false);
+      return;
+    }
 
     try {
+      console.log("[handleCompareAnalysis] repositories:", repositories);
       const response = await compareRepositories(repositories);
       console.log("비교 분석 결과:", response);
 
@@ -1003,6 +1022,7 @@ const AnalysisChat = ({
                         ? "bg-purple-100 text-purple-600"
                         : "bg-purple-600 hover:bg-purple-700 text-white"
                     }`}
+                    title={`${Math.min(analysisHistory.length, 5)}개 저장소 비교`}
                   >
                     {isComparing ? (
                       <>
@@ -1010,7 +1030,12 @@ const AnalysisChat = ({
                         비교 중...
                       </>
                     ) : (
-                      <>비교 분석</>
+                      <>
+                        비교 분석
+                        <span className="bg-purple-500 text-white text-xs px-1.5 py-0.5 rounded-full ml-1">
+                          {Math.min(analysisHistory.length, 5)}
+                        </span>
+                      </>
                     )}
                   </button>
                   <button

@@ -62,10 +62,21 @@ def intent_analysis_node(state: SupervisorState) -> Dict[str, Any]:
     """
     사용자 입력 또는 task_type을 분석하여 의도 분류.
     
+    이미 detected_intent가 설정되어 있으면 재계산하지 않음.
+    
     설정하는 필드:
     - detected_intent: 분류된 의도
     - intent_confidence: 분류 신뢰도
     """
+    # 이미 intent가 설정되어 있으면 유지 (API에서 직접 설정한 경우)
+    if state.detected_intent and state.detected_intent != "unknown":
+        logger.info(
+            f"Intent already set: {state.detected_intent}, skipping analysis"
+        )
+        return {
+            "step": state.step + 1,
+        }
+    
     intent, confidence = infer_intent_from_context(state)
     
     logger.info(
@@ -260,7 +271,7 @@ def quality_check_node(state: SupervisorState) -> Dict[str, Any]:
         
         if health_score is not None and 0 <= health_score <= 100:
             if health_score < 30:
-                if "add_health_warning" not in adjustments:
+                if "recommend_deep_analysis" not in adjustments:
                     adjustments.append("recommend_deep_analysis")
                     warnings.append("프로젝트 건강 점수가 매우 낮습니다 (30점 미만).")
             elif health_score < 50:

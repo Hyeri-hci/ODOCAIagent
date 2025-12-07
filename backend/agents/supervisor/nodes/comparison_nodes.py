@@ -19,6 +19,7 @@ def batch_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     """
     from backend.common.cache import analysis_cache
     from backend.agents.diagnosis.service import run_diagnosis
+    from backend.agents.diagnosis.models import DiagnosisInput
     
     repos = state.compare_repos
     if not repos:
@@ -60,7 +61,8 @@ def batch_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
         cache_misses.append(repo_str)
         logger.info(f"CACHE MISS - Running diagnosis for comparison: {owner}/{repo}")
         try:
-            diagnosis_result = run_diagnosis(owner, repo, "main", use_llm_summary=False)
+            diagnosis_input = DiagnosisInput(owner=owner, repo=repo, ref="main")
+            diagnosis_result = run_diagnosis(diagnosis_input)
             if diagnosis_result:
                 result_dict = diagnosis_result.to_dict()
                 analysis_cache.set_analysis(owner, repo, "main", result_dict)
