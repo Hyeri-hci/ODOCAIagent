@@ -114,6 +114,8 @@ const AnalyzePage = () => {
       recommendedIssues: apiResponse.recommended_issues || analysis.recommended_issues || [],
       // 원본 API 응답 보관
       rawAnalysis: analysis,
+      // 온보딩 플랜 (API 응답에서 가져오기)
+      onboardingPlan: apiResponse.onboarding_plan || analysis.onboarding_plan || null,
     };
   };
 
