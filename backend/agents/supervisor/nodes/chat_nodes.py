@@ -77,12 +77,12 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
             temperature=0.7,
         )
 
-        response = client.chat(request, timeout=30)
+        response = client.chat(request, timeout=60)
         chat_response = response.content
 
     except Exception as e:
         logger.warning(f"LLM chat failed: {e}")
-        chat_response = _generate_fallback(intent, message, context, diagnosis)
+        chat_response = _generate_fallback(intent, message, context, diagnosis, state.candidate_issues)
 
     return {
         "chat_response": chat_response,
@@ -134,14 +134,46 @@ def _build_chat_prompt(context: Dict, diagnosis: Dict) -> str:
     return f"{ODOC_SYSTEM_CONTEXT}\n사용자 질문에 답변하세요."
 
 
-def _generate_fallback(intent: str, message: str, context: Dict, diagnosis: Dict) -> str:
+def _generate_fallback(
+    intent: str, 
+    message: str, 
+    context: Dict, 
+    diagnosis: Dict,
+    candidate_issues: list = None
+) -> str:
     """LLM 실패 시 폴백 응답."""
+    msg_lower = message.lower()
+    
     if intent == "explain":
         health = diagnosis.get("health_score", context.get("health_score"))
         if health:
             return f"현재 프로젝트의 건강 점수는 {health}점입니다. 구체적인 분석 결과는 리포트를 참고해주세요."
         return "분석 결과가 없습니다. 먼저 저장소를 분석해주세요."
-
+    
+    if any(kw in msg_lower for kw in ["기여", "초보자", "시작", "어떻게"]):
+        repo = diagnosis.get("repo_id", context.get("repo_id", ""))
+        onboard_score = diagnosis.get("onboarding_score", context.get("onboarding_score", 0))
+        
+        issues_info = ""
+        if candidate_issues and len(candidate_issues) > 0:
+            issues_info = f"\n\n추천 이슈가 {len(candidate_issues)}개 있습니다. 리포트의 '추천 이슈' 섹션을 확인해주세요."
+        
+        if repo:
+            tips = []
+            if onboard_score >= 70:
+                tips.append("이 프로젝트는 초보자 친화적입니다.")
+            elif onboard_score >= 50:
+                tips.append("이 프로젝트는 중간 수준의 진입 장벽이 있습니다.")
+            else:
+                tips.append("이 프로젝트는 초보자에게 다소 어려울 수 있습니다.")
+            
+            tips.append("CONTRIBUTING.md 파일을 먼저 읽어보세요.")
+            tips.append("'good first issue' 라벨이 붙은 이슈를 찾아보세요.")
+            
+            return f"{repo}에 기여하고 싶으시군요!\n\n" + "\n".join(f"- {t}" for t in tips) + issues_info
+        
+        return "오픈소스 기여를 시작하려면 먼저 저장소를 분석해주세요. 분석 결과에서 추천 이슈와 온보딩 점수를 확인할 수 있습니다."
+    
     return "요청을 처리하는 중 문제가 발생했습니다. 다시 시도해주세요."
 
 

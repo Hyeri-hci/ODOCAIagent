@@ -47,34 +47,39 @@ def batch_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
             logger.warning(f"Invalid repo format: {repo_str}, error: {e}")
             continue
         
-        logger.info(f"Checking cache for {owner}/{repo}...")
-        cached = analysis_cache.get_analysis(owner, repo, "main")
-        if cached:
-            logger.info(f"CACHE HIT for comparison: {owner}/{repo}, health_score={cached.get('health_score')}")
-            cache_hits.append(repo_str)
-            normalized_key = f"{owner}/{repo}"
-            results[normalized_key] = cached
-            if repo_str != normalized_key:
-                results[repo_str] = cached
+        normalized_key = f"{owner}/{repo}"
+        
+        if normalized_key in results:
+            logger.info(f"Already processed {normalized_key}, skipping duplicate")
             continue
         
-        cache_misses.append(repo_str)
-        logger.info(f"CACHE MISS - Running diagnosis for comparison: {owner}/{repo}")
+        logger.info(f"Checking cache for {normalized_key}...")
+        cached = analysis_cache.get_analysis(owner, repo, "main")
+        if cached:
+            cached_health = cached.get("health_score")
+            if cached_health is not None and cached_health > 0:
+                logger.info(f"CACHE HIT for comparison: {normalized_key}, health_score={cached_health}")
+                cache_hits.append(normalized_key)
+                results[normalized_key] = cached
+                continue
+            else:
+                logger.warning(f"Invalid cache data for {normalized_key}: health_score={cached_health}, re-analyzing")
+                analysis_cache._store.pop(analysis_cache.make_repo_key(owner, repo, "main"), None)
+        
+        cache_misses.append(normalized_key)
+        logger.info(f"CACHE MISS - Running diagnosis for comparison: {normalized_key}")
         try:
             diagnosis_input = DiagnosisInput(owner=owner, repo=repo, ref="main")
             diagnosis_result = run_diagnosis(diagnosis_input)
             if diagnosis_result:
                 result_dict = diagnosis_result.to_dict()
                 analysis_cache.set_analysis(owner, repo, "main", result_dict)
-                normalized_key = f"{owner}/{repo}"
                 results[normalized_key] = result_dict
-                if repo_str != normalized_key:
-                    results[repo_str] = result_dict
             else:
-                warnings.append(f"{owner}/{repo} 분석 실패")
+                warnings.append(f"{normalized_key} 분석 실패")
         except Exception as e:
-            logger.error(f"Diagnosis failed for {owner}/{repo}: {e}")
-            warnings.append(f"{owner}/{repo} 분석 중 오류: {str(e)}")
+            logger.error(f"Diagnosis failed for {normalized_key}: {e}")
+            warnings.append(f"{normalized_key} 분석 중 오류: {str(e)}")
     
     logger.info(
         f"Batch diagnosis complete: {len(results)}/{len(repos)} successful, "
@@ -106,11 +111,22 @@ def compare_results_node(state: SupervisorState) -> Dict[str, Any]:
             "step": state.step + 1,
         }
     
+    seen_repos = set()
     comparison_data = []
     for repo_str, data in results.items():
+        normalized = repo_str.lower().strip()
+        if normalized in seen_repos:
+            continue
+        seen_repos.add(normalized)
+        
+        health = data.get("health_score", 0)
+        if health == 0 and data.get("health_level") == "unknown":
+            logger.warning(f"Skipping invalid result for {repo_str}: health_score=0")
+            continue
+        
         comparison_data.append({
             "repo": repo_str,
-            "health_score": data.get("health_score", 0),
+            "health_score": health,
             "onboarding_score": data.get("onboarding_score", 0),
             "docs_score": data.get("documentation_quality", data.get("docs", {}).get("total_score", 0)),
             "activity_score": data.get("activity_maintainability", data.get("activity", {}).get("total_score", 0)),
@@ -167,42 +183,37 @@ ODOC 평가 기준: 건강점수=문서25%+활동성65%+구조10%, 온보딩점�
 
 두 오픈소스 프로젝트를 비교 분석하여 사용자에게 보여줄 메시지를 작성해주세요.
 
-## 분석 데이터
+[분석 데이터]
 
-### {repo1['repo']}
-| 항목 | 점수 |
-|------|------|
-| 건강 점수 | {repo1['health_score']}점 |
-| 온보딩 점수 | {repo1['onboarding_score']}점 |
-| 문서 품질 | {repo1['docs_score']}점 |
-| 활동성 | {repo1['activity_score']}점 |
+{repo1['repo']}:
+- 건강 점수: {repo1['health_score']}점
+- 온보딩 점수: {repo1['onboarding_score']}점
+- 문서 품질: {repo1['docs_score']}점
+- 활동성: {repo1['activity_score']}점
 
-### {repo2['repo']}
-| 항목 | 점수 |
-|------|------|
-| 건강 점수 | {repo2['health_score']}점 |
-| 온보딩 점수 | {repo2['onboarding_score']}점 |
-| 문서 품질 | {repo2['docs_score']}점 |
-| 활동성 | {repo2['activity_score']}점 |
+{repo2['repo']}:
+- 건강 점수: {repo2['health_score']}점
+- 온보딩 점수: {repo2['onboarding_score']}점
+- 문서 품질: {repo2['docs_score']}점
+- 활동성: {repo2['activity_score']}점
 
-## 점수 차이 요약
+[점수 비교]
 - 건강 점수: {health_summary}
 - 온보딩 점수: {onboard_summary}
 
-## 작성 요청
+[작성 요청]
+위 데이터를 바탕으로 비교 분석 메시지를 한국어로 작성해주세요.
+마크다운 테이블은 사용하지 마세요. 일반 텍스트 형식으로 작성하세요.
 
-위 데이터를 바탕으로 아래 형식의 비교 분석 메시지를 한국어로 작성해주세요.
-마크다운 형식을 사용하고, 자연스러운 대화체로 작성해주세요.
-
-**필수 포함 내용:**
-1. 제목: "**{repo1['repo']} vs {repo2['repo']} 비교 분석**"
-2. 점수 비교 테이블 (건강 점수, 온보딩 점수, 문서 품질, 활동성)
-3. 종합 평가 (어떤 프로젝트가 전반적으로 더 좋은지, 그 이유)
-4. 초보자 추천 (오픈소스 기여를 처음 시작하는 사람에게 어떤 프로젝트가 더 적합한지)
-5. 각 프로젝트의 강점과 약점 간단히 언급
+필수 포함 내용:
+1. 제목 (굵은 글씨로)
+2. 각 프로젝트의 점수를 한 줄씩 나열
+3. 종합 평가 (어떤 프로젝트가 더 좋은지, 이유)
+4. 초보자에게 어떤 프로젝트가 더 적합한지
+5. 각 프로젝트의 강점과 약점
 6. 최종 결론 한 문장
 
-응답은 전체 메시지만 출력해주세요. 추가 설명 없이 바로 메시지를 시작하세요."""
+응답은 메시지만 출력하세요."""
 
     try:
         client = fetch_llm_client()
