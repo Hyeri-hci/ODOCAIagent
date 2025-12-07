@@ -13,6 +13,7 @@ Intent = Literal[
     "diagnose",   # 저장소 진단
     "onboard",    # 온보딩 플랜 요청
     "explain",    # 메트릭/결과 설명 요청
+    "compare",    # 여러 저장소 비교 분석
     "unknown",    # 분류 불가
 ]
 
@@ -108,4 +109,9 @@ class SupervisorState(BaseModel):
     flow_adjustments: List[str] = []
     warnings: List[str] = []
     analysis_depth: str = "standard"
+
+    # 12) 비교 분석
+    compare_repos: List[str] = []
+    compare_results: Dict[str, Any] = {}
+    compare_summary: Optional[str] = None
 

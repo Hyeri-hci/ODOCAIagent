@@ -24,6 +24,7 @@ INTENT_KEYWORDS = {
     "diagnose": ["진단", "분석", "건강", "health", "analyze", "diagnosis", "score"],
     "onboard": ["온보딩", "시작", "기여", "onboard", "contribute", "plan", "플랜"],
     "explain": ["설명", "왜", "무슨", "explain", "why", "what", "how"],
+    "compare": ["비교", "compare", "vs", "차이", "difference", "versus"],
 }
 
 
@@ -83,33 +84,75 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
     """
     분석된 의도와 현재 상태를 기반으로 다음 행동 결정.
     
+    Agentic 기능:
+    - 캐시 확인하여 이미 분석된 결과 재사용
+    - 비교 분석 요청 시 여러 저장소 처리
+    
     설정하는 필드:
     - next_node_override: 다음 노드명
     - decision_reason: 결정 근거
     - flow_adjustments: 동적 플로우 조정 목록
     - warnings: 사용자 경고 메시지
+    - cache_hit: 캐시 히트 여부
     """
     intent = state.detected_intent or "unknown"
     adjustments = []
     warnings = []
+    cache_hit = False
     
     user_exp = state.user_context.get("experience_level", "beginner")
     
     if intent == "diagnose":
-        next_node = "run_diagnosis_node"
-        reason = f"Intent is diagnose for {state.owner}/{state.repo}"
+        if state.use_cache:
+            cached = _check_cache(state.owner, state.repo)
+            if cached:
+                next_node = "use_cached_result_node"
+                reason = f"Cache hit for {state.owner}/{state.repo}, using cached result"
+                cache_hit = True
+            else:
+                next_node = "run_diagnosis_node"
+                reason = f"Intent is diagnose for {state.owner}/{state.repo}, no cache"
+        else:
+            next_node = "run_diagnosis_node"
+            reason = f"Intent is diagnose for {state.owner}/{state.repo}, cache disabled"
     elif intent == "onboard":
-        next_node = "run_diagnosis_node"
-        reason = f"Intent is onboard, starting with diagnosis for {state.owner}/{state.repo}"
+        if state.use_cache:
+            cached = _check_cache(state.owner, state.repo)
+            if cached:
+                next_node = "use_cached_result_node"
+                reason = f"Cache hit for {state.owner}/{state.repo}, using cached for onboard"
+                cache_hit = True
+            else:
+                next_node = "run_diagnosis_node"
+                reason = f"Intent is onboard for {state.owner}/{state.repo}, no cache"
+        else:
+            next_node = "run_diagnosis_node"
+            reason = f"Intent is onboard, starting with diagnosis for {state.owner}/{state.repo}"
         if user_exp == "beginner":
             adjustments.append("beginner_friendly_plan")
+    elif intent == "compare":
+        next_node = "batch_diagnosis_node"
+        reason = f"Intent is compare, processing {len(state.compare_repos)} repositories"
+        if not state.compare_repos:
+            warnings.append("비교할 저장소 목록이 비어 있습니다.")
+            next_node = "__end__"
     elif intent == "explain":
         if state.diagnosis_result:
             next_node = "__end__"
             reason = "Intent is explain, diagnosis result exists"
         else:
-            next_node = "run_diagnosis_node"
-            reason = "Intent is explain but no diagnosis result, running diagnosis first"
+            if state.use_cache:
+                cached = _check_cache(state.owner, state.repo)
+                if cached:
+                    next_node = "use_cached_result_node"
+                    reason = "Intent is explain, using cached diagnosis result"
+                    cache_hit = True
+                else:
+                    next_node = "run_diagnosis_node"
+                    reason = "Intent is explain but no cache, running diagnosis first"
+            else:
+                next_node = "run_diagnosis_node"
+                reason = "Intent is explain but no diagnosis result, running diagnosis first"
     else:
         next_node = "__end__"
         reason = f"Unknown intent: {intent}, ending flow"
@@ -120,15 +163,60 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
             warnings.append("이 프로젝트는 건강 상태가 좋지 않아 기여 시 주의가 필요합니다.")
             adjustments.append("add_health_warning")
     
-    logger.info(f"Decision: next_node={next_node}, reason={reason}, adjustments={adjustments}")
+    logger.info(f"Decision: next_node={next_node}, reason={reason}, adjustments={adjustments}, cache_hit={cache_hit}")
     
     return {
         "next_node_override": next_node,
         "decision_reason": reason,
         "flow_adjustments": adjustments,
         "warnings": warnings,
+        "cache_hit": cache_hit,
         "step": state.step + 1,
     }
+
+
+def _check_cache(owner: str, repo: str, ref: str = "main") -> bool:
+    """캐시에 분석 결과가 있는지 확인."""
+    try:
+        from backend.common.cache import analysis_cache
+        cached = analysis_cache.get_analysis(owner, repo, ref)
+        return cached is not None
+    except Exception as e:
+        logger.warning(f"Cache check failed: {e}")
+        return False
+
+
+def use_cached_result_node(state: SupervisorState) -> Dict[str, Any]:
+    """
+    캐시에서 분석 결과를 로드하여 diagnosis_result에 설정.
+    """
+    try:
+        from backend.common.cache import analysis_cache
+        cached = analysis_cache.get_analysis(state.owner, state.repo, "main")
+        
+        if cached:
+            logger.info(f"Loaded cached result for {state.owner}/{state.repo}")
+            return {
+                "diagnosis_result": cached,
+                "cache_hit": True,
+                "decision_reason": f"Loaded from cache: {state.owner}/{state.repo}",
+                "step": state.step + 1,
+            }
+        else:
+            logger.warning(f"Cache miss during load for {state.owner}/{state.repo}")
+            return {
+                "next_node_override": "run_diagnosis_node",
+                "cache_hit": False,
+                "step": state.step + 1,
+            }
+    except Exception as e:
+        logger.error(f"Failed to load cached result: {e}")
+        return {
+            "next_node_override": "run_diagnosis_node",
+            "cache_hit": False,
+            "error": str(e),
+            "step": state.step + 1,
+        }
 
 
 def quality_check_node(state: SupervisorState) -> Dict[str, Any]:
@@ -225,6 +313,20 @@ def route_after_decision(state: SupervisorState) -> str:
     return next_node
 
 
+def route_after_cached_result(state: SupervisorState) -> str:
+    """use_cached_result_node 이후 라우팅."""
+    if state.next_node_override == "run_diagnosis_node":
+        return "run_diagnosis_node"
+    
+    if state.detected_intent == "onboard" and state.task_type == "build_onboarding_plan":
+        return "fetch_issues_node"
+    
+    if state.detected_intent == "compare":
+        return "compare_results_node"
+    
+    return "quality_check_node"
+
+
 def route_after_quality_check(state: SupervisorState) -> str:
     """quality_check_node 이후 라우팅."""
     if state.next_node_override == "run_diagnosis_node":
@@ -232,6 +334,9 @@ def route_after_quality_check(state: SupervisorState) -> str:
     
     if state.detected_intent == "onboard" and state.task_type == "build_onboarding_plan":
         return "fetch_issues_node"
+    
+    if state.detected_intent == "compare":
+        return "compare_results_node"
     
     return "__end__"
 

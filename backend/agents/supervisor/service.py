@@ -64,6 +64,9 @@ def init_state_from_input(
         flow_adjustments=[],
         warnings=[],
         analysis_depth="standard",
+        compare_repos=[],
+        compare_results={},
+        compare_summary=None,
     )
 
 
