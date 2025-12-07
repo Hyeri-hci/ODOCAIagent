@@ -1,9 +1,10 @@
 import logging
+import time
 from typing import Optional
 
 from backend.core.github_core import fetch_repo_snapshot
 from backend.core.docs_core import analyze_docs
-from backend.core.activity_core import analyze_activity
+from backend.core.activity_core import analyze_activity, analyze_activity_optimized
 from backend.core.structure_core import analyze_structure
 from backend.core.dependencies_core import parse_dependencies
 from backend.core.scoring_core import compute_scores
@@ -22,9 +23,14 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
     repo = input_data.repo
     ref = input_data.ref
     
+    timings = {}
+    total_start = time.time()
+    
     # 1. GitHub 데이터 수집
     try:
+        fetch_start = time.time()
         snapshot = fetch_repo_snapshot(owner, repo, ref)
+        timings["fetch_snapshot"] = round(time.time() - fetch_start, 3)
     except Exception as e:
         logger.error(f"Failed to fetch repo snapshot: {e}")
         raise RuntimeError(f"저장소 조회 실패: {e}")
@@ -32,23 +38,36 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
     # 2. Core 분석
     try:
         # 의존성 파싱
+        deps_start = time.time()
         deps = parse_dependencies(snapshot)
+        timings["parse_dependencies"] = round(time.time() - deps_start, 3)
         
         # 문서 분석
+        docs_start = time.time()
         docs_result = analyze_docs(snapshot)
+        timings["analyze_docs"] = round(time.time() - docs_start, 3)
         
-        # 활동성 분석
-        activity_result = analyze_activity(snapshot)
+        # 활동성 분석 (최적화 버전 사용 - 단일 GraphQL 호출)
+        activity_start = time.time()
+        activity_result = analyze_activity_optimized(snapshot)
+        timings["analyze_activity"] = round(time.time() - activity_start, 3)
         
         # 구조 분석
+        structure_start = time.time()
         structure_result = analyze_structure(snapshot)
+        timings["analyze_structure"] = round(time.time() - structure_start, 3)
         
         # 3. 점수 계산
+        scoring_start = time.time()
         diagnosis = compute_scores(docs_result, activity_result, deps)
+        timings["compute_scores"] = round(time.time() - scoring_start, 3)
         
     except Exception as e:
         logger.error(f"Diagnosis core failed: {e}")
         raise RuntimeError(f"진단 실행 실패: {e}")
+    
+    timings["total_analysis"] = round(time.time() - total_start, 3)
+    logger.info(f"Diagnosis timings for {owner}/{repo}: {timings}")
 
     # 4. 사용자용 요약 생성 (snapshot에서 README 내용 가져옴)
     summary_text = _generate_summary(diagnosis, docs_result, snapshot, input_data.use_llm_summary)

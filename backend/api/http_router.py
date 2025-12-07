@@ -575,3 +575,33 @@ async def compare_repositories(request: CompareRequest) -> CompareResponse:
             error=str(e),
             warnings=[],
         )
+
+
+# Performance Metrics API
+@router.get("/admin/metrics")
+async def get_performance_metrics(limit: int = 50):
+    """
+    성능 메트릭 조회 API.
+    
+    최근 Task 수행 시간, Agent 결정 로그 등을 조회합니다.
+    """
+    from backend.common.metrics import get_metrics_tracker
+    
+    tracker = get_metrics_tracker()
+    return {
+        "summary": tracker.get_summary(),
+        "recent_tasks": tracker.get_recent_metrics(limit=limit),
+    }
+
+
+@router.get("/admin/metrics/summary")
+async def get_metrics_summary():
+    """
+    성능 메트릭 요약 조회.
+    
+    전체 통계 (성공률, 캐시 히트율, 평균 소요시간 등)를 반환합니다.
+    """
+    from backend.common.metrics import get_metrics_tracker
+    
+    tracker = get_metrics_tracker()
+    return tracker.get_summary()

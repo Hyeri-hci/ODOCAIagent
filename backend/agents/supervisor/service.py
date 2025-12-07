@@ -7,6 +7,7 @@ from backend.agents.supervisor.models import SupervisorInput, SupervisorState
 from backend.agents.supervisor.trace import TracingCallbackHandler
 from backend.agents.supervisor.memory import get_conversation_memory, ConversationMemory
 from backend.common.logging_config import setup_logging
+from backend.common.metrics import get_metrics_tracker, TaskMetrics
 
 logger = logging.getLogger(__name__)
 setup_logging()
@@ -136,6 +137,10 @@ def run_supervisor_diagnosis(
     task_info = f"task=diagnose_repo owner={owner} repo={repo} ref={ref}"
     logger.info(f"[{task_info}] Starting diagnosis (LLM Summary: {use_llm_summary}, Trace: {debug_trace})")
     
+    # 메트릭 추적 시작
+    tracker = get_metrics_tracker()
+    metrics = tracker.start_task("diagnose_repo", owner, repo)
+    
     # 1. 그래프 생성
     graph = get_supervisor_graph()
     
@@ -161,11 +166,24 @@ def run_supervisor_diagnosis(
     # 4. 그래프 실행
     result = graph.invoke(initial_state, config=config)
     
-    # 5. 결과 추출
-    if result.get("error"):
-        logger.error(f"[{task_info}] Diagnosis failed: {result.get('error')}")
+    # 5. 결과 추출 및 메트릭 수집
+    error_msg = result.get("error")
+    if error_msg:
+        logger.error(f"[{task_info}] Diagnosis failed: {error_msg}")
+        metrics.complete(success=False, error=error_msg)
     else:
         logger.info(f"[{task_info}] Diagnosis completed successfully")
+        metrics.complete(success=True)
+    
+    # Agent 결정 정보 수집
+    metrics.detected_intent = result.get("detected_intent")
+    metrics.decision_reason = result.get("decision_reason")
+    metrics.flow_adjustments = result.get("flow_adjustments", [])
+    metrics.cache_hit = result.get("cache_hit", False)
+    metrics.rerun_count = result.get("rerun_count", 0)
+    
+    # 메트릭 기록
+    tracker.record_task(metrics)
 
     # 6. Trace 수집
     trace = trace_handler.get_trace() if trace_handler else None
@@ -176,7 +194,7 @@ def run_supervisor_diagnosis(
         diagnosis_result["warnings"] = result.get("warnings", [])
         diagnosis_result["flow_adjustments"] = result.get("flow_adjustments", [])
     
-    return diagnosis_result, result.get("error"), trace
+    return diagnosis_result, error_msg, trace
 
 
 def run_supervisor_diagnosis_with_guidelines(

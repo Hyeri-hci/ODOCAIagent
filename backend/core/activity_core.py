@@ -11,6 +11,7 @@ from backend.common.github_client import (
     fetch_recent_commits,
     fetch_recent_issues,
     fetch_recent_pull_requests,
+    fetch_activity_summary,
     DEFAULT_ACTIVITY_DAYS,
 )
 from .models import ActivityCoreResult, RepoSnapshot
@@ -377,11 +378,9 @@ def analyze_activity(
 ) -> ActivityCoreResult:
     """CHAOSS 기반 활동성 분석 (Pure Python)."""
     if hasattr(snapshot_or_owner, "owner") and hasattr(snapshot_or_owner, "repo"):
-        # It's a RepoSnapshot
         owner = snapshot_or_owner.owner
         repo = snapshot_or_owner.repo
     else:
-        # It's an owner string
         owner = str(snapshot_or_owner)
         if repo is None:
             raise ValueError("Repo argument is required when passing owner as string")
@@ -401,7 +400,57 @@ def analyze_activity(
         days_since_last_commit=commit.days_since_last_commit,
         total_commits_in_window=commit.total_commits,
         unique_authors=commit.unique_authors,
-        # 상세 메트릭 (UX 개선용)
+        issue_close_rate=issue.issue_closure_ratio,
+        median_pr_merge_days=pr.median_time_to_merge_days,
+        median_issue_close_days=issue.median_time_to_close_days,
+        open_issues_count=issue.open_issues,
+        open_prs_count=pr.open_prs,
+    )
+
+
+def analyze_activity_optimized(
+    snapshot_or_owner: Union[RepoSnapshot, str],
+    repo: Optional[str] = None,
+    days: int = DEFAULT_ACTIVITY_DAYS,
+) -> ActivityCoreResult:
+    """
+    최적화된 활동성 분석 - 단일 GraphQL 호출 사용.
+    
+    기존 analyze_activity는 3번의 API 호출 (commits, issues, PRs)을 수행하지만,
+    이 함수는 fetch_activity_summary를 사용하여 1번의 호출로 처리합니다.
+    """
+    if hasattr(snapshot_or_owner, "owner") and hasattr(snapshot_or_owner, "repo"):
+        owner = snapshot_or_owner.owner
+        repo = snapshot_or_owner.repo
+    else:
+        owner = str(snapshot_or_owner)
+        if repo is None:
+            raise ValueError("Repo argument is required when passing owner as string")
+
+    try:
+        summary = fetch_activity_summary(owner, repo, days=days)
+        commits_data = summary.get("commits", [])
+        issues_data = summary.get("issues", [])
+        prs_data = summary.get("pull_requests", [])
+    except Exception as e:
+        logger.warning(f"fetch_activity_summary failed, falling back: {e}")
+        return analyze_activity(snapshot_or_owner, repo, days)
+
+    commit = _compute_commit_metrics(commits_data, owner, repo, days)
+    issue = _compute_issue_metrics(issues_data, owner, repo, days)
+    pr = _compute_pr_metrics(prs_data, owner, repo, days)
+
+    breakdown = aggregate_activity_score(commit, issue, pr)
+    total_score = activity_score_to_100(breakdown)
+
+    return ActivityCoreResult(
+        commit_score=breakdown.commit_score,
+        issue_score=breakdown.issue_score,
+        pr_score=breakdown.pr_score,
+        total_score=total_score,
+        days_since_last_commit=commit.days_since_last_commit,
+        total_commits_in_window=commit.total_commits,
+        unique_authors=commit.unique_authors,
         issue_close_rate=issue.issue_closure_ratio,
         median_pr_merge_days=pr.median_time_to_merge_days,
         median_issue_close_days=issue.median_time_to_close_days,
