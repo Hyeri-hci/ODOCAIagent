@@ -146,9 +146,9 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
             warnings.append("비교할 저장소 목록이 비어 있습니다.")
             next_node = "__end__"
     elif intent == "explain":
-        if state.diagnosis_result:
-            next_node = "__end__"
-            reason = "Intent is explain, diagnosis result exists"
+        if state.diagnosis_result or state.chat_context:
+            next_node = "chat_response_node"
+            reason = "Intent is explain, routing to chat response"
         else:
             if state.use_cache:
                 cached = _check_cache(state.owner, state.repo)
@@ -162,6 +162,9 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
             else:
                 next_node = "run_diagnosis_node"
                 reason = "Intent is explain but no diagnosis result, running diagnosis first"
+    elif intent == "chat":
+        next_node = "chat_response_node"
+        reason = "Intent is chat, routing to chat response"
     else:
         next_node = "__end__"
         reason = f"Unknown intent: {intent}, ending flow"

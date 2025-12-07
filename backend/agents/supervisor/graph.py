@@ -25,6 +25,7 @@ from backend.agents.supervisor.nodes.comparison_nodes import (
     batch_diagnosis_node,
     compare_results_node,
 )
+from backend.agents.supervisor.nodes.chat_nodes import chat_response_node
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,9 @@ def build_supervisor_graph() -> StateGraph:
     graph.add_node("use_cached_result_node", use_cached_result_node)
     graph.add_node("batch_diagnosis_node", batch_diagnosis_node)
     graph.add_node("compare_results_node", compare_results_node)
+    
+    # 노드 등록 - 채팅 노드
+    graph.add_node("chat_response_node", chat_response_node)
 
     # Entry Point
     graph.set_entry_point("intent_analysis_node")
@@ -53,7 +57,7 @@ def build_supervisor_graph() -> StateGraph:
     # intent_analysis_node -> decision_node
     graph.add_edge("intent_analysis_node", "decision_node")
 
-    # decision_node -> conditional routing (캐시, 진단, 비교 분기)
+    # decision_node -> conditional routing (캐시, 진단, 비교, 채팅 분기)
     graph.add_conditional_edges(
         "decision_node",
         route_after_decision,
@@ -61,6 +65,7 @@ def build_supervisor_graph() -> StateGraph:
             "run_diagnosis_node": "run_diagnosis_node",
             "use_cached_result_node": "use_cached_result_node",
             "batch_diagnosis_node": "batch_diagnosis_node",
+            "chat_response_node": "chat_response_node",
             "__end__": END,
         }
     )
@@ -112,6 +117,9 @@ def build_supervisor_graph() -> StateGraph:
     # Comparison Flow
     graph.add_edge("batch_diagnosis_node", "compare_results_node")
     graph.add_edge("compare_results_node", END)
+
+    # Chat Flow
+    graph.add_edge("chat_response_node", END)
 
     return graph
 

@@ -47,86 +47,69 @@ async def generate_chat_stream(
     analysis_context: Optional[Dict[str, Any]],
     conversation_history: List[ChatStreamMessage],
 ) -> AsyncGenerator[str, None]:
-    """
-    채팅 응답을 SSE 이벤트로 스트리밍.
-    
-    토큰 단위로 응답을 전송하여 타이핑 효과를 구현합니다.
-    """
+    """Supervisor를 경유하여 채팅 응답 생성."""
     from concurrent.futures import ThreadPoolExecutor
-    from backend.api.chat_service import get_chat_service, ChatServiceRequest, ChatMessage
-    from backend.llm.base import ChatRequest as LLMChatRequest, ChatMessage as LLMChatMessage
     
     def send_event(event_type: str, content: str = "", is_fallback: bool = False) -> str:
         event = StreamEvent(type=event_type, content=content, is_fallback=is_fallback)
         return f"data: {json.dumps(event.model_dump(), ensure_ascii=False)}\n\n"
     
     try:
-        service = get_chat_service()
-        
-        # 시스템 프롬프트 구성
-        system_prompt = service.build_system_prompt(repo_url, analysis_context)
-        
-        # LLM 메시지 구성
-        messages = [LLMChatMessage(role="system", content=system_prompt)]
-        for msg in conversation_history:
-            role = cast(Role, msg.role) if msg.role in ("system", "user", "assistant") else "user"
-            messages.append(LLMChatMessage(role=role, content=msg.content))
-        messages.append(LLMChatMessage(role="user", content=message))
-        
-        # LLM 스트리밍 호출
-        llm_request = LLMChatRequest(
-            messages=messages,
-            model=service.model_name,
-            temperature=0.7,
-            stream=True,
-        )
-        
         loop = asyncio.get_event_loop()
         
-        try:
-            # 스트리밍 응답 처리
-            with ThreadPoolExecutor() as executor:
-                # stream_chat 호출
-                def get_stream():
-                    return list(service.llm_client.stream_chat(llm_request, timeout=60))
-                
-                chunks = await loop.run_in_executor(executor, get_stream)
-            
-            # 청크 단위로 전송 (타이핑 효과)
-            for chunk in chunks:
-                if chunk.content:
-                    # 긴 청크는 분할하여 타이핑 효과 강화
-                    content = chunk.content
-                    if len(content) > 10 and not chunk.is_final:
-                        # 단어 단위로 분할
-                        words = content.split(' ')
-                        for i, word in enumerate(words):
-                            yield send_event("token", word + (' ' if i < len(words) - 1 else ''))
-                            await asyncio.sleep(0.03)  # 타이핑 딜레이
-                    else:
-                        yield send_event("token", content)
-                        if not chunk.is_final:
-                            await asyncio.sleep(0.02)
-            
-            yield send_event("done")
-            
-        except Exception as e:
-            logger.warning(f"LLM streaming failed, using fallback: {e}")
-            
-            # Fallback 응답
-            fallback = service.generate_fallback_response(message, analysis_context)
-            
-            # Fallback도 타이핑 효과 적용
-            words = fallback.split(' ')
+        with ThreadPoolExecutor() as executor:
+            response = await loop.run_in_executor(
+                executor,
+                lambda: _invoke_supervisor_chat(message, repo_url, analysis_context)
+            )
+        
+        if response:
+            words = response.split(' ')
             for i, word in enumerate(words):
-                yield send_event("token", word + (' ' if i < len(words) - 1 else ''), is_fallback=True)
+                yield send_event("token", word + (' ' if i < len(words) - 1 else ''))
                 await asyncio.sleep(0.02)
-            
-            yield send_event("done", is_fallback=True)
+            yield send_event("done")
+        else:
+            yield send_event("error", "응답 생성 실패")
             
     except Exception as e:
         logger.exception(f"Chat stream failed: {e}")
         yield send_event("error", str(e))
+
+
+def _invoke_supervisor_chat(
+    message: str,
+    repo_url: Optional[str],
+    analysis_context: Optional[Dict[str, Any]],
+) -> Optional[str]:
+    """Supervisor Graph를 통해 채팅 처리."""
+    from backend.agents.supervisor.graph import get_supervisor_graph
+    from backend.agents.supervisor.models import SupervisorState
+    
+    owner, repo = "", ""
+    if repo_url:
+        parts = repo_url.rstrip("/").split("/")
+        if len(parts) >= 2:
+            owner, repo = parts[-2], parts[-1]
+    
+    initial_state = SupervisorState(
+        task_type="diagnose_repo",
+        owner=owner or "unknown",
+        repo=repo or "unknown",
+        chat_message=message,
+        chat_context=analysis_context or {},
+        user_context={"message": message},
+    )
+    
+    graph = get_supervisor_graph()
+    config = {"configurable": {"thread_id": f"chat_{owner}_{repo}"}}
+    
+    try:
+        result = graph.invoke(initial_state, config=config)
+        return result.get("chat_response")
+    except Exception as e:
+        logger.error(f"Supervisor chat failed: {e}")
+        return None
 
 
 @router.post("/chat/stream")
