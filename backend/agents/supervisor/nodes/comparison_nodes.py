@@ -146,8 +146,20 @@ def _generate_llm_comparison(comparison_data: List[Dict[str, Any]]) -> str:
     
     score_diff = abs(repo1['health_score'] - repo2['health_score'])
     onboard_diff = abs(repo1['onboarding_score'] - repo2['onboarding_score'])
-    health_winner = repo1['repo'] if repo1['health_score'] > repo2['health_score'] else repo2['repo'] if repo2['health_score'] > repo1['health_score'] else "동점"
-    onboard_winner = repo1['repo'] if repo1['onboarding_score'] > repo2['onboarding_score'] else repo2['repo'] if repo2['onboarding_score'] > repo1['onboarding_score'] else "동점"
+    
+    if repo1['health_score'] > repo2['health_score']:
+        health_summary = f"{score_diff}점 차이 ({repo1['repo']} 우세)"
+    elif repo2['health_score'] > repo1['health_score']:
+        health_summary = f"{score_diff}점 차이 ({repo2['repo']} 우세)"
+    else:
+        health_summary = "동점"
+    
+    if repo1['onboarding_score'] > repo2['onboarding_score']:
+        onboard_summary = f"{onboard_diff}점 차이 ({repo1['repo']} 우세)"
+    elif repo2['onboarding_score'] > repo1['onboarding_score']:
+        onboard_summary = f"{onboard_diff}점 차이 ({repo2['repo']} 우세)"
+    else:
+        onboard_summary = "동점"
     
     prompt = f"""두 오픈소스 프로젝트를 비교 분석하여 사용자에게 보여줄 메시지를 작성해주세요.
 
@@ -170,8 +182,8 @@ def _generate_llm_comparison(comparison_data: List[Dict[str, Any]]) -> str:
 | 활동성 | {repo2['activity_score']}점 |
 
 ## 점수 차이 요약
-- 건강 점수 차이: {score_diff}점 ({health_winner} 우세)
-- 온보딩 점수 차이: {onboard_diff}점 ({onboard_winner} 우세)
+- 건강 점수: {health_summary}
+- 온보딩 점수: {onboard_summary}
 
 ## 작성 요청
 
