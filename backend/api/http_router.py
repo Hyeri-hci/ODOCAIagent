@@ -81,13 +81,22 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     
     GitHub URL을 받아서 건강도 진단을 수행하고,
     프론트엔드가 기대하는 형식으로 응답합니다.
+    
+    캐시: 동일 저장소는 24시간 동안 캐시됩니다.
     """
     from backend.common.github_client import fetch_beginner_issues
+    from backend.common.cache import analysis_cache
     
     try:
         owner, repo, ref = parse_github_url(request.repo_url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    
+    # 캐시 확인
+    cached_response = analysis_cache.get_analysis(owner, repo, ref)
+    if cached_response:
+        logger.info(f"Returning cached analysis for {owner}/{repo}@{ref}")
+        return AnalyzeResponse(**cached_response)
     
     # Diagnosis Agent 호출 (LLM 요약 활성화)
     result = run_agent_task(
@@ -131,7 +140,7 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
         recommended_issues = []
     
     # 프론트엔드 형식으로 변환
-    return AnalyzeResponse(
+    response = AnalyzeResponse(
         job_id=f"{owner}/{repo}@{ref}",
         score=data.get("health_score", 0),
         analysis={
@@ -168,6 +177,11 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
         recommended_issues=recommended_issues,
         readme_summary=data.get("summary_for_user"),
     )
+    
+    # 캐시에 저장
+    analysis_cache.set_analysis(owner, repo, ref, response.model_dump())
+    
+    return response
 
 
 # 이슈 코드 -> 한글 설명 매핑
