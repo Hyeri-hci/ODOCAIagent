@@ -1,12 +1,13 @@
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { Send } from "lucide-react";
+import { Send, ChevronLeft, ChevronRight, History } from "lucide-react";
 import AnalysisReportSection from "./AnalysisReportSection";
 import OnboardingPlanSection from "./OnboardingPlanSection";
 import {
   sendChatMessage,
   sendChatMessageStream,
   analyzeRepository,
+  generateOnboardingPlan,
 } from "../../lib/api";
 
 // 스트리밍 모드 설정 (true: SSE 스트리밍, false: 기존 REST API)
@@ -31,6 +32,16 @@ const AnalysisChat = ({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [streamingMessage, setStreamingMessage] = useState(""); // 스트리밍 중인 메시지
   const [isStreaming, setIsStreaming] = useState(false); // 스트리밍 중 여부
+  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false); // 온보딩 플랜 생성 중
+  const [planGenerateError, setPlanGenerateError] = useState(null); // 플랜 생성 오류
+
+  // 분석 히스토리 관리
+  const [analysisHistory, setAnalysisHistory] = useState(() => {
+    // 초기 분석 결과가 있으면 히스토리에 추가
+    return initialAnalysisResult ? [initialAnalysisResult] : [];
+  });
+  const [currentHistoryIndex, setCurrentHistoryIndex] = useState(0);
+
   const streamCancelRef = useRef(null); // 스트림 취소 함수 참조
   const messagesEndRef = useRef(null);
 
@@ -54,6 +65,108 @@ const AnalysisChat = ({
       }
     };
   }, []);
+
+  // 히스토리 네비게이션 함수
+  const canGoBack = currentHistoryIndex > 0;
+  const canGoForward = currentHistoryIndex < analysisHistory.length - 1;
+
+  const goToPreviousAnalysis = () => {
+    if (canGoBack) {
+      const newIndex = currentHistoryIndex - 1;
+      setCurrentHistoryIndex(newIndex);
+      setAnalysisResult(analysisHistory[newIndex]);
+      setPlanGenerateError(null);
+    }
+  };
+
+  const goToNextAnalysis = () => {
+    if (canGoForward) {
+      const newIndex = currentHistoryIndex + 1;
+      setCurrentHistoryIndex(newIndex);
+      setAnalysisResult(analysisHistory[newIndex]);
+      setPlanGenerateError(null);
+    }
+  };
+
+  // 새 분석 결과를 히스토리에 추가
+  const addToHistory = (newResult) => {
+    setAnalysisHistory((prev) => {
+      // 현재 위치 이후의 히스토리는 삭제하고 새 결과 추가
+      const newHistory = [...prev.slice(0, currentHistoryIndex + 1), newResult];
+      return newHistory;
+    });
+    setCurrentHistoryIndex((prev) => prev + 1);
+  };
+
+  // GitHub URL에서 owner/repo 파싱
+  const parseGitHubUrl = (url) => {
+    if (!url) return null;
+    const match = url.match(/github\.com\/([\w-]+)\/([\w.-]+)/i);
+    if (match) {
+      return { owner: match[1], repo: match[2].replace(/\.git$/, "") };
+    }
+    return null;
+  };
+
+  // 온보딩 플랜 생성 핸들러 (난이도 파라미터 추가)
+  const handleGenerateOnboardingPlan = async (difficulty = "beginner") => {
+    if (!analysisResult?.repositoryUrl) {
+      setPlanGenerateError("저장소 정보가 없습니다.");
+      return;
+    }
+
+    const repoInfo = parseGitHubUrl(analysisResult.repositoryUrl);
+    if (!repoInfo) {
+      setPlanGenerateError("유효하지 않은 저장소 URL입니다.");
+      return;
+    }
+
+    setIsGeneratingPlan(true);
+    setPlanGenerateError(null);
+
+    try {
+      const response = await generateOnboardingPlan(
+        repoInfo.owner,
+        repoInfo.repo,
+        {
+          experience_level: difficulty,
+          interests: userProfile?.interests || [],
+          language: "korean", // 한국어로 생성 요청
+        }
+      );
+
+      console.log("온보딩 플랜 응답:", response);
+
+      // 응답에서 온보딩 플랜 추출 (다양한 응답 구조 지원)
+      const plan =
+        response?.data?.onboarding_plan ||
+        response?.result?.onboarding_plan ||
+        response?.onboarding_plan ||
+        response?.plan;
+
+      if (plan && Array.isArray(plan) && plan.length > 0) {
+        setAnalysisResult((prev) => ({
+          ...prev,
+          onboardingPlan: plan,
+        }));
+      } else {
+        console.error(
+          "플랜 추출 실패. 응답 구조:",
+          JSON.stringify(response, null, 2)
+        );
+        setPlanGenerateError("플랜 생성에 실패했습니다. 다시 시도해주세요.");
+      }
+    } catch (error) {
+      console.error("온보딩 플랜 생성 오류:", error);
+      setPlanGenerateError(
+        error.response?.data?.detail ||
+          error.message ||
+          "플랜 생성 중 오류가 발생했습니다."
+      );
+    } finally {
+      setIsGeneratingPlan(false);
+    }
+  };
 
   // GitHub URL 감지 함수
   const detectGitHubUrl = (message) => {
@@ -594,6 +707,9 @@ const AnalysisChat = ({
         );
         setAnalysisResult(newAnalysisResult);
 
+        // 히스토리에 추가
+        addToHistory(newAnalysisResult);
+
         // 분석 중 메시지를 완료 메시지로 교체
         setMessages((prev) => {
           const filtered = prev.filter((msg) => msg.id !== analyzingMessageId);
@@ -800,13 +916,53 @@ const AnalysisChat = ({
 
           {/* 오른쪽: 분석 리포트 영역 */}
           <div className="xl:col-span-3 space-y-4">
+            {/* 히스토리 네비게이션 바 */}
+            {analysisHistory.length > 1 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-3 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <History className="w-4 h-4" />
+                  <span>분석 기록</span>
+                  <span className="bg-gray-100 px-2 py-0.5 rounded-full text-xs font-medium">
+                    {currentHistoryIndex + 1} / {analysisHistory.length}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={goToPreviousAnalysis}
+                    disabled={!canGoBack}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      canGoBack
+                        ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                        : "bg-gray-50 text-gray-300 cursor-not-allowed"
+                    }`}
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    이전
+                  </button>
+                  <button
+                    onClick={goToNextAnalysis}
+                    disabled={!canGoForward}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      canGoForward
+                        ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                        : "bg-gray-50 text-gray-300 cursor-not-allowed"
+                    }`}
+                  >
+                    다음
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
             <AnalysisReportSection
               analysisResult={analysisResult}
               isLoading={isAnalyzing}
             />
 
-            {/* 온보딩 플랜 섹션 */}
-            {analysisResult?.onboardingPlan && (
+            {/* 온보딩 플랜 섹션 - 분석 결과가 있을 때 항상 표시 */}
+            {analysisResult && (
               <OnboardingPlanSection
                 plan={analysisResult.onboardingPlan}
                 userProfile={userProfile}
@@ -815,6 +971,9 @@ const AnalysisChat = ({
                     `Task toggled: Week ${week}, Task ${taskIdx}, Completed: ${completed}`
                   );
                 }}
+                onGeneratePlan={handleGenerateOnboardingPlan}
+                isGenerating={isGeneratingPlan}
+                generateError={planGenerateError}
               />
             )}
           </div>
