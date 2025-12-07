@@ -406,6 +406,39 @@ export const sendReportPDF = async (analysisData, userEmail) => {
  * @param {Array} conversationHistory - 이전 대화 기록
  * @returns {Promise<{ok: boolean, message: string, error?: string}>}
  */
+/**
+ * 여러 저장소 비교 분석
+ * @param {Array<string>} repositories - 비교할 저장소 목록 (예: ['owner1/repo1', 'owner2/repo2'])
+ * @returns {Promise<Object>} - 비교 분석 결과
+ */
+export const compareRepositories = async (repositories) => {
+  console.log("[compareRepositories] repositories:", repositories);
+
+  if (MOCK_MODE) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    return {
+      ok: true,
+      comparison: {
+        repositories: {},
+        ranking: repositories,
+        best_health: repositories[0],
+        best_onboarding: repositories[0],
+      },
+      summary: "Mock 비교 결과입니다.",
+      warnings: [],
+    };
+  }
+
+  try {
+    const response = await api.post("/api/analyze/compare", { repositories });
+    console.log("[compareRepositories] Response:", response.data);
+    return response.data;
+  } catch (error) {
+    console.error("[compareRepositories] Failed:", error);
+    throw error;
+  }
+};
+
 export const sendChatMessage = async (
   message,
   context = {},

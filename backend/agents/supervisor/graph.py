@@ -1,8 +1,8 @@
-"""Supervisor Graph - 메인 오케스트레이터 (Hero Scenarios)."""
+"""Supervisor Graph - Agentic 오케스트레이터."""
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, Literal
+from typing import Literal
 
 from langgraph.graph import StateGraph, END
 from backend.agents.supervisor.models import SupervisorState
@@ -12,75 +12,114 @@ from backend.agents.supervisor.nodes.onboarding_nodes import (
     plan_onboarding_node,
     summarize_onboarding_plan_node
 )
+from backend.agents.supervisor.nodes.routing_nodes import (
+    intent_analysis_node,
+    decision_node,
+    quality_check_node,
+    use_cached_result_node,
+    route_after_decision,
+    route_after_cached_result,
+    route_after_quality_check,
+)
+from backend.agents.supervisor.nodes.comparison_nodes import (
+    batch_diagnosis_node,
+    compare_results_node,
+)
+from backend.agents.supervisor.nodes.chat_nodes import chat_response_node
 
 logger = logging.getLogger(__name__)
-
-
-def router_start_node(state: SupervisorState) -> Dict[str, Any]:
-    """라우팅 결정 노드."""
-    task_type = state.task_type
-    logger.info(f"Router: Starting task {task_type}")
-    return {}
-
-
-def route_after_start(state: SupervisorState) -> Literal["run_diagnosis_node", "__end__"]:
-    """시작 후 라우팅."""
-    task_type = state.task_type
-    
-    if task_type == "diagnose_repo":
-        return "run_diagnosis_node"
-    elif task_type == "build_onboarding_plan":
-        # 진단 -> 이슈 수집 -> 플랜 생성 -> 요약
-        return "run_diagnosis_node"
-    
-    logger.warning(f"Unknown task_type: {task_type}")
-    return "__end__"
 
 
 def build_supervisor_graph() -> StateGraph:
     """Supervisor 그래프 빌드."""
     graph = StateGraph(SupervisorState)
 
-    graph.add_node("router_start_node", router_start_node)
+    # 노드 등록 - 기존 노드
+    graph.add_node("intent_analysis_node", intent_analysis_node)
+    graph.add_node("decision_node", decision_node)
     graph.add_node("run_diagnosis_node", run_diagnosis_node)
+    graph.add_node("quality_check_node", quality_check_node)
     graph.add_node("fetch_issues_node", fetch_issues_node)
     graph.add_node("plan_onboarding_node", plan_onboarding_node)
     graph.add_node("summarize_onboarding_plan_node", summarize_onboarding_plan_node)
+    
+    # 노드 등록 - 캐시 및 비교 노드
+    graph.add_node("use_cached_result_node", use_cached_result_node)
+    graph.add_node("batch_diagnosis_node", batch_diagnosis_node)
+    graph.add_node("compare_results_node", compare_results_node)
+    
+    # 노드 등록 - 채팅 노드
+    graph.add_node("chat_response_node", chat_response_node)
 
-    graph.set_entry_point("router_start_node")
+    # Entry Point
+    graph.set_entry_point("intent_analysis_node")
 
+    # intent_analysis_node -> decision_node
+    graph.add_edge("intent_analysis_node", "decision_node")
+
+    # decision_node -> conditional routing (캐시, 진단, 비교, 채팅 분기)
     graph.add_conditional_edges(
-        "router_start_node",
-        route_after_start,
+        "decision_node",
+        route_after_decision,
         {
             "run_diagnosis_node": "run_diagnosis_node",
+            "use_cached_result_node": "use_cached_result_node",
+            "batch_diagnosis_node": "batch_diagnosis_node",
+            "chat_response_node": "chat_response_node",
             "__end__": END,
         }
     )
 
-    # run_diagnosis_node 이후 분기
-    def route_after_diagnosis(state: SupervisorState) -> Literal["fetch_issues_node", "__end__"]:
-        # 진단 실패 시 온보딩 플로우로 넘어가지 않도록 조기 종료
-        if state.error:
-            return "__end__"
-            
-        if state.task_type == "build_onboarding_plan":
-            return "fetch_issues_node"
-        return "__end__"
+    # use_cached_result_node -> conditional routing
+    def _route_after_cached(state: SupervisorState) -> Literal[
+        "run_diagnosis_node", "quality_check_node", "fetch_issues_node", "compare_results_node"
+    ]:
+        return route_after_cached_result(state)
 
     graph.add_conditional_edges(
-        "run_diagnosis_node",
-        route_after_diagnosis,
+        "use_cached_result_node",
+        _route_after_cached,
         {
+            "run_diagnosis_node": "run_diagnosis_node",
+            "quality_check_node": "quality_check_node",
             "fetch_issues_node": "fetch_issues_node",
+            "compare_results_node": "compare_results_node",
+        }
+    )
+
+    # run_diagnosis_node -> quality_check_node
+    graph.add_edge("run_diagnosis_node", "quality_check_node")
+
+    # quality_check_node -> conditional routing
+    def _route_after_quality(state: SupervisorState) -> Literal[
+        "run_diagnosis_node", "fetch_issues_node", "compare_results_node", "__end__"
+    ]:
+        if state.error:
+            return "__end__"
+        return route_after_quality_check(state)
+
+    graph.add_conditional_edges(
+        "quality_check_node",
+        _route_after_quality,
+        {
+            "run_diagnosis_node": "run_diagnosis_node",
+            "fetch_issues_node": "fetch_issues_node",
+            "compare_results_node": "compare_results_node",
             "__end__": END,
         }
     )
 
-    # Onboarding Flow 연결
+    # Onboarding Flow
     graph.add_edge("fetch_issues_node", "plan_onboarding_node")
     graph.add_edge("plan_onboarding_node", "summarize_onboarding_plan_node")
     graph.add_edge("summarize_onboarding_plan_node", END)
+
+    # Comparison Flow
+    graph.add_edge("batch_diagnosis_node", "compare_results_node")
+    graph.add_edge("compare_results_node", END)
+
+    # Chat Flow
+    graph.add_edge("chat_response_node", END)
 
     return graph
 

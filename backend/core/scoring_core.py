@@ -8,6 +8,7 @@ from .models import (
     DocsCoreResult,
     ActivityCoreResult,
     DependenciesSnapshot,
+    StructureCoreResult,
     ProjectRules,
 )
 
@@ -24,13 +25,27 @@ INACTIVE_ACTIVITY_THRESHOLD = 30
 
 # 2. Score Computation Logic
 
-def compute_health_score(doc: int, activity: int) -> int:
-    """모델 2: 운영/유지보수 Health (doc 30% + activity 70%)"""
+def compute_health_score(doc: int, activity: int, structure: int = 0) -> int:
+    """
+    운영/유지보수 Health 점수.
+    
+    구조 점수가 있으면: doc 25% + activity 65% + structure 10%
+    구조 점수가 없으면: doc 30% + activity 70% (기존 방식)
+    """
+    if structure > 0:
+        return int(round(0.25 * doc + 0.65 * activity + 0.10 * structure))
     return int(round(0.3 * doc + 0.7 * activity))
 
 
-def compute_onboarding_score(doc: int, activity: int) -> int:
-    """모델 1: 온보딩 친화도 (doc 60% + activity 40%)"""
+def compute_onboarding_score(doc: int, activity: int, structure: int = 0) -> int:
+    """
+    온보딩 친화도 점수.
+    
+    구조 점수가 있으면: doc 55% + activity 35% + structure 10%
+    구조 점수가 없으면: doc 60% + activity 40% (기존 방식)
+    """
+    if structure > 0:
+        return int(round(0.55 * doc + 0.35 * activity + 0.10 * structure))
     return int(round(0.6 * doc + 0.4 * activity))
 
 
@@ -150,14 +165,16 @@ def compute_diagnosis(
     repo_id: str,
     docs_result: DocsCoreResult,
     activity_result: ActivityCoreResult,
+    structure_result: Optional[StructureCoreResult] = None,
     project_rules: Optional[ProjectRules] = None,
 ) -> DiagnosisCoreResult:
-    """문서 + 활동성 결과로 최종 진단 계산."""
+    """문서 + 활동성 + 구조 결과로 최종 진단 계산."""
     doc_score = docs_result.total_score
     activity_score = activity_result.total_score
+    structure_score = structure_result.structure_score if structure_result else 0
 
-    health = compute_health_score(doc_score, activity_score)
-    onboarding = compute_onboarding_score(doc_score, activity_score)
+    health = compute_health_score(doc_score, activity_score, structure_score)
+    onboarding = compute_onboarding_score(doc_score, activity_score, structure_score)
     is_healthy = compute_is_healthy(doc_score, activity_score)
 
     health_level_str = compute_health_level(health)
@@ -195,13 +212,14 @@ def compute_scores(
     docs: DocsCoreResult,
     activity: ActivityCoreResult,
     deps: DependenciesSnapshot,
+    structure: Optional[StructureCoreResult] = None,
 ) -> DiagnosisCoreResult:
     """CoreResult 객체들을 사용하여 최종 진단을 수행합니다."""
-    # deps에서 repo_id를 가져와 진단 계산
     result = compute_diagnosis(
         repo_id=deps.repo_id,
         docs_result=docs,
         activity_result=activity,
+        structure_result=structure,
     )
     
     # 의존성 복잡도 계산

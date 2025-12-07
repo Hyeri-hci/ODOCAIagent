@@ -11,6 +11,9 @@ def test_diagnose_repo_flow(mock_run_diagnosis):
     mock_output.to_dict.return_value = {
         "repo_id": "test/repo",
         "health_score": 80,
+        "health_level": "good",
+        "onboarding_score": 70,
+        "onboarding_level": "medium",
         "summary_for_user": "Good job"
     }
     mock_run_diagnosis.return_value = mock_output
@@ -39,6 +42,9 @@ def test_build_onboarding_plan_flow(mock_run_diagnosis):
     mock_output.to_dict.return_value = {
         "repo_id": "test/repo",
         "health_score": 80,
+        "health_level": "good",
+        "onboarding_score": 70,
+        "onboarding_level": "medium",
         "summary_for_user": "Good job"
     }
     mock_run_diagnosis.return_value = mock_output

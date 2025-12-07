@@ -2,12 +2,14 @@ import React, { useEffect, useState } from "react";
 import { Loader2, Sparkles, Search, FileText, Activity, Code, BookOpen, CheckCircle, XCircle } from "lucide-react";
 
 const ANALYSIS_STEPS = [
-  { id: "github", label: "저장소 정보 수집", icon: Search, progress: 10 },
-  { id: "docs", label: "문서 품질 분석", icon: FileText, progress: 30 },
-  { id: "activity", label: "활동성 분석", icon: Activity, progress: 50 },
-  { id: "structure", label: "구조 분석", icon: Code, progress: 65 },
-  { id: "scoring", label: "건강도 점수 계산", icon: BookOpen, progress: 80 },
-  { id: "llm", label: "AI 진단 요약 생성", icon: Sparkles, progress: 90 },
+  { id: "intent", label: "AI가 요청 의도 분석 중", icon: Sparkles, progress: 5 },
+  { id: "github", label: "저장소 정보 수집 중", icon: Search, progress: 15 },
+  { id: "docs", label: "문서 품질 분석 중", icon: FileText, progress: 35 },
+  { id: "activity", label: "활동성 분석 중", icon: Activity, progress: 55 },
+  { id: "structure", label: "구조 분석 중", icon: Code, progress: 70 },
+  { id: "scoring", label: "건강도 점수 계산 중", icon: BookOpen, progress: 85 },
+  { id: "quality", label: "AI가 결과 품질 검사 중", icon: Sparkles, progress: 92 },
+  { id: "llm", label: "AI 요약 생성 중", icon: Sparkles, progress: 97 },
   { id: "complete", label: "분석 완료", icon: CheckCircle, progress: 100 },
 ];
 

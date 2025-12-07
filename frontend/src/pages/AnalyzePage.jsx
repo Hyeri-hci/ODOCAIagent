@@ -141,6 +141,9 @@ const AnalyzePage = () => {
       // 온보딩 플랜 (API 응답에서 가져오기)
       onboardingPlan:
         apiResponse.onboarding_plan || analysis.onboarding_plan || null,
+      // Agentic 플로우 결과
+      warnings: analysis.warnings || [],
+      flowAdjustments: analysis.flow_adjustments || [],
     };
   };
 
