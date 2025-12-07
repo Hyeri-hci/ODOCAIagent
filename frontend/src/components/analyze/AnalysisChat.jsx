@@ -3,7 +3,11 @@ import ReactMarkdown from "react-markdown";
 import { Send } from "lucide-react";
 import AnalysisReportSection from "./AnalysisReportSection";
 import OnboardingPlanSection from "./OnboardingPlanSection";
-import { sendChatMessage, sendChatMessageStream, analyzeRepository } from "../../lib/api";
+import {
+  sendChatMessage,
+  sendChatMessageStream,
+  analyzeRepository,
+} from "../../lib/api";
 
 // 스트리밍 모드 설정 (true: SSE 스트리밍, false: 기존 REST API)
 const USE_STREAM_MODE = true;
@@ -41,7 +45,7 @@ const AnalysisChat = ({
   useEffect(() => {
     scrollToBottom();
   }, [messages, streamingMessage]);
-  
+
   // 컴포넌트 언마운트 시 스트림 취소
   useEffect(() => {
     return () => {
@@ -76,10 +80,11 @@ const AnalysisChat = ({
   // API 응답을 프론트엔드 형식으로 변환 (AnalyzePage.jsx와 동일한 로직)
   const transformApiResponse = (apiResponse, repositoryUrl) => {
     const analysis = apiResponse.analysis || apiResponse;
-    
+
     return {
       repositoryUrl: repositoryUrl,
-      analysisId: apiResponse.job_id || analysis.repo_id || `analysis_${Date.now()}`,
+      analysisId:
+        apiResponse.job_id || analysis.repo_id || `analysis_${Date.now()}`,
       summary: {
         score: apiResponse.score || analysis.health_score || 0,
         healthStatus:
@@ -88,7 +93,8 @@ const AnalysisChat = ({
             : analysis.health_level === "warning"
             ? "moderate"
             : "needs-attention",
-        contributionOpportunities: (apiResponse.recommended_issues || []).length,
+        contributionOpportunities: (apiResponse.recommended_issues || [])
+          .length,
         estimatedImpact:
           (analysis.health_score || 0) >= 70
             ? "high"
@@ -97,8 +103,11 @@ const AnalysisChat = ({
             : "low",
       },
       projectSummary:
-        apiResponse.readme_summary || analysis.summary_for_user ||
-        `이 저장소의 건강 점수는 ${apiResponse.score || analysis.health_score}점입니다.`,
+        apiResponse.readme_summary ||
+        analysis.summary_for_user ||
+        `이 저장소의 건강 점수는 ${
+          apiResponse.score || analysis.health_score
+        }점입니다.`,
       recommendations: [
         // 기존 actions
         ...(apiResponse.actions || []).map((action, idx) => ({
@@ -113,11 +122,21 @@ const AnalysisChat = ({
           issueNumber: action.issue_number,
         })),
         // recommended_issues에서 추가 (analysis fallback 포함)
-        ...(apiResponse.recommended_issues || analysis.recommended_issues || []).map((issue, idx) => ({
+        ...(
+          apiResponse.recommended_issues ||
+          analysis.recommended_issues ||
+          []
+        ).map((issue, idx) => ({
           id: `issue_${issue.number || idx}`,
           title: issue.title,
           description: `GitHub Issue #${issue.number}`,
-          difficulty: issue.labels?.some(l => l.toLowerCase().includes('easy') || l.toLowerCase().includes('first')) ? "easy" : "medium",
+          difficulty: issue.labels?.some(
+            (l) =>
+              l.toLowerCase().includes("easy") ||
+              l.toLowerCase().includes("first")
+          )
+            ? "easy"
+            : "medium",
           estimatedTime: "2-4시간",
           impact: "medium",
           tags: issue.labels || ["issue"],
@@ -149,7 +168,8 @@ const AnalysisChat = ({
       relatedProjects: [],
       rawAnalysis: analysis,
       // 온보딩 플랜 (API 응답에서 가져오기)
-      onboardingPlan: apiResponse.onboarding_plan || analysis.onboarding_plan || null,
+      onboardingPlan:
+        apiResponse.onboarding_plan || analysis.onboarding_plan || null,
     };
   };
 
@@ -461,7 +481,7 @@ const AnalysisChat = ({
       return "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해주세요.";
     }
   };
-  
+
   // 스트리밍 AI 응답 요청
   const fetchAIResponseStream = (userMessage) => {
     // 채팅 히스토리 구성 (초기 메시지 제외)
@@ -471,7 +491,7 @@ const AnalysisChat = ({
         type: msg.role === "assistant" ? "assistant" : "user",
         content: msg.content,
       }));
-    
+
     const context = {
       repoUrl: userProfile?.repositoryUrl,
       analysisResult: analysisResult
@@ -486,10 +506,10 @@ const AnalysisChat = ({
           }
         : null,
     };
-    
+
     setStreamingMessage("");
     setIsStreaming(true);
-    
+
     // 스트리밍 시작
     streamCancelRef.current = sendChatMessageStream(
       userMessage,
@@ -503,7 +523,7 @@ const AnalysisChat = ({
       (fullMessage, isFallback) => {
         setIsStreaming(false);
         setStreamingMessage("");
-        
+
         const aiResponse = {
           id: `ai_${Date.now()}`,
           role: "assistant",
@@ -518,11 +538,12 @@ const AnalysisChat = ({
       (error) => {
         setIsStreaming(false);
         setStreamingMessage("");
-        
+
         const errorResponse = {
           id: `ai_${Date.now()}`,
           role: "assistant",
-          content: "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+          content:
+            "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
           timestamp: new Date(),
         };
         setMessages((prev) => [...prev, errorResponse]);
@@ -567,7 +588,10 @@ const AnalysisChat = ({
       try {
         // 실제 Backend API 호출
         const apiResponse = await analyzeRepository(detectedUrl);
-        const newAnalysisResult = transformApiResponse(apiResponse, detectedUrl);
+        const newAnalysisResult = transformApiResponse(
+          apiResponse,
+          detectedUrl
+        );
         setAnalysisResult(newAnalysisResult);
 
         // 분석 중 메시지를 완료 메시지로 교체
@@ -723,7 +747,9 @@ const AnalysisChat = ({
                 />
                 <button
                   onClick={handleSendMessage}
-                  disabled={!inputValue.trim() || isTyping || isAnalyzing || isStreaming}
+                  disabled={
+                    !inputValue.trim() || isTyping || isAnalyzing || isStreaming
+                  }
                   className="bg-blue-600 text-white p-3 rounded-2xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105"
                 >
                   <Send className="w-5 h-5" />
@@ -756,14 +782,16 @@ const AnalysisChat = ({
               analysisResult={analysisResult}
               isLoading={isAnalyzing}
             />
-            
+
             {/* 온보딩 플랜 섹션 */}
             {analysisResult?.onboardingPlan && (
               <OnboardingPlanSection
                 plan={analysisResult.onboardingPlan}
                 userProfile={userProfile}
                 onTaskToggle={(week, taskIdx, completed) => {
-                  console.log(`Task toggled: Week ${week}, Task ${taskIdx}, Completed: ${completed}`);
+                  console.log(
+                    `Task toggled: Week ${week}, Task ${taskIdx}, Completed: ${completed}`
+                  );
                 }}
               />
             )}
@@ -793,17 +821,38 @@ const ChatMessage = ({ message }) => {
         }`}
       >
         {isUser ? (
-          <p className="whitespace-pre-wrap leading-relaxed break-words">{message.content}</p>
+          <p className="whitespace-pre-wrap leading-relaxed break-words">
+            {message.content}
+          </p>
         ) : (
           <div className="prose prose-sm max-w-none">
             <ReactMarkdown
               components={{
-                p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
-                strong: ({ children }) => <strong className="font-bold">{children}</strong>,
-                ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
-                ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                p: ({ children }) => (
+                  <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>
+                ),
+                strong: ({ children }) => (
+                  <strong className="font-bold">{children}</strong>
+                ),
+                ul: ({ children }) => (
+                  <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="list-decimal pl-4 mb-2 space-y-1">
+                    {children}
+                  </ol>
+                ),
                 li: ({ children }) => <li className="text-sm">{children}</li>,
-                a: ({ href, children }) => <a href={href} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    className="text-blue-600 hover:underline"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {children}
+                  </a>
+                ),
               }}
             >
               {message.content}

@@ -111,7 +111,7 @@ const getCachedAnalysis = (repoUrl) => {
     const key = CACHE_KEY_PREFIX + btoa(repoUrl);
     const cached = sessionStorage.getItem(key);
     if (!cached) return null;
-    
+
     const { data, timestamp } = JSON.parse(cached);
     if (Date.now() - timestamp > CACHE_TTL_MS) {
       sessionStorage.removeItem(key);
@@ -127,10 +127,13 @@ const getCachedAnalysis = (repoUrl) => {
 export const setCachedAnalysis = (repoUrl, data) => {
   try {
     const key = CACHE_KEY_PREFIX + btoa(repoUrl);
-    sessionStorage.setItem(key, JSON.stringify({
-      data,
-      timestamp: Date.now()
-    }));
+    sessionStorage.setItem(
+      key,
+      JSON.stringify({
+        data,
+        timestamp: Date.now(),
+      })
+    );
     console.log("[Cache] Stored for:", repoUrl);
   } catch (e) {
     console.warn("[Cache] Failed to store:", e);
@@ -139,14 +142,14 @@ export const setCachedAnalysis = (repoUrl, data) => {
 
 export const analyzeRepository = async (repoUrl) => {
   console.log("[analyzeRepository] repoUrl:", repoUrl);
-  
+
   // 캐시 확인
   const cached = getCachedAnalysis(repoUrl);
   if (cached) {
     console.log("[analyzeRepository] Returning cached result");
     return cached;
   }
-  
+
   if (MOCK_MODE) {
     console.warn("[analyzeRepository] MOCK_MODE is ON! Returning mock data.");
     await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -157,10 +160,10 @@ export const analyzeRepository = async (repoUrl) => {
     console.log("[analyzeRepository] Calling API (no cache)");
     const response = await api.post("/api/analyze", { repo_url: repoUrl });
     console.log("[analyzeRepository] Response received");
-    
+
     // 결과 캐시에 저장
     setCachedAnalysis(repoUrl, response.data);
-    
+
     return response.data;
   } catch (error) {
     console.error("[analyzeRepository] Failed:", error);
@@ -446,7 +449,7 @@ function getMockChatResponse(message, context) {
 /**
  * AI 어시스턴트와 스트리밍 채팅
  * 타이핑 효과를 위해 SSE로 토큰 단위 응답을 받습니다.
- * 
+ *
  * @param {string} message - 사용자 메시지
  * @param {Object} context - 분석 컨텍스트
  * @param {Array} conversationHistory - 이전 대화 기록
@@ -468,13 +471,13 @@ export const sendChatMessageStream = (
     const mockResponse = getMockChatResponse(message, context);
     let fullMessage = "";
     let index = 0;
-    
+
     const intervalId = setInterval(() => {
       if (index < mockResponse.length) {
         // 단어 단위로 전송
-        let endIndex = mockResponse.indexOf(' ', index);
+        let endIndex = mockResponse.indexOf(" ", index);
         if (endIndex === -1) endIndex = mockResponse.length;
-        
+
         const token = mockResponse.slice(index, endIndex + 1);
         fullMessage += token;
         onToken?.(token);
@@ -484,19 +487,19 @@ export const sendChatMessageStream = (
         onComplete?.(fullMessage, false);
       }
     }, 50);
-    
+
     return () => clearInterval(intervalId);
   }
-  
+
   // 실제 SSE 스트리밍
   const abortController = new AbortController();
-  
+
   const fetchStream = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/api/chat/stream`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({
           message,
@@ -509,36 +512,36 @@ export const sendChatMessageStream = (
         }),
         signal: abortController.signal,
       });
-      
+
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      
+
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let fullMessage = "";
       let isFallback = false;
-      
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        
+
         const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-        
+        const lines = chunk.split("\n");
+
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
+          if (line.startsWith("data: ")) {
             try {
               const data = JSON.parse(line.slice(6));
-              
-              if (data.type === 'token') {
+
+              if (data.type === "token") {
                 fullMessage += data.content;
                 isFallback = data.is_fallback || isFallback;
                 onToken?.(data.content);
-              } else if (data.type === 'done') {
+              } else if (data.type === "done") {
                 onComplete?.(fullMessage, isFallback);
                 return;
-              } else if (data.type === 'error') {
+              } else if (data.type === "error") {
                 onError?.(data.content);
                 return;
               }
@@ -548,24 +551,23 @@ export const sendChatMessageStream = (
           }
         }
       }
-      
+
       // 스트림 종료 시 완료 처리
       if (fullMessage) {
         onComplete?.(fullMessage, isFallback);
       }
-      
     } catch (error) {
-      if (error.name === 'AbortError') {
-        console.log('[Chat Stream] Aborted');
+      if (error.name === "AbortError") {
+        console.log("[Chat Stream] Aborted");
         return;
       }
-      console.error('[Chat Stream] Error:', error);
-      onError?.(error.message || '스트리밍 채팅 중 오류가 발생했습니다.');
+      console.error("[Chat Stream] Error:", error);
+      onError?.(error.message || "스트리밍 채팅 중 오류가 발생했습니다.");
     }
   };
-  
+
   fetchStream();
-  
+
   // 취소 함수 반환
   return () => abortController.abort();
 };

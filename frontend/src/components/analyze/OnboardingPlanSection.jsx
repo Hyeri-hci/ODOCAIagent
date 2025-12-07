@@ -16,9 +16,9 @@ import {
 
 /**
  * 온보딩 플랜 UI 컴포넌트
- * 
+ *
  * 주차별 목표와 태스크를 타임라인 형식으로 표시합니다.
- * 
+ *
  * @param {Object} props
  * @param {Array} props.plan - 온보딩 플랜 배열 [{week, goals, tasks}, ...]
  * @param {Object} props.userProfile - 사용자 프로필 정보
@@ -29,7 +29,7 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
     // 첫 번째 주만 기본 확장
     return plan && plan.length > 0 ? { 1: true } : {};
   });
-  
+
   const [completedTasks, setCompletedTasks] = useState({});
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -47,12 +47,12 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
   const toggleTask = (weekNum, taskIndex) => {
     const key = `${weekNum}-${taskIndex}`;
     const newCompleted = !completedTasks[key];
-    
+
     setCompletedTasks((prev) => ({
       ...prev,
       [key]: newCompleted,
     }));
-    
+
     // 상위 컴포넌트에 알림
     if (onTaskToggle) {
       onTaskToggle(weekNum, taskIndex, newCompleted);
@@ -61,13 +61,17 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
 
   const getWeekProgress = (weekNum, tasks) => {
     if (!tasks || tasks.length === 0) return 0;
-    const completed = tasks.filter((_, idx) => completedTasks[`${weekNum}-${idx}`]).length;
+    const completed = tasks.filter(
+      (_, idx) => completedTasks[`${weekNum}-${idx}`]
+    ).length;
     return Math.round((completed / tasks.length) * 100);
   };
 
   const getTotalProgress = () => {
-    const allTasks = plan.flatMap((week, weekIdx) => 
-      (week.tasks || []).map((_, taskIdx) => `${week.week || weekIdx + 1}-${taskIdx}`)
+    const allTasks = plan.flatMap((week, weekIdx) =>
+      (week.tasks || []).map(
+        (_, taskIdx) => `${week.week || weekIdx + 1}-${taskIdx}`
+      )
     );
     if (allTasks.length === 0) return 0;
     const completed = allTasks.filter((key) => completedTasks[key]).length;
@@ -86,10 +90,30 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
 
   const getWeekTheme = (weekNum) => {
     const themes = {
-      1: { bg: "from-blue-50 to-indigo-50", border: "border-blue-200", accent: "text-blue-600", progress: "bg-blue-500" },
-      2: { bg: "from-green-50 to-emerald-50", border: "border-green-200", accent: "text-green-600", progress: "bg-green-500" },
-      3: { bg: "from-purple-50 to-violet-50", border: "border-purple-200", accent: "text-purple-600", progress: "bg-purple-500" },
-      4: { bg: "from-orange-50 to-amber-50", border: "border-orange-200", accent: "text-orange-600", progress: "bg-orange-500" },
+      1: {
+        bg: "from-blue-50 to-indigo-50",
+        border: "border-blue-200",
+        accent: "text-blue-600",
+        progress: "bg-blue-500",
+      },
+      2: {
+        bg: "from-green-50 to-emerald-50",
+        border: "border-green-200",
+        accent: "text-green-600",
+        progress: "bg-green-500",
+      },
+      3: {
+        bg: "from-purple-50 to-violet-50",
+        border: "border-purple-200",
+        accent: "text-purple-600",
+        progress: "bg-purple-500",
+      },
+      4: {
+        bg: "from-orange-50 to-amber-50",
+        border: "border-orange-200",
+        accent: "text-orange-600",
+        progress: "bg-orange-500",
+      },
     };
     return themes[weekNum] || themes[1];
   };
@@ -99,7 +123,7 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
   return (
     <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
       {/* 헤더 */}
-      <div 
+      <div
         className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 cursor-pointer"
         onClick={() => setIsCollapsed(!isCollapsed)}
       >
@@ -111,18 +135,21 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
             <div>
               <h2 className="text-xl font-bold text-white">온보딩 플랜</h2>
               <p className="text-indigo-200 text-sm">
-                {userProfile?.experienceLevel || "초보"} 수준을 위한 {plan.length}주 학습 계획
+                {userProfile?.experienceLevel || "초보"} 수준을 위한{" "}
+                {plan.length}주 학습 계획
               </p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-4">
             {/* 전체 진행률 */}
             <div className="text-right mr-4">
-              <div className="text-2xl font-bold text-white">{totalProgress}%</div>
+              <div className="text-2xl font-bold text-white">
+                {totalProgress}%
+              </div>
               <div className="text-indigo-200 text-xs">전체 진행률</div>
             </div>
-            
+
             {/* 확장/축소 버튼 */}
             <button className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center hover:bg-white/30 transition-colors">
               {isCollapsed ? (
@@ -133,10 +160,10 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
             </button>
           </div>
         </div>
-        
+
         {/* 전체 진행률 바 */}
         <div className="mt-4 h-2 bg-white/20 rounded-full overflow-hidden">
-          <div 
+          <div
             className="h-full bg-white rounded-full transition-all duration-500"
             style={{ width: `${totalProgress}%` }}
           />
@@ -149,7 +176,7 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
           <div className="relative">
             {/* 타임라인 세로선 */}
             <div className="absolute left-6 top-0 bottom-0 w-0.5 bg-gray-200" />
-            
+
             {/* 주차별 카드 */}
             <div className="space-y-6">
               {plan.map((week, weekIdx) => {
@@ -158,24 +185,30 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
                 const theme = getWeekTheme(weekNum);
                 const progress = getWeekProgress(weekNum, week.tasks);
                 const isExpanded = expandedWeeks[weekNum];
-                
+
                 return (
                   <div key={weekNum} className="relative pl-16">
                     {/* 타임라인 노드 */}
-                    <div className={`absolute left-0 w-12 h-12 rounded-full bg-gradient-to-br ${theme.bg} ${theme.border} border-2 flex items-center justify-center shadow-sm`}>
+                    <div
+                      className={`absolute left-0 w-12 h-12 rounded-full bg-gradient-to-br ${theme.bg} ${theme.border} border-2 flex items-center justify-center shadow-sm`}
+                    >
                       <WeekIcon className={`w-5 h-5 ${theme.accent}`} />
                     </div>
-                    
+
                     {/* 주차 카드 */}
-                    <div className={`bg-gradient-to-br ${theme.bg} ${theme.border} border rounded-xl overflow-hidden`}>
+                    <div
+                      className={`bg-gradient-to-br ${theme.bg} ${theme.border} border rounded-xl overflow-hidden`}
+                    >
                       {/* 주차 헤더 */}
-                      <div 
+                      <div
                         className="p-4 cursor-pointer hover:bg-white/50 transition-colors"
                         onClick={() => toggleWeek(weekNum)}
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-3">
-                            <div className={`text-lg font-bold ${theme.accent}`}>
+                            <div
+                              className={`text-lg font-bold ${theme.accent}`}
+                            >
                               Week {weekNum}
                             </div>
                             <div className="flex items-center gap-2 text-sm text-gray-600">
@@ -185,21 +218,23 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
                               <span>{week.tasks?.length || 0}개 태스크</span>
                             </div>
                           </div>
-                          
+
                           <div className="flex items-center gap-3">
                             {/* 진행률 */}
                             <div className="flex items-center gap-2">
                               <div className="w-24 h-2 bg-white rounded-full overflow-hidden">
-                                <div 
+                                <div
                                   className={`h-full ${theme.progress} rounded-full transition-all duration-300`}
                                   style={{ width: `${progress}%` }}
                                 />
                               </div>
-                              <span className={`text-sm font-medium ${theme.accent}`}>
+                              <span
+                                className={`text-sm font-medium ${theme.accent}`}
+                              >
                                 {progress}%
                               </span>
                             </div>
-                            
+
                             {/* 확장 버튼 */}
                             <button className="p-1">
                               {isExpanded ? (
@@ -211,7 +246,7 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
                           </div>
                         </div>
                       </div>
-                      
+
                       {/* 확장된 콘텐츠 */}
                       {isExpanded && (
                         <div className="px-4 pb-4 space-y-4">
@@ -224,40 +259,50 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
                               </h4>
                               <div className="bg-white rounded-lg p-3 space-y-2">
                                 {week.goals.map((goal, goalIdx) => (
-                                  <div 
+                                  <div
                                     key={goalIdx}
                                     className="flex items-start gap-2 text-sm text-gray-700"
                                   >
-                                    <div className={`w-1.5 h-1.5 rounded-full ${theme.progress} mt-1.5 flex-shrink-0`} />
+                                    <div
+                                      className={`w-1.5 h-1.5 rounded-full ${theme.progress} mt-1.5 flex-shrink-0`}
+                                    />
                                     <span>{goal}</span>
                                   </div>
                                 ))}
                               </div>
                             </div>
                           )}
-                          
+
                           {/* 태스크 섹션 */}
                           {week.tasks && week.tasks.length > 0 && (
                             <div>
                               <h4 className="text-sm font-semibold text-gray-700 mb-2 flex items-center gap-2">
-                                <CheckCircle2 className="w-4 h-4" />
-                                할 일 목록
+                                <CheckCircle2 className="w-4 h-4" />할 일 목록
                               </h4>
                               <div className="bg-white rounded-lg p-3 space-y-2">
                                 {week.tasks.map((task, taskIdx) => {
-                                  const isCompleted = completedTasks[`${weekNum}-${taskIdx}`];
-                                  const taskText = typeof task === "string" ? task : task.title || task.description || JSON.stringify(task);
-                                  const taskUrl = typeof task === "object" ? task.url : null;
-                                  
+                                  const isCompleted =
+                                    completedTasks[`${weekNum}-${taskIdx}`];
+                                  const taskText =
+                                    typeof task === "string"
+                                      ? task
+                                      : task.title ||
+                                        task.description ||
+                                        JSON.stringify(task);
+                                  const taskUrl =
+                                    typeof task === "object" ? task.url : null;
+
                                   return (
-                                    <div 
+                                    <div
                                       key={taskIdx}
                                       className={`flex items-start gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
-                                        isCompleted 
-                                          ? "bg-green-50 border border-green-200" 
+                                        isCompleted
+                                          ? "bg-green-50 border border-green-200"
                                           : "hover:bg-gray-50"
                                       }`}
-                                      onClick={() => toggleTask(weekNum, taskIdx)}
+                                      onClick={() =>
+                                        toggleTask(weekNum, taskIdx)
+                                      }
                                     >
                                       <button className="mt-0.5 flex-shrink-0">
                                         {isCompleted ? (
@@ -266,13 +311,17 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
                                           <Circle className="w-5 h-5 text-gray-300" />
                                         )}
                                       </button>
-                                      <span className={`text-sm flex-1 ${
-                                        isCompleted ? "text-gray-500 line-through" : "text-gray-700"
-                                      }`}>
+                                      <span
+                                        className={`text-sm flex-1 ${
+                                          isCompleted
+                                            ? "text-gray-500 line-through"
+                                            : "text-gray-700"
+                                        }`}
+                                      >
                                         {taskText}
                                       </span>
                                       {taskUrl && (
-                                        <a 
+                                        <a
                                           href={taskUrl}
                                           target="_blank"
                                           rel="noopener noreferrer"
@@ -296,7 +345,7 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
               })}
             </div>
           </div>
-          
+
           {/* 완료 메시지 */}
           {totalProgress === 100 && (
             <div className="mt-6 bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-4 flex items-center gap-4">
@@ -306,7 +355,8 @@ const OnboardingPlanSection = ({ plan, userProfile, onTaskToggle }) => {
               <div>
                 <h3 className="font-bold text-green-800">축하합니다! 🎉</h3>
                 <p className="text-sm text-green-600">
-                  온보딩 플랜을 모두 완료했습니다. 이제 본격적인 기여를 시작해보세요!
+                  온보딩 플랜을 모두 완료했습니다. 이제 본격적인 기여를
+                  시작해보세요!
                 </p>
               </div>
             </div>
