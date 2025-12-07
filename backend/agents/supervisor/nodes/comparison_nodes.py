@@ -161,7 +161,11 @@ def _generate_llm_comparison(comparison_data: List[Dict[str, Any]]) -> str:
     else:
         onboard_summary = "동점"
     
-    prompt = f"""두 오픈소스 프로젝트를 비교 분석하여 사용자에게 보여줄 메시지를 작성해주세요.
+    prompt = f"""당신은 ODOC(Open-source Doctor) AI입니다.
+ODOC 평가 기준: 건강점수=문서25%+활동성65%+구조10%, 온보딩점수=문서55%+활동성35%+구조10%
+등급: 80점이상=Excellent, 60-79=Good, 40-59=Fair, 40미만=Poor
+
+두 오픈소스 프로젝트를 비교 분석하여 사용자에게 보여줄 메시지를 작성해주세요.
 
 ## 분석 데이터
 

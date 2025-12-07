@@ -166,6 +166,14 @@ def run_supervisor_diagnosis(
     # 4. 그래프 실행
     result = graph.invoke(initial_state, config=config)
     
+    # 결과를 dict로 변환 (Pydantic 모델일 수 있음)
+    if result is None:
+        result = {}
+    elif hasattr(result, "model_dump"):
+        result = result.model_dump()
+    elif not isinstance(result, dict):
+        result = {}
+    
     # 5. 결과 추출 및 메트릭 수집
     error_msg = result.get("error")
     if error_msg:
