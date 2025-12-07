@@ -126,7 +126,12 @@ class RedisConversationBackend(ConversationMemoryBackend):
     def _init_client(self) -> None:
         try:
             import redis
-            self._client = redis.from_url(self.redis_url, decode_responses=True)
+            self._client = redis.from_url(
+                self.redis_url,
+                decode_responses=True,
+                socket_timeout=2,
+                socket_connect_timeout=2,
+            )
             self._client.ping()
             self._available = True
             logger.info(f"Redis connected: {self.redis_url}")
