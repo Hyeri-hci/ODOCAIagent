@@ -47,25 +47,39 @@ class KananaWrapper:
         max_retries: int = 2
     ) -> List[Dict[str, Any]]:
         """
-        Generate a structured onboarding plan.
+        Generate a structured onboarding plan in Korean.
         Returns a list of weeks (dicts).
         Includes retry logic for JSON parsing errors.
         """
+        # 난이도에 따른 설명 추가
+        experience_level = user_context.get('experience_level', 'beginner')
+        level_descriptions = {
+            'beginner': '입문자 (프로그래밍을 막 시작했거나 이 기술 스택이 처음인 사람)',
+            'intermediate': '중급자 (기본 개념은 알고 있고 실제 프로젝트 경험을 쌓고 싶은 사람)',
+            'advanced': '숙련자 (경험이 많고 핵심 기여나 아키텍처 이해를 원하는 사람)'
+        }
+        level_desc = level_descriptions.get(experience_level, level_descriptions['beginner'])
+        
         system_prompt = (
-            "You are an expert engineering mentor. "
-            "Create a structured onboarding plan for a new contributor based on the repository diagnosis and user profile. "
-            "Return ONLY a valid JSON array of objects, where each object represents a week with 'week' (int), 'goals' (list of strings), and 'tasks' (list of strings). "
-            "Do not include markdown formatting like ```json. Return raw JSON only."
+            "당신은 오픈소스 프로젝트 온보딩을 도와주는 전문 멘토입니다. "
+            "새로운 기여자를 위한 체계적인 온보딩 플랜을 한국어로 작성하세요. "
+            "반드시 유효한 JSON 배열만 반환하세요. 각 객체는 다음 필드를 포함해야 합니다:\n"
+            "- 'week' (int): 주차 번호\n"
+            "- 'goals' (list of strings): 해당 주의 목표들 (한국어)\n"
+            "- 'tasks' (list of strings): 구체적인 할 일 목록 (한국어)\n\n"
+            "마크다운 포맷(```json 등)을 사용하지 마세요. 순수 JSON만 반환하세요."
         )
         
-        issues_text = "\n".join([f"- #{i['number']}: {i['title']}" for i in candidate_issues])
+        issues_text = "\n".join([f"- #{i['number']}: {i['title']}" for i in candidate_issues]) if candidate_issues else "추천 이슈 없음"
         
         user_prompt = (
-            f"Repository: {repo_id}\n"
-            f"Diagnosis Summary: {diagnosis_summary}\n"
-            f"User Profile: {user_context}\n"
-            f"Recommended Issues:\n{issues_text}\n\n"
-            "Generate a 1-4 week onboarding plan."
+            f"저장소: {repo_id}\n"
+            f"프로젝트 요약: {diagnosis_summary}\n"
+            f"사용자 난이도: {level_desc}\n"
+            f"추천 이슈:\n{issues_text}\n\n"
+            f"위 정보를 바탕으로 {experience_level} 수준에 맞는 1-4주 온보딩 플랜을 한국어로 생성하세요.\n"
+            "각 주차마다 명확한 목표와 구체적인 태스크를 포함하세요.\n"
+            "입문자의 경우 기초적인 내용부터, 숙련자의 경우 심화 내용을 포함하세요."
         )
         
         last_error = None
