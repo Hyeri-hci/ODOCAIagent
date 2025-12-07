@@ -31,6 +31,8 @@ def batch_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     
     results = dict(state.compare_results)
     warnings = list(state.warnings)
+    cache_hits = []
+    cache_misses = []
     
     for repo_str in repos:
         if repo_str in results:
@@ -44,26 +46,38 @@ def batch_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
             logger.warning(f"Invalid repo format: {repo_str}, error: {e}")
             continue
         
+        logger.info(f"Checking cache for {owner}/{repo}...")
         cached = analysis_cache.get_analysis(owner, repo, "main")
         if cached:
-            logger.info(f"Cache hit for comparison: {owner}/{repo}")
-            results[repo_str] = cached
+            logger.info(f"CACHE HIT for comparison: {owner}/{repo}, health_score={cached.get('health_score')}")
+            cache_hits.append(repo_str)
+            normalized_key = f"{owner}/{repo}"
+            results[normalized_key] = cached
+            if repo_str != normalized_key:
+                results[repo_str] = cached
             continue
         
-        logger.info(f"Running diagnosis for comparison: {owner}/{repo}")
+        cache_misses.append(repo_str)
+        logger.info(f"CACHE MISS - Running diagnosis for comparison: {owner}/{repo}")
         try:
             diagnosis_result = run_diagnosis(owner, repo, "main", use_llm_summary=False)
             if diagnosis_result:
                 result_dict = diagnosis_result.to_dict()
                 analysis_cache.set_analysis(owner, repo, "main", result_dict)
-                results[repo_str] = result_dict
+                normalized_key = f"{owner}/{repo}"
+                results[normalized_key] = result_dict
+                if repo_str != normalized_key:
+                    results[repo_str] = result_dict
             else:
                 warnings.append(f"{owner}/{repo} 분석 실패")
         except Exception as e:
             logger.error(f"Diagnosis failed for {owner}/{repo}: {e}")
             warnings.append(f"{owner}/{repo} 분석 중 오류: {str(e)}")
     
-    logger.info(f"Batch diagnosis complete: {len(results)}/{len(repos)} successful")
+    logger.info(
+        f"Batch diagnosis complete: {len(results)}/{len(repos)} successful, "
+        f"cache_hits={cache_hits}, cache_misses={cache_misses}"
+    )
     
     return {
         "compare_results": results,
