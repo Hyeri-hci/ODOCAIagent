@@ -1,4 +1,4 @@
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import List, Dict, Any, Union, Optional
 from backend.core.models import DiagnosisCoreResult
 
@@ -42,6 +42,10 @@ class DiagnosisSummaryDTO:
     
     # 추천 이슈
     recommended_issues: Optional[List[Dict[str, Any]]] = None
+    
+    # Agentic 플로우 결과
+    warnings: List[str] = field(default_factory=list)
+    flow_adjustments: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -167,6 +171,13 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
     else:
         dep_level = "high"
 
+    # Agentic 메타데이터 추출
+    warnings = []
+    flow_adjustments = []
+    if isinstance(res, dict):
+        warnings = res.get("warnings", [])
+        flow_adjustments = res.get("flow_adjustments", [])
+    
     return DiagnosisSummaryDTO(
         repo_id=repo_id,
         documentation_quality=documentation_quality,
@@ -194,4 +205,6 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
         readme_sections=readme_sections,
         stars=stars,
         forks=forks,
+        warnings=warnings,
+        flow_adjustments=flow_adjustments,
     )

@@ -10,11 +10,25 @@ import {
   TrendingUp,
   CheckCircle,
   AlertTriangle,
+  AlertCircle,
   FileText,
   Search,
   ArrowRight,
+  Info,
 } from "lucide-react";
 import { formatNumber } from "../../utils/formatNumber";
+
+const formatAdjustment = (adjustment) => {
+  const adjustmentMap = {
+    recommend_deep_analysis: "심층 분석이 권장됩니다",
+    skip_optional_checks: "선택적 검사를 건너뛰었습니다",
+    prioritize_documentation: "문서화 분석을 우선 처리했습니다",
+    expand_activity_window: "활동성 분석 기간을 확장했습니다",
+    include_beginner_tips: "초보자 팁을 포함했습니다",
+    simplify_recommendations: "추천 항목을 단순화했습니다",
+  };
+  return adjustmentMap[adjustment] || adjustment;
+};
 
 const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
   const [expandedSections, setExpandedSections] = useState({
@@ -88,6 +102,51 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
           </div>
         </div>
       )}
+
+      {/* AI 분석 경고 배너 */}
+      {analysisResult.warnings && analysisResult.warnings.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <AlertCircle className="w-5 h-5 text-amber-600" />
+            </div>
+            <div className="flex-1">
+              <h4 className="font-bold text-amber-800 mb-2">AI 분석 주의사항</h4>
+              <ul className="space-y-1">
+                {analysisResult.warnings.map((warning, idx) => (
+                  <li key={idx} className="text-sm text-amber-700 flex items-start gap-2">
+                    <span className="text-amber-400 mt-1">•</span>
+                    <span>{warning}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* AI 분석 조정 정보 */}
+      {analysisResult.flowAdjustments && analysisResult.flowAdjustments.length > 0 && (
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-5 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <Info className="w-5 h-5 text-blue-600" />
+            </div>
+            <div className="flex-1">
+              <h4 className="font-bold text-blue-800 mb-2">AI 분석 조정</h4>
+              <ul className="space-y-1">
+                {analysisResult.flowAdjustments.map((adjustment, idx) => (
+                  <li key={idx} className="text-sm text-blue-700 flex items-start gap-2">
+                    <span className="text-blue-400 mt-1">•</span>
+                    <span>{formatAdjustment(adjustment)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 종합 점수 및 Repository Statistics */}
       <CollapsibleCard
         title="분석 결과 리포트"

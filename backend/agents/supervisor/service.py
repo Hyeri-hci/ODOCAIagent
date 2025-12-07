@@ -167,7 +167,13 @@ def run_supervisor_diagnosis(
     # 6. Trace 수집
     trace = trace_handler.get_trace() if trace_handler else None
     
-    return result.get("diagnosis_result"), result.get("error"), trace
+    # 7. diagnosis_result에 agentic 메타데이터 병합
+    diagnosis_result = result.get("diagnosis_result")
+    if diagnosis_result and isinstance(diagnosis_result, dict):
+        diagnosis_result["warnings"] = result.get("warnings", [])
+        diagnosis_result["flow_adjustments"] = result.get("flow_adjustments", [])
+    
+    return diagnosis_result, result.get("error"), trace
 
 
 def run_supervisor_diagnosis_with_guidelines(
