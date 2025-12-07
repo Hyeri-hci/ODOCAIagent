@@ -66,7 +66,7 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
           <h1 className="text-5xl md:text-6xl font-black text-gray-900 mb-4 tracking-tight">
             GitHub 저장소
             <br />
-            <span className="bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            <span className="text-blue-600">
               분석하기
             </span>
           </h1>
@@ -129,7 +129,7 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
             <button
               type="submit"
               disabled={isLoading}
-              className="group inline-flex items-center gap-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white px-12 py-6 rounded-full text-xl font-bold hover:from-blue-700 hover:to-purple-700 shadow-2xl hover:shadow-blue-500/50 hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+              className="group inline-flex items-center gap-3 bg-blue-600 text-white px-12 py-6 rounded-full text-xl font-bold hover:bg-blue-700 shadow-2xl hover:shadow-blue-500/50 hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
             >
               {isLoading ? (
                 <>

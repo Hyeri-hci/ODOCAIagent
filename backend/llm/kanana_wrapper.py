@@ -1,3 +1,4 @@
+import json
 import logging
 from typing import List, Dict, Any, Optional
 from backend.llm.factory import fetch_llm_client
@@ -83,7 +84,7 @@ class KananaWrapper:
                     cleaned_text = cleaned_text[:-3]
                 cleaned_text = cleaned_text.strip()
                 
-                import json
+                
                 plan = json.loads(cleaned_text)
                 
                 # Validate structure

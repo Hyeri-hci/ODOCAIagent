@@ -3,7 +3,8 @@ import axios from "axios";
 // API 기본 설정
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
-const MOCK_MODE = import.meta.env.VITE_MOCK_MODE === "true";
+// MOCK_MODE 비활성화 - 실제 백엔드 API 사용
+const MOCK_MODE = false; // import.meta.env.VITE_MOCK_MODE === "true";
 
 // Axios 인스턴스 생성
 const api = axios.create({
@@ -13,7 +14,7 @@ const api = axios.create({
   },
 });
 
-// Mock 데이터
+// Mock 데이터 (백업용 - MOCK_MODE가 true일 때만 사용)
 const mockData = {
   analyze: {
     job_id: "mock-job-123",
@@ -74,7 +75,7 @@ const mockData = {
       id: 1,
       title: "보안 취약점 스캐너",
       description: "의존성과 코드에서 보안 취약점을 자동으로 탐지",
-      icon: "🔒",
+      icon: "lock",
       features: ["CVE 데이터베이스 연동", "실시간 알림", "자동 패치 제안"],
     },
   ],
@@ -84,7 +85,7 @@ const mockData = {
       title: "GitHub URL 입력",
       description:
         "분석하고 싶은 오픈소스 프로젝트의 GitHub 리포지토리 URL을 입력하세요",
-      icon: "🔗",
+      icon: "link",
       duration: "10초",
     },
   ],
@@ -100,17 +101,69 @@ const mockData = {
 };
 
 // API 함수들
+
+// 캐시 관련 헬퍼 함수
+const CACHE_KEY_PREFIX = "odoc_analysis_";
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1시간
+
+const getCachedAnalysis = (repoUrl) => {
+  try {
+    const key = CACHE_KEY_PREFIX + btoa(repoUrl);
+    const cached = sessionStorage.getItem(key);
+    if (!cached) return null;
+    
+    const { data, timestamp } = JSON.parse(cached);
+    if (Date.now() - timestamp > CACHE_TTL_MS) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    console.log("[Cache] Hit for:", repoUrl);
+    return data;
+  } catch {
+    return null;
+  }
+};
+
+export const setCachedAnalysis = (repoUrl, data) => {
+  try {
+    const key = CACHE_KEY_PREFIX + btoa(repoUrl);
+    sessionStorage.setItem(key, JSON.stringify({
+      data,
+      timestamp: Date.now()
+    }));
+    console.log("[Cache] Stored for:", repoUrl);
+  } catch (e) {
+    console.warn("[Cache] Failed to store:", e);
+  }
+};
+
 export const analyzeRepository = async (repoUrl) => {
+  console.log("[analyzeRepository] repoUrl:", repoUrl);
+  
+  // 캐시 확인
+  const cached = getCachedAnalysis(repoUrl);
+  if (cached) {
+    console.log("[analyzeRepository] Returning cached result");
+    return cached;
+  }
+  
   if (MOCK_MODE) {
+    console.warn("[analyzeRepository] MOCK_MODE is ON! Returning mock data.");
     await new Promise((resolve) => setTimeout(resolve, 1000));
     return mockData.analyze;
   }
 
   try {
+    console.log("[analyzeRepository] Calling API (no cache)");
     const response = await api.post("/api/analyze", { repo_url: repoUrl });
+    console.log("[analyzeRepository] Response received");
+    
+    // 결과 캐시에 저장
+    setCachedAnalysis(repoUrl, response.data);
+    
     return response.data;
   } catch (error) {
-    console.error("분석 실패:", error);
+    console.error("[analyzeRepository] Failed:", error);
     throw error;
   }
 };

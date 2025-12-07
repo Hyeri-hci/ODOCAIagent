@@ -50,8 +50,8 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         logger.error(f"Diagnosis core failed: {e}")
         raise RuntimeError(f"진단 실행 실패: {e}")
 
-    # 4. 사용자용 요약 생성
-    summary_text = _generate_summary(diagnosis, docs_result, input_data.use_llm_summary)
+    # 4. 사용자용 요약 생성 (snapshot에서 README 내용 가져옴)
+    summary_text = _generate_summary(diagnosis, docs_result, snapshot, input_data.use_llm_summary)
 
     # 5. DTO 반환
     return DiagnosisOutput(
@@ -71,7 +71,7 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         raw_metrics=diagnosis.to_dict()
     )
 
-def _generate_summary(diagnosis, docs_result, use_llm_summary: bool) -> str:
+def _generate_summary(diagnosis, docs_result, snapshot, use_llm_summary: bool) -> str:
     """진단 결과 요약 생성 (Fallback + LLM)"""
     
     # 활동성 상세 메트릭 가져오기
@@ -148,34 +148,39 @@ def _generate_summary(diagnosis, docs_result, use_llm_summary: bool) -> str:
         
         system_prompt = (
             "당신은 전문 소프트웨어 엔지니어링 컨설턴트입니다. "
-            "제공된 저장소 진단 데이터를 분석하고 한글로 간결하고 전문적인 요약을 제공하세요. "
-            "핵심 강점, 중요한 문제점, 실행 가능한 권장사항을 강조하세요. "
-            "다음 섹션으로 마크다운 형식을 사용하세요:\n"
-            "1. **요약**: 전체적인 평가.\n"
-            "2. **주요 문제점**: 발견된 중요한 문제들.\n"
-            "3. **권장사항**: 개선을 위한 구체적인 조치."
+            "제공된 저장소 진단 데이터와 README 내용을 분석하고 한글로 간결하고 전문적인 요약을 제공하세요. "
+            "반드시 다음 형식으로 작성하세요:\n\n"
+            "## 프로젝트 소개\n"
+            "이 프로젝트가 무엇인지, 어떤 역할/용도인지 2-3문장으로 설명.\n\n"
+            "## 진단 요약\n"
+            "전체적인 건강도 평가와 주요 강점/약점.\n\n"
+            "## 개선 권장사항\n"
+            "개선이 필요한 부분과 구체적인 조치 제안."
         )
+        
+        # README 내용 가져오기 (snapshot에서 - 처음 800자)
+        readme_content = ""
+        if snapshot and hasattr(snapshot, 'readme_content') and snapshot.readme_content:
+            readme_content = snapshot.readme_content[:800]
         
         docs_detail = ""
         if docs_result:
-            missing = ", ".join(docs_result.missing_sections) or "없음"
-            marketing = f"{docs_result.marketing_ratio:.2f}"
-            docs_detail = (
-                f"누락된 섹션: {missing}\n"
-                f"마케팅 비율: {marketing}\n"
-            )
+            missing = ", ".join(docs_result.missing_sections) if hasattr(docs_result, 'missing_sections') else ""
+            if missing:
+                docs_detail = f"누락된 문서 섹션: {missing}\n"
         
         user_prompt = (
-            f"저장소: {diagnosis.repo_id}\n"
+            f"저장소: {diagnosis.repo_id}\n\n"
+            f"=== README 내용 ===\n{readme_content or '(README 없음)'}\n\n"
+            f"=== 진단 결과 ===\n"
             f"건강 점수: {diagnosis.health_score}점 ({diagnosis.health_level})\n"
             f"문서 품질: {diagnosis.documentation_quality}점\n"
             f"활동성 점수: {diagnosis.activity_maintainability}점\n"
             f"온보딩 점수: {diagnosis.onboarding_score}점 ({diagnosis.onboarding_level})\n"
             f"문서 이슈: {', '.join(diagnosis.docs_issues) or '없음'}\n"
             f"활동성 이슈: {', '.join(diagnosis.activity_issues) or '없음'}\n"
-            f"의존성 복잡도: {diagnosis.dependency_complexity_score}점 (플래그: {', '.join(diagnosis.dependency_flags) or '없음'})\n"
             f"{docs_detail}\n"
-            "이 진단 결과를 한글로 요약해주세요."
+            "위 정보를 바탕으로 프로젝트 소개, 진단 요약, 개선 권장사항을 한글로 작성해주세요."
         )
 
         request = ChatRequest(
