@@ -688,21 +688,37 @@ const AnalysisChat = ({
               ))}
 
               {/* 스트리밍 중인 메시지 표시 */}
-              {isStreaming && streamingMessage && (
+              {isStreaming && (
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
                     <span className="text-white font-bold text-sm">ODOC</span>
                   </div>
                   <div className="max-w-[85%] bg-gray-100 rounded-2xl rounded-tl-none px-5 py-3">
-                    <div className="prose prose-sm max-w-none text-gray-800">
-                      <ReactMarkdown>{streamingMessage}</ReactMarkdown>
-                      {/* 타이핑 커서 효과 */}
-                      <span className="inline-block w-2 h-4 bg-blue-600 ml-1 animate-pulse"></span>
-                    </div>
+                    {streamingMessage ? (
+                      <div className="prose prose-sm max-w-none text-gray-800">
+                        <ReactMarkdown>{streamingMessage}</ReactMarkdown>
+                        {/* 타이핑 커서 효과 */}
+                        <span className="inline-block w-2 h-4 bg-blue-600 ml-1 animate-pulse"></span>
+                      </div>
+                    ) : (
+                      /* 첫 토큰 오기 전 ... 애니메이션 */
+                      <div className="flex gap-1">
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                        <div
+                          className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                          style={{ animationDelay: "0.1s" }}
+                        ></div>
+                        <div
+                          className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                          style={{ animationDelay: "0.2s" }}
+                        ></div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
 
+              {/* 일반 타이핑 인디케이터 (비스트리밍 모드 또는 분석 중) */}
               {isTyping && !isStreaming && (
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
@@ -711,8 +727,14 @@ const AnalysisChat = ({
                   <div className="bg-gray-100 rounded-2xl rounded-tl-none px-5 py-3">
                     <div className="flex gap-1">
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200"></div>
+                      <div
+                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                        style={{ animationDelay: "0.1s" }}
+                      ></div>
+                      <div
+                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                        style={{ animationDelay: "0.2s" }}
+                      ></div>
                     </div>
                   </div>
                 </div>
