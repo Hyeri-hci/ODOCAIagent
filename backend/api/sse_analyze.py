@@ -38,8 +38,11 @@ async def analyze_with_progress(owner: str, repo: str, ref: str) -> AsyncGenerat
     - github (10%): GitHub 데이터 수집
     - analyzing (50%): 분석 진행 중
     - complete (100%): 완료
+    
+    캐시: 동일 저장소는 24시간 동안 캐시됩니다.
     """
     from concurrent.futures import ThreadPoolExecutor
+    from backend.common.cache import analysis_cache
     
     def send_event(step: str, progress: int, message: str, data: dict = None) -> str:
         event = ProgressEvent(
@@ -51,6 +54,15 @@ async def analyze_with_progress(owner: str, repo: str, ref: str) -> AsyncGenerat
         return f"data: {json.dumps(event.model_dump(), ensure_ascii=False)}\n\n"
     
     try:
+        # 캐시 확인
+        cached_result = analysis_cache.get_analysis(owner, repo, ref)
+        if cached_result:
+            logger.info(f"SSE returning cached analysis for {owner}/{repo}@{ref}")
+            yield send_event("github", 10, "캐시된 결과 확인 중...")
+            await asyncio.sleep(0.3)
+            yield send_event("complete", 100, "분석 완료! (캐시)", {"result": cached_result})
+            return
+        
         # Step 1: 시작
         yield send_event("github", 10, "GitHub 저장소 확인 중...")
         await asyncio.sleep(0.5)  # UI가 첫 이벤트를 표시할 시간
@@ -117,6 +129,9 @@ async def analyze_with_progress(owner: str, repo: str, ref: str) -> AsyncGenerat
             logger.warning(f"Failed to generate actions/risks: {e}")
             data["actions"] = []
             data["risks"] = []
+        
+        # 캐시에 저장
+        analysis_cache.set_analysis(owner, repo, ref, data)
         
         # 완료
         yield send_event("complete", 100, "분석 완료!", {"result": data})

@@ -1,8 +1,17 @@
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
-import { Send } from "lucide-react";
+import { Send, ChevronLeft, ChevronRight, History } from "lucide-react";
 import AnalysisReportSection from "./AnalysisReportSection";
-import { sendChatMessage, analyzeRepository } from "../../lib/api";
+import OnboardingPlanSection from "./OnboardingPlanSection";
+import {
+  sendChatMessage,
+  sendChatMessageStream,
+  analyzeRepository,
+  generateOnboardingPlan,
+} from "../../lib/api";
+
+// 스트리밍 모드 설정 (true: SSE 스트리밍, false: 기존 REST API)
+const USE_STREAM_MODE = true;
 
 const AnalysisChat = ({
   userProfile,
@@ -21,6 +30,19 @@ const AnalysisChat = ({
   const [inputValue, setInputValue] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [streamingMessage, setStreamingMessage] = useState(""); // 스트리밍 중인 메시지
+  const [isStreaming, setIsStreaming] = useState(false); // 스트리밍 중 여부
+  const [isGeneratingPlan, setIsGeneratingPlan] = useState(false); // 온보딩 플랜 생성 중
+  const [planGenerateError, setPlanGenerateError] = useState(null); // 플랜 생성 오류
+
+  // 분석 히스토리 관리
+  const [analysisHistory, setAnalysisHistory] = useState(() => {
+    // 초기 분석 결과가 있으면 히스토리에 추가
+    return initialAnalysisResult ? [initialAnalysisResult] : [];
+  });
+  const [currentHistoryIndex, setCurrentHistoryIndex] = useState(0);
+
+  const streamCancelRef = useRef(null); // 스트림 취소 함수 참조
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -33,7 +55,118 @@ const AnalysisChat = ({
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, streamingMessage]);
+
+  // 컴포넌트 언마운트 시 스트림 취소
+  useEffect(() => {
+    return () => {
+      if (streamCancelRef.current) {
+        streamCancelRef.current();
+      }
+    };
+  }, []);
+
+  // 히스토리 네비게이션 함수
+  const canGoBack = currentHistoryIndex > 0;
+  const canGoForward = currentHistoryIndex < analysisHistory.length - 1;
+
+  const goToPreviousAnalysis = () => {
+    if (canGoBack) {
+      const newIndex = currentHistoryIndex - 1;
+      setCurrentHistoryIndex(newIndex);
+      setAnalysisResult(analysisHistory[newIndex]);
+      setPlanGenerateError(null);
+    }
+  };
+
+  const goToNextAnalysis = () => {
+    if (canGoForward) {
+      const newIndex = currentHistoryIndex + 1;
+      setCurrentHistoryIndex(newIndex);
+      setAnalysisResult(analysisHistory[newIndex]);
+      setPlanGenerateError(null);
+    }
+  };
+
+  // 새 분석 결과를 히스토리에 추가
+  const addToHistory = (newResult) => {
+    setAnalysisHistory((prev) => {
+      // 현재 위치 이후의 히스토리는 삭제하고 새 결과 추가
+      const newHistory = [...prev.slice(0, currentHistoryIndex + 1), newResult];
+      return newHistory;
+    });
+    setCurrentHistoryIndex((prev) => prev + 1);
+  };
+
+  // GitHub URL에서 owner/repo 파싱
+  const parseGitHubUrl = (url) => {
+    if (!url) return null;
+    const match = url.match(/github\.com\/([\w-]+)\/([\w.-]+)/i);
+    if (match) {
+      return { owner: match[1], repo: match[2].replace(/\.git$/, "") };
+    }
+    return null;
+  };
+
+  // 온보딩 플랜 생성 핸들러 (난이도 파라미터 추가)
+  const handleGenerateOnboardingPlan = async (difficulty = "beginner") => {
+    if (!analysisResult?.repositoryUrl) {
+      setPlanGenerateError("저장소 정보가 없습니다.");
+      return;
+    }
+
+    const repoInfo = parseGitHubUrl(analysisResult.repositoryUrl);
+    if (!repoInfo) {
+      setPlanGenerateError("유효하지 않은 저장소 URL입니다.");
+      return;
+    }
+
+    setIsGeneratingPlan(true);
+    setPlanGenerateError(null);
+
+    try {
+      const response = await generateOnboardingPlan(
+        repoInfo.owner,
+        repoInfo.repo,
+        {
+          experience_level: difficulty,
+          interests: userProfile?.interests || [],
+          language: "korean", // 한국어로 생성 요청
+        }
+      );
+
+      console.log("온보딩 플랜 응답:", response);
+
+      // 응답에서 온보딩 플랜 추출 (다양한 응답 구조 지원)
+      const plan =
+        response?.data?.onboarding_plan ||
+        response?.result?.onboarding_plan ||
+        response?.onboarding_plan ||
+        response?.plan;
+
+      if (plan && Array.isArray(plan) && plan.length > 0) {
+        setAnalysisResult((prev) => ({
+          ...prev,
+          onboardingPlan: plan,
+        }));
+      } else {
+        console.error(
+          "플랜 추출 실패. 응답 구조:",
+          JSON.stringify(response, null, 2)
+        );
+        setPlanGenerateError("플랜 생성에 실패했습니다. 다시 시도해주세요.");
+      }
+    } catch (error) {
+      console.error("온보딩 플랜 생성 오류:", error);
+      setPlanGenerateError(
+        error.response?.data?.detail ||
+          error.message ||
+          "플랜 생성 중 오류가 발생했습니다."
+      );
+    } finally {
+      setIsGeneratingPlan(false);
+    }
+  };
 
   // GitHub URL 감지 함수
   const detectGitHubUrl = (message) => {
@@ -60,10 +193,11 @@ const AnalysisChat = ({
   // API 응답을 프론트엔드 형식으로 변환 (AnalyzePage.jsx와 동일한 로직)
   const transformApiResponse = (apiResponse, repositoryUrl) => {
     const analysis = apiResponse.analysis || apiResponse;
-    
+
     return {
       repositoryUrl: repositoryUrl,
-      analysisId: apiResponse.job_id || analysis.repo_id || `analysis_${Date.now()}`,
+      analysisId:
+        apiResponse.job_id || analysis.repo_id || `analysis_${Date.now()}`,
       summary: {
         score: apiResponse.score || analysis.health_score || 0,
         healthStatus:
@@ -72,7 +206,8 @@ const AnalysisChat = ({
             : analysis.health_level === "warning"
             ? "moderate"
             : "needs-attention",
-        contributionOpportunities: (apiResponse.recommended_issues || []).length,
+        contributionOpportunities: (apiResponse.recommended_issues || [])
+          .length,
         estimatedImpact:
           (analysis.health_score || 0) >= 70
             ? "high"
@@ -81,8 +216,11 @@ const AnalysisChat = ({
             : "low",
       },
       projectSummary:
-        apiResponse.readme_summary || analysis.summary_for_user ||
-        `이 저장소의 건강 점수는 ${apiResponse.score || analysis.health_score}점입니다.`,
+        apiResponse.readme_summary ||
+        analysis.summary_for_user ||
+        `이 저장소의 건강 점수는 ${
+          apiResponse.score || analysis.health_score
+        }점입니다.`,
       recommendations: [
         // 기존 actions
         ...(apiResponse.actions || []).map((action, idx) => ({
@@ -97,11 +235,21 @@ const AnalysisChat = ({
           issueNumber: action.issue_number,
         })),
         // recommended_issues에서 추가 (analysis fallback 포함)
-        ...(apiResponse.recommended_issues || analysis.recommended_issues || []).map((issue, idx) => ({
+        ...(
+          apiResponse.recommended_issues ||
+          analysis.recommended_issues ||
+          []
+        ).map((issue, idx) => ({
           id: `issue_${issue.number || idx}`,
           title: issue.title,
           description: `GitHub Issue #${issue.number}`,
-          difficulty: issue.labels?.some(l => l.toLowerCase().includes('easy') || l.toLowerCase().includes('first')) ? "easy" : "medium",
+          difficulty: issue.labels?.some(
+            (l) =>
+              l.toLowerCase().includes("easy") ||
+              l.toLowerCase().includes("first")
+          )
+            ? "easy"
+            : "medium",
           estimatedTime: "2-4시간",
           impact: "medium",
           tags: issue.labels || ["issue"],
@@ -132,6 +280,9 @@ const AnalysisChat = ({
       },
       relatedProjects: [],
       rawAnalysis: analysis,
+      // 온보딩 플랜 (API 응답에서 가져오기)
+      onboardingPlan:
+        apiResponse.onboarding_plan || analysis.onboarding_plan || null,
     };
   };
 
@@ -444,8 +595,79 @@ const AnalysisChat = ({
     }
   };
 
+  // 스트리밍 AI 응답 요청
+  const fetchAIResponseStream = (userMessage) => {
+    // 채팅 히스토리 구성 (초기 메시지 제외)
+    const conversationHistory = messages
+      .filter((msg) => msg.id !== "initial")
+      .map((msg) => ({
+        type: msg.role === "assistant" ? "assistant" : "user",
+        content: msg.content,
+      }));
+
+    const context = {
+      repoUrl: userProfile?.repositoryUrl,
+      analysisResult: analysisResult
+        ? {
+            health_score: analysisResult.summary?.score,
+            documentation_quality:
+              analysisResult.technicalDetails?.documentationQuality,
+            activity_maintainability:
+              analysisResult.technicalDetails?.activityMaintainability,
+            stars: analysisResult.technicalDetails?.stars,
+            forks: analysisResult.technicalDetails?.forks,
+          }
+        : null,
+    };
+
+    setStreamingMessage("");
+    setIsStreaming(true);
+
+    // 스트리밍 시작
+    streamCancelRef.current = sendChatMessageStream(
+      userMessage,
+      context,
+      conversationHistory,
+      // onToken 콜백
+      (token) => {
+        setStreamingMessage((prev) => prev + token);
+      },
+      // onComplete 콜백
+      (fullMessage, isFallback) => {
+        setIsStreaming(false);
+        setStreamingMessage("");
+
+        const aiResponse = {
+          id: `ai_${Date.now()}`,
+          role: "assistant",
+          content: fullMessage,
+          timestamp: new Date(),
+          isFallback,
+        };
+        setMessages((prev) => [...prev, aiResponse]);
+        setIsTyping(false);
+      },
+      // onError 콜백
+      (error) => {
+        setIsStreaming(false);
+        setStreamingMessage("");
+
+        const errorResponse = {
+          id: `ai_${Date.now()}`,
+          role: "assistant",
+          content:
+            "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+          timestamp: new Date(),
+        };
+        setMessages((prev) => [...prev, errorResponse]);
+        setIsTyping(false);
+        console.error("Streaming error:", error);
+      }
+    );
+  };
+
   const handleSendMessage = async () => {
-    if (!inputValue.trim() || isAnalyzing) return;
+    if (!inputValue.trim() || isAnalyzing || isStreaming) return;
 
     const userMessageContent = inputValue;
     const userMessage = {
@@ -479,8 +701,14 @@ const AnalysisChat = ({
       try {
         // 실제 Backend API 호출
         const apiResponse = await analyzeRepository(detectedUrl);
-        const newAnalysisResult = transformApiResponse(apiResponse, detectedUrl);
+        const newAnalysisResult = transformApiResponse(
+          apiResponse,
+          detectedUrl
+        );
         setAnalysisResult(newAnalysisResult);
+
+        // 히스토리에 추가
+        addToHistory(newAnalysisResult);
 
         // 분석 중 메시지를 완료 메시지로 교체
         setMessages((prev) => {
@@ -514,30 +742,36 @@ const AnalysisChat = ({
         setIsAnalyzing(false);
       }
     } else {
-      // 일반 질문 처리 - 실제 LLM API 호출
+      // 일반 질문 처리
       setIsTyping(true);
 
-      try {
-        const aiResponseContent = await fetchAIResponse(userMessageContent);
-        const aiResponse = {
-          id: `ai_${Date.now()}`,
-          role: "assistant",
-          content: aiResponseContent,
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, aiResponse]);
-      } catch (error) {
-        console.error("AI 응답 실패:", error);
-        const errorResponse = {
-          id: `ai_${Date.now()}`,
-          role: "assistant",
-          content:
-            "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-          timestamp: new Date(),
-        };
-        setMessages((prev) => [...prev, errorResponse]);
-      } finally {
-        setIsTyping(false);
+      if (USE_STREAM_MODE) {
+        // 스트리밍 모드: SSE로 토큰 단위 응답 받기
+        fetchAIResponseStream(userMessageContent);
+      } else {
+        // 기존 모드: REST API로 전체 응답 받기
+        try {
+          const aiResponseContent = await fetchAIResponse(userMessageContent);
+          const aiResponse = {
+            id: `ai_${Date.now()}`,
+            role: "assistant",
+            content: aiResponseContent,
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, aiResponse]);
+        } catch (error) {
+          console.error("AI 응답 실패:", error);
+          const errorResponse = {
+            id: `ai_${Date.now()}`,
+            role: "assistant",
+            content:
+              "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+            timestamp: new Date(),
+          };
+          setMessages((prev) => [...prev, errorResponse]);
+        } finally {
+          setIsTyping(false);
+        }
       }
     }
   };
@@ -569,7 +803,39 @@ const AnalysisChat = ({
                 <ChatMessage key={message.id} message={message} />
               ))}
 
-              {isTyping && (
+              {/* 스트리밍 중인 메시지 표시 */}
+              {isStreaming && (
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
+                    <span className="text-white font-bold text-sm">ODOC</span>
+                  </div>
+                  <div className="max-w-[85%] bg-gray-100 rounded-2xl rounded-tl-none px-5 py-3">
+                    {streamingMessage ? (
+                      <div className="prose prose-sm max-w-none text-gray-800">
+                        <ReactMarkdown>{streamingMessage}</ReactMarkdown>
+                        {/* 타이핑 커서 효과 */}
+                        <span className="inline-block w-2 h-4 bg-blue-600 ml-1 animate-pulse"></span>
+                      </div>
+                    ) : (
+                      /* 첫 토큰 오기 전 ... 애니메이션 */
+                      <div className="flex gap-1">
+                        <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                        <div
+                          className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                          style={{ animationDelay: "0.1s" }}
+                        ></div>
+                        <div
+                          className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                          style={{ animationDelay: "0.2s" }}
+                        ></div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* 일반 타이핑 인디케이터 (비스트리밍 모드 또는 분석 중) */}
+              {isTyping && !isStreaming && (
                 <div className="flex items-start gap-3">
                   <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0">
                     <span className="text-white font-bold text-sm">ODOC</span>
@@ -577,8 +843,14 @@ const AnalysisChat = ({
                   <div className="bg-gray-100 rounded-2xl rounded-tl-none px-5 py-3">
                     <div className="flex gap-1">
                       <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-100"></div>
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce delay-200"></div>
+                      <div
+                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                        style={{ animationDelay: "0.1s" }}
+                      ></div>
+                      <div
+                        className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"
+                        style={{ animationDelay: "0.2s" }}
+                      ></div>
                     </div>
                   </div>
                 </div>
@@ -595,6 +867,12 @@ const AnalysisChat = ({
                   분석 중입니다...
                 </div>
               )}
+              {isStreaming && (
+                <div className="mb-3 text-sm text-green-600 font-semibold flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin"></div>
+                  AI가 응답 중입니다...
+                </div>
+              )}
               <div className="flex gap-3">
                 <input
                   type="text"
@@ -602,12 +880,14 @@ const AnalysisChat = ({
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder="궁금한 점을 물어보세요... (GitHub URL 입력 시 바로 분석)"
-                  disabled={isAnalyzing}
+                  disabled={isAnalyzing || isStreaming}
                   className="flex-1 px-5 py-3 border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition-all disabled:bg-gray-100"
                 />
                 <button
                   onClick={handleSendMessage}
-                  disabled={!inputValue.trim() || isTyping || isAnalyzing}
+                  disabled={
+                    !inputValue.trim() || isTyping || isAnalyzing || isStreaming
+                  }
                   className="bg-blue-600 text-white p-3 rounded-2xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105"
                 >
                   <Send className="w-5 h-5" />
@@ -636,10 +916,66 @@ const AnalysisChat = ({
 
           {/* 오른쪽: 분석 리포트 영역 */}
           <div className="xl:col-span-3 space-y-4">
+            {/* 히스토리 네비게이션 바 */}
+            {analysisHistory.length > 1 && (
+              <div className="bg-white rounded-xl border border-gray-200 p-3 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <History className="w-4 h-4" />
+                  <span>분석 기록</span>
+                  <span className="bg-gray-100 px-2 py-0.5 rounded-full text-xs font-medium">
+                    {currentHistoryIndex + 1} / {analysisHistory.length}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={goToPreviousAnalysis}
+                    disabled={!canGoBack}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      canGoBack
+                        ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                        : "bg-gray-50 text-gray-300 cursor-not-allowed"
+                    }`}
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    이전
+                  </button>
+                  <button
+                    onClick={goToNextAnalysis}
+                    disabled={!canGoForward}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+                      canGoForward
+                        ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                        : "bg-gray-50 text-gray-300 cursor-not-allowed"
+                    }`}
+                  >
+                    다음
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            )}
+
             <AnalysisReportSection
               analysisResult={analysisResult}
               isLoading={isAnalyzing}
             />
+
+            {/* 온보딩 플랜 섹션 - 분석 결과가 있을 때 항상 표시 */}
+            {analysisResult && (
+              <OnboardingPlanSection
+                plan={analysisResult.onboardingPlan}
+                userProfile={userProfile}
+                onTaskToggle={(week, taskIdx, completed) => {
+                  console.log(
+                    `Task toggled: Week ${week}, Task ${taskIdx}, Completed: ${completed}`
+                  );
+                }}
+                onGeneratePlan={handleGenerateOnboardingPlan}
+                isGenerating={isGeneratingPlan}
+                generateError={planGenerateError}
+              />
+            )}
           </div>
         </div>
       </div>
@@ -666,17 +1002,38 @@ const ChatMessage = ({ message }) => {
         }`}
       >
         {isUser ? (
-          <p className="whitespace-pre-wrap leading-relaxed break-words">{message.content}</p>
+          <p className="whitespace-pre-wrap leading-relaxed break-words">
+            {message.content}
+          </p>
         ) : (
           <div className="prose prose-sm max-w-none">
             <ReactMarkdown
               components={{
-                p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
-                strong: ({ children }) => <strong className="font-bold">{children}</strong>,
-                ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>,
-                ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-1">{children}</ol>,
+                p: ({ children }) => (
+                  <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>
+                ),
+                strong: ({ children }) => (
+                  <strong className="font-bold">{children}</strong>
+                ),
+                ul: ({ children }) => (
+                  <ul className="list-disc pl-4 mb-2 space-y-1">{children}</ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="list-decimal pl-4 mb-2 space-y-1">
+                    {children}
+                  </ol>
+                ),
                 li: ({ children }) => <li className="text-sm">{children}</li>,
-                a: ({ href, children }) => <a href={href} className="text-blue-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    className="text-blue-600 hover:underline"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    {children}
+                  </a>
+                ),
               }}
             >
               {message.content}
