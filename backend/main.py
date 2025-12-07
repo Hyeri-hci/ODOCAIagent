@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.http_router import router as api_router
 from backend.api.sse_analyze import router as sse_router
+from backend.api.cache_router import router as cache_router
+from backend.api.chat_stream import router as chat_stream_router
 
 app = FastAPI(
     title="ODOCAIagent API",
@@ -21,8 +23,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:5173",  # Vite 기본 포트
+        "http://localhost:5174",  # Vite 대체 포트
         "http://localhost:3000",
         "http://127.0.0.1:5173",
+        "http://127.0.0.1:5174",
         "http://127.0.0.1:3000",
     ],
     allow_credentials=True,
@@ -33,6 +37,8 @@ app.add_middleware(
 # 라우터 등록
 app.include_router(api_router)
 app.include_router(sse_router)
+app.include_router(cache_router)
+app.include_router(chat_stream_router)
 
 
 @app.get("/")
@@ -46,8 +52,11 @@ async def root():
             "analyze": "POST /api/analyze",
             "analyze_stream": "GET /api/analyze/stream",
             "chat": "POST /api/chat",
+            "chat_stream": "POST /api/chat/stream",
             "agent_task": "POST /api/agent/task",
             "health": "GET /api/health",
+            "cache_stats": "GET /api/cache/stats",
+            "cache_invalidate": "POST /api/cache/invalidate",
         }
     }
 

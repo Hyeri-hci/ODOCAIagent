@@ -26,13 +26,14 @@ const AnalyzePage = () => {
   // SSE 결과 또는 REST API 결과를 프론트엔드 형식으로 변환
   const transformAnalysisResult = (apiResponse, repositoryUrl) => {
     const analysis = apiResponse.analysis || apiResponse;
-    
+
     console.log("=== API 응답 디버그 ===");
     console.log("Analysis object:", JSON.stringify(analysis, null, 2));
 
     return {
       repositoryUrl: repositoryUrl,
-      analysisId: apiResponse.job_id || analysis.repo_id || `analysis_${Date.now()}`,
+      analysisId:
+        apiResponse.job_id || analysis.repo_id || `analysis_${Date.now()}`,
       summary: {
         score: apiResponse.score || analysis.health_score || 0,
         healthStatus:
@@ -41,7 +42,11 @@ const AnalyzePage = () => {
             : analysis.health_level === "warning"
             ? "moderate"
             : "needs-attention",
-        contributionOpportunities: (apiResponse.recommended_issues || analysis.recommended_issues || []).length,
+        contributionOpportunities: (
+          apiResponse.recommended_issues ||
+          analysis.recommended_issues ||
+          []
+        ).length,
         estimatedImpact:
           (analysis.health_score || 0) >= 70
             ? "high"
@@ -50,10 +55,11 @@ const AnalyzePage = () => {
             : "low",
       },
       projectSummary:
-        apiResponse.readme_summary || analysis.summary_for_user ||
-        `이 저장소의 건강 점수는 ${apiResponse.score || analysis.health_score}점입니다. ${
-          analysis.health_score_interpretation || ""
-        }`,
+        apiResponse.readme_summary ||
+        analysis.summary_for_user ||
+        `이 저장소의 건강 점수는 ${
+          apiResponse.score || analysis.health_score
+        }점입니다. ${analysis.health_score_interpretation || ""}`,
       recommendations: [
         // 기존 actions
         ...(apiResponse.actions || []).map((action, idx) => ({
@@ -68,11 +74,21 @@ const AnalyzePage = () => {
           issueNumber: action.issue_number,
         })),
         // recommended_issues에서 추가
-        ...(apiResponse.recommended_issues || analysis.recommended_issues || []).map((issue, idx) => ({
+        ...(
+          apiResponse.recommended_issues ||
+          analysis.recommended_issues ||
+          []
+        ).map((issue, idx) => ({
           id: `issue_${issue.number || idx}`,
           title: issue.title,
           description: `GitHub Issue #${issue.number}`,
-          difficulty: issue.labels?.some(l => l.toLowerCase().includes('easy') || l.toLowerCase().includes('first')) ? "easy" : "medium",
+          difficulty: issue.labels?.some(
+            (l) =>
+              l.toLowerCase().includes("easy") ||
+              l.toLowerCase().includes("first")
+          )
+            ? "easy"
+            : "medium",
           estimatedTime: "2-4시간",
           impact: "medium",
           tags: issue.labels || ["issue"],
@@ -92,7 +108,8 @@ const AnalyzePage = () => {
         testCoverage: 0,
         dependencies: analysis.dependency_complexity_score || 0,
         lastCommit:
-          analysis.days_since_last_commit !== null && analysis.days_since_last_commit !== undefined
+          analysis.days_since_last_commit !== null &&
+          analysis.days_since_last_commit !== undefined
             ? `${analysis.days_since_last_commit}일 전`
             : "알 수 없음",
         openIssues: analysis.open_issues_count || 0,
@@ -103,31 +120,41 @@ const AnalyzePage = () => {
         documentationQuality: analysis.documentation_quality || 0,
         activityMaintainability: analysis.activity_maintainability || 0,
         // 새 메트릭 추가
-        issueCloseRate: analysis.issue_close_rate_pct || 
-          (analysis.issue_close_rate ? `${(analysis.issue_close_rate * 100).toFixed(1)}%` : "N/A"),
-        prMergeTime: analysis.median_pr_merge_days_text || 
-          (analysis.median_pr_merge_days ? `${analysis.median_pr_merge_days.toFixed(1)}일` : "N/A"),
+        issueCloseRate:
+          analysis.issue_close_rate_pct ||
+          (analysis.issue_close_rate
+            ? `${(analysis.issue_close_rate * 100).toFixed(1)}%`
+            : "N/A"),
+        prMergeTime:
+          analysis.median_pr_merge_days_text ||
+          (analysis.median_pr_merge_days
+            ? `${analysis.median_pr_merge_days.toFixed(1)}일`
+            : "N/A"),
         totalCommits30d: analysis.total_commits_30d || 0,
       },
       relatedProjects: [],
       // 추천 이슈 (Good First Issues)
-      recommendedIssues: apiResponse.recommended_issues || analysis.recommended_issues || [],
+      recommendedIssues:
+        apiResponse.recommended_issues || analysis.recommended_issues || [],
       // 원본 API 응답 보관
       rawAnalysis: analysis,
+      // 온보딩 플랜 (API 응답에서 가져오기)
+      onboardingPlan:
+        apiResponse.onboarding_plan || analysis.onboarding_plan || null,
     };
   };
 
   // SSE 완료 핸들러
   const handleStreamComplete = (sseResult) => {
     console.log("SSE 분석 완료:", sseResult);
-    
+
     const repoUrl = userProfile?.repositoryUrl || sseResult?.repo_id || "";
-    
+
     // SSE 결과를 캐시에 저장 (채팅에서 같은 URL 입력시 재사용)
     const cacheData = { ...sseResult, analysis: sseResult };
     setCachedAnalysis(repoUrl, cacheData);
     console.log("[SSE] Cached result for:", repoUrl);
-    
+
     const transformed = transformAnalysisResult(cacheData, repoUrl);
     setAnalysisResult(transformed);
     setStep("chat");
@@ -154,7 +181,10 @@ const AnalyzePage = () => {
     // 기존 REST API 방식
     try {
       const apiResponse = await analyzeRepository(profileData.repositoryUrl);
-      const transformedResult = transformAnalysisResult(apiResponse, profileData.repositoryUrl);
+      const transformedResult = transformAnalysisResult(
+        apiResponse,
+        profileData.repositoryUrl
+      );
       setAnalysisResult(transformedResult);
       setStep("chat");
     } catch (err) {
@@ -171,7 +201,7 @@ const AnalyzePage = () => {
       )}
 
       {step === "loading" && (
-        <AnalysisLoading 
+        <AnalysisLoading
           userProfile={userProfile}
           useStream={USE_STREAM_MODE}
           onComplete={handleStreamComplete}
@@ -190,4 +220,3 @@ const AnalyzePage = () => {
 };
 
 export default AnalyzePage;
-
