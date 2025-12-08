@@ -28,30 +28,30 @@ class IntentParser:
         )
 
         self.intent_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an intent parser for a security analysis agent.
-Parse the user's natural language request into a structured intent.
+            ("system", """당신은 보안 분석 에이전트를 위한 의도 파서입니다.
+사용자의 자연어 요청을 구조화된 의도로 변환하세요.
 
-Available Actions:
-- analyze_all: Complete security analysis (dependencies + vulnerabilities + license + report)
-- extract_dependencies: Extract dependencies only
-- scan_vulnerabilities: Scan for vulnerabilities
-- check_license: Check license compliance
-- generate_report: Generate report from existing data
-- analyze_file: Analyze specific file(s)
-- custom: Custom task
+사용 가능한 액션:
+- analyze_all: 전체 보안 분석 (의존성 + 취약점 + 라이센스 + 리포트)
+- extract_dependencies: 의존성만 추출
+- scan_vulnerabilities: 취약점 스캔
+- check_license: 라이센스 준수 확인
+- generate_report: 기존 데이터로 리포트 생성
+- analyze_file: 특정 파일 분석
+- custom: 커스텀 작업
 
-Scopes:
-- full_repository: Analyze entire repository
-- specific_files: Analyze specific files only
-- specific_languages: Analyze specific language dependencies
+범위:
+- full_repository: 전체 레포지토리 분석
+- specific_files: 특정 파일만 분석
+- specific_languages: 특정 언어 의존성만 분석
 
-Output Format:
-- full_report: Complete detailed report
-- summary: Brief summary
-- json: JSON format
-- specific_fields: Only requested fields
+출력 형식:
+- full_report: 전체 상세 리포트
+- summary: 간단한 요약
+- json: JSON 형식
+- specific_fields: 요청된 필드만
 
-Return a JSON object with:
+다음과 같은 JSON 객체를 반환하세요:
 {{
     "primary_action": "...",
     "scope": "...",
@@ -65,16 +65,16 @@ Return a JSON object with:
         ])
 
         self.parameter_prompt = ChatPromptTemplate.from_messages([
-            ("system", """Extract parameters from the security analysis request.
+            ("system", """보안 분석 요청에서 파라미터를 추출하세요.
 
-Find:
-- Repository: owner/repo format (e.g., "facebook/react")
-- Files: Specific file names if mentioned
-- Options: Any flags or settings
-- Thresholds: Numeric conditions
-- Focus Areas: What to focus on
+찾을 것:
+- Repository: owner/repo 형식 (예: "facebook/react")
+- Files: 언급된 특정 파일 이름
+- Options: 플래그나 설정
+- Thresholds: 숫자 조건
+- Focus Areas: 집중할 영역
 
-Return JSON:
+다음 JSON을 반환하세요:
 {{
     "owner": "...",
     "repo": "...",
@@ -207,19 +207,19 @@ Return JSON:
         Returns:
             "simple" | "moderate" | "complex"
         """
-        prompt = f"""Assess the complexity of this security analysis request:
+        prompt = f"""이 보안 분석 요청의 복잡도를 평가하세요:
 
-Request: "{user_request}"
+요청: "{user_request}"
 
-Classification:
-- SIMPLE: Standard repository analysis, no special conditions
-- MODERATE: Some specific requirements or conditions
-- COMPLEX: Multiple conditions, custom logic, or complex requirements
+분류:
+- SIMPLE: 표준 레포지토리 분석, 특별한 조건 없음
+- MODERATE: 일부 특정 요구사항이나 조건 있음
+- COMPLEX: 여러 조건, 커스텀 로직, 복잡한 요구사항
 
-Answer with only: SIMPLE, MODERATE, or COMPLEX
-Brief reason (one line)
+다음 중 하나만 답하세요: SIMPLE, MODERATE, COMPLEX
+간단한 이유 (한 줄)
 
-Format:
+형식:
 CLASSIFICATION: [SIMPLE|MODERATE|COMPLEX]
 REASON: ...
 """

@@ -28,52 +28,52 @@ class DynamicPlanner:
 
         # 계획 생성 프롬프트
         self.planning_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are an expert security analysis planner.
+            ("system", """당신은 보안 분석 계획 전문가입니다.
 
-Given a user's intent and available tools, create a detailed execution plan.
+사용자의 의도와 사용 가능한 도구를 바탕으로 상세한 실행 계획을 수립하세요.
 
-Available Tools:
-- fetch_repository_info: Get repository metadata
-- fetch_file_content: Get specific file contents
-- fetch_directory_structure: Get repository structure
-- detect_lock_files: Find dependency lock files
-- parse_package_json: Parse package.json dependencies
-- parse_requirements_txt: Parse requirements.txt
-- parse_pipfile: Parse Pipfile/Pipfile.lock
-- parse_gemfile: Parse Gemfile/Gemfile.lock
-- parse_cargo_toml: Parse Cargo.toml
-- search_cve_by_cpe: Search CVE vulnerabilities
-- fetch_cve_details: Get CVE details
-- assess_severity: Assess vulnerability severity
-- check_license_compatibility: Check license compliance
-- generate_security_report: Generate final report
-- calculate_security_score: Calculate security score
+사용 가능한 도구:
+- fetch_repository_info: 레포지토리 메타데이터 가져오기
+- fetch_file_content: 특정 파일 내용 가져오기
+- fetch_directory_structure: 레포지토리 구조 가져오기
+- detect_lock_files: 의존성 락 파일 찾기
+- parse_package_json: package.json 의존성 파싱
+- parse_requirements_txt: requirements.txt 파싱
+- parse_pipfile: Pipfile/Pipfile.lock 파싱
+- parse_gemfile: Gemfile/Gemfile.lock 파싱
+- parse_cargo_toml: Cargo.toml 파싱
+- search_cve_by_cpe: CVE 취약점 검색
+- fetch_cve_details: CVE 상세 정보 가져오기
+- assess_severity: 취약점 심각도 평가
+- check_license_compatibility: 라이센스 호환성 확인
+- generate_security_report: 최종 리포트 생성
+- calculate_security_score: 보안 점수 계산
 
-Your task:
-1. Analyze the user's intent
-2. Break down the task into atomic steps
-3. Select appropriate tools for each step
-4. Estimate complexity and duration
-5. Add validation steps between major phases
+작업:
+1. 사용자의 의도 분석
+2. 작업을 원자적 단계로 분해
+3. 각 단계에 적합한 도구 선택
+4. 복잡도와 소요 시간 추정
+5. 주요 단계 사이에 검증 단계 추가
 
-Return a JSON object:
+다음 JSON 객체를 반환하세요:
 {{
     "steps": [
         {{
             "step_number": 1,
             "action": "tool_name",
-            "description": "What this step does",
+            "description": "이 단계가 수행하는 작업",
             "parameters": {{}},
-            "validation": "How to verify this step succeeded",
-            "fallback": "What to do if this step fails"
+            "validation": "이 단계의 성공 여부를 확인하는 방법",
+            "fallback": "이 단계가 실패할 경우 수행할 작업"
         }}
     ],
     "estimated_duration": 120,
     "complexity": "moderate",
     "requires_llm": true,
-    "reasoning": "Why this plan was chosen"
+    "reasoning": "이 계획을 선택한 이유"
 }}"""),
-            ("user", """User Intent:
+            ("user", """사용자 의도:
 Primary Action: {primary_action}
 Scope: {scope}
 Target Files: {target_files}
@@ -81,34 +81,34 @@ Conditions: {conditions}
 Output Format: {output_format}
 Parameters: {parameters}
 
-User Request: {user_request}
+사용자 요청: {user_request}
 
-Create a detailed execution plan.""")
+상세한 실행 계획을 수립하세요.""")
         ])
 
         # 계획 검증 프롬프트
         self.validation_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a plan validator for security analysis.
+            ("system", """당신은 보안 분석 계획 검증자입니다.
 
-Review the execution plan and check:
-1. Are all steps necessary and sufficient?
-2. Are steps in the correct order?
-3. Are there missing validation steps?
-4. Are error handling steps included?
-5. Is the plan achievable with available tools?
+실행 계획을 검토하고 다음을 확인하세요:
+1. 모든 단계가 필요하고 충분한가?
+2. 단계들이 올바른 순서로 되어 있는가?
+3. 누락된 검증 단계가 있는가?
+4. 오류 처리 단계가 포함되어 있는가?
+5. 계획이 사용 가능한 도구로 실현 가능한가?
 
-Return JSON:
+다음 JSON을 반환하세요:
 {{
     "valid": true/false,
-    "issues": ["list of issues found"],
-    "suggestions": ["list of improvements"],
-    "revised_steps": [...]  // only if changes needed
+    "issues": ["발견된 문제 목록"],
+    "suggestions": ["개선 제안 목록"],
+    "revised_steps": [...]  // 변경이 필요한 경우에만
 }}"""),
-            ("user", """Review this plan:
+            ("user", """이 계획을 검토하세요:
 
 {plan_json}
 
-User's original request: {user_request}""")
+사용자의 원래 요청: {user_request}""")
         ])
 
     async def create_plan(
@@ -185,9 +185,13 @@ User's original request: {user_request}""")
             }
 
         except Exception as e:
-            print(f"[Planner] Error creating plan: {e}")
+            # 더 자세한 에러 정보 출력
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"[Planner] Error creating plan: {type(e).__name__}: {str(e)}")
+            print(f"[Planner] Error details:\n{error_details}")
             return {
-                "errors": [f"Planning failed: {str(e)}"],
+                "errors": [f"Planning failed ({type(e).__name__}): {str(e)}"],
                 "execution_plan": self._create_default_plan(state)["execution_plan"],
                 "plan_valid": False
             }

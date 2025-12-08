@@ -95,97 +95,97 @@ class ReActExecutor:
 
         # ReAct 사고 프롬프트 (개선)
         self.thought_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are a security analysis agent using the ReAct (Reasoning + Acting) pattern.
+            ("system", """당신은 ReAct (Reasoning + Acting) 패턴을 사용하는 보안 분석 에이전트입니다.
 
-Current Execution Plan:
+현재 실행 계획:
 {execution_plan}
 
-Progress so far:
-- Completed steps: {completed_steps}
-- Current step: {current_step}
-- Observations: {observations}
-- Failed tools: {failed_tools}
+지금까지의 진행:
+- 완료된 단계: {completed_steps}
+- 현재 단계: {current_step}
+- 관찰 결과: {observations}
+- 실패한 도구: {failed_tools}
 
-Available Tools:
+사용 가능한 도구:
 {available_tools}
 
-Current State:
+현재 상태:
 {current_state}
 
-IMPORTANT RULES:
-1. If a tool has failed multiple times, try an ALTERNATIVE tool instead
-2. Do NOT give up early - explore at least 5-10 different approaches
-3. If stuck, try a different category of tools (e.g., if GitHub API fails, try file parsing)
-4. Only set "continue": false if you've exhausted all reasonable options
+중요한 규칙:
+1. 도구가 여러 번 실패했다면, 대체 도구를 시도하세요
+2. 조기에 포기하지 마세요 - 최소 5-10가지 다른 접근 방식을 시도하세요
+3. 막힌 경우, 다른 카테고리의 도구를 시도하세요 (예: GitHub API 실패 시 파일 파싱 시도)
+4. "continue": false는 모든 합리적인 옵션을 소진한 경우에만 설정하세요
 
-Your task:
-1. THINK: Analyze the current situation
-2. Decide what to do next
-3. Choose the appropriate tool (avoid recently failed tools)
-4. Specify parameters
+작업:
+1. THINK: 현재 상황 분석
+2. 다음에 할 일 결정
+3. 적절한 도구 선택 (최근 실패한 도구 제외)
+4. 파라미터 지정
 
-Return JSON:
+다음 JSON을 반환하세요:
 {{
-    "thought": "Your reasoning about the current situation",
-    "reasoning": "Why you're taking this action",
+    "thought": "현재 상황에 대한 당신의 추론",
+    "reasoning": "이 액션을 수행하는 이유",
     "next_action": "tool_name",
     "parameters": {{}},
-    "expected_outcome": "What you expect to happen",
+    "expected_outcome": "예상되는 결과",
     "continue": true/false
 }}
 
-Only set "continue": false if the task is TRULY complete or ALL options exhausted."""),
-            ("user", "What should I do next?")
+"continue": false는 작업이 진정으로 완료되었거나 모든 옵션이 소진된 경우에만 설정하세요."""),
+            ("user", "다음에 무엇을 해야 하나요?")
         ])
 
         # 관찰 분석 프롬프트
         self.observation_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are analyzing the result of an action.
+            ("system", """당신은 액션 결과를 분석하고 있습니다.
 
-Action taken: {action_name}
-Parameters: {parameters}
-Result: {result}
-Success: {success}
-Error: {error}
+수행한 액션: {action_name}
+파라미터: {parameters}
+결과: {result}
+성공: {success}
+에러: {error}
 
-Analyze:
-1. What did we learn?
-2. Did it meet expectations?
-3. What should we do next?
-4. If failed, what alternative approach should we try?
+분석:
+1. 무엇을 배웠나요?
+2. 예상대로 되었나요?
+3. 다음에 무엇을 해야 하나요?
+4. 실패한 경우, 어떤 대안 접근 방식을 시도해야 하나요?
 
-Return JSON:
+다음 JSON을 반환하세요:
 {{
-    "observation": "What you observed",
-    "learned": "What you learned from this",
+    "observation": "관찰한 내용",
+    "learned": "이것에서 배운 것",
     "meets_expectation": true/false,
-    "next_step_suggestion": "What to do next",
-    "alternative_tool": "tool_name or null"
+    "next_step_suggestion": "다음에 할 일",
+    "alternative_tool": "tool_name 또는 null"
 }}"""),
-            ("user", "Analyze this action result.")
+            ("user", "이 액션 결과를 분석하세요.")
         ])
 
         # 메타인지 프롬프트 (자기 평가)
         self.reflection_prompt = ChatPromptTemplate.from_messages([
-            ("system", """You are reflecting on your overall progress.
+            ("system", """당신은 전체 진행 상황을 반성하고 있습니다.
 
-Original Goal: {user_request}
-Steps Completed: {completed_count}
-Steps Remaining: {remaining_count}
-Errors Encountered: {errors}
-Current Results:
+원래 목표: {user_request}
+완료한 단계: {completed_count}
+남은 단계: {remaining_count}
+발생한 에러: {errors}
+현재 결과:
 {current_results}
 
-Execution Summary:
+실행 요약:
 {execution_summary}
 
-Reflect:
-1. Are we making good progress?
-2. Should we change strategy?
-3. Are we stuck in a loop?
-4. Should we ask for human help?
+반성:
+1. 진행이 잘 되고 있나요?
+2. 전략을 변경해야 하나요?
+3. 루프에 갇혀 있나요?
+4. 사람의 도움을 요청해야 하나요?
 
-Return JSON:
+다음 JSON을 반환하세요:
 {{
     "progress_assessment": "good/fair/poor",
     "strategy_change_needed": true/false,
@@ -194,7 +194,7 @@ Return JSON:
     "need_human_help": true/false,
     "human_question": "..."
 }}"""),
-            ("user", "Reflect on current progress.")
+            ("user", "현재 진행 상황을 반성하세요.")
         ])
 
     async def execute_react_cycle(
@@ -485,13 +485,38 @@ Return JSON:
         print("[ReAct] OBSERVE phase...")
 
         try:
+            # 결과를 요약하여 컨텍스트 길이 줄이기
+            result = action_result.get("result", {})
+
+            # 결과 요약: 중요한 정보만 추출
+            result_summary = {}
+            if isinstance(result, dict):
+                # 중요한 키만 추출
+                important_keys = ["success", "count", "total", "total_count", "lock_files",
+                                "vulnerabilities", "dependencies", "error", "summary"]
+                for key in important_keys:
+                    if key in result:
+                        value = result[key]
+                        # 리스트나 딕셔너리는 길이만 표시
+                        if isinstance(value, list):
+                            result_summary[key] = f"[{len(value)} items]"
+                        elif isinstance(value, dict):
+                            result_summary[key] = f"{{...}} ({len(value)} keys)"
+                        else:
+                            result_summary[key] = value
+            else:
+                result_summary = str(result)[:200]  # 문자열인 경우 200자로 제한
+
+            # 파라미터도 요약
+            params_summary = {k: v for k, v in parameters.items() if k != "state"}
+
             chain = self.observation_prompt | self.llm
             response = await chain.ainvoke({
                 "action_name": action_name,
-                "parameters": json.dumps(parameters, indent=2, ensure_ascii=False),
-                "result": json.dumps(action_result.get("result"), indent=2, ensure_ascii=False)[:1000],  # 길이 제한
+                "parameters": json.dumps(params_summary, indent=2, ensure_ascii=False)[:300],
+                "result": json.dumps(result_summary, indent=2, ensure_ascii=False)[:500],  # 500자로 제한
                 "success": action_result.get("success", False),
-                "error": action_result.get("error", "None")
+                "error": str(action_result.get("error", "None"))[:200]  # 에러 메시지도 200자로 제한
             })
 
             content = response.content

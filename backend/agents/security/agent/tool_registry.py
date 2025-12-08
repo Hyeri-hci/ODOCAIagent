@@ -387,23 +387,36 @@ async def parse_dependencies(state: SecurityAnalysisStateV2, **kwargs) -> Dict[s
         # core_parse_dependencies 호출
         dependency_snapshot = core_parse_dependencies(repo_snapshot)
 
-        # 결과를 tool_registry 형식으로 변환
+        # 결과를 tool_registry 형식으로 변환 (중복 제거)
         dependencies = {}
+        unique_deps = {}  # {(ecosystem, name): version} 형식으로 중복 제거
+
         for dep in dependency_snapshot.dependencies:
             ecosystem = "npm" if "package.json" in dep.source else "pip"
+
+            # 중복 제거: 같은 패키지가 여러 파일에 있을 경우 한 번만 카운트
+            key = (ecosystem, dep.name)
+            if key not in unique_deps:
+                unique_deps[key] = dep.version or "latest"
+
+        # unique_deps를 dependencies 형식으로 변환
+        for (ecosystem, name), version in unique_deps.items():
             if ecosystem not in dependencies:
                 dependencies[ecosystem] = {}
-            dependencies[ecosystem][dep.name] = dep.version or "latest"
+            dependencies[ecosystem][name] = version
+
+        # 실제 고유 의존성 개수 계산
+        actual_count = len(unique_deps)
 
         return {
             "success": True,
             "dependencies": dependencies,
-            "total_count": dependency_snapshot.total_count,
+            "total_count": actual_count,  # 중복 제거된 개수
             "analyzed_files": dependency_snapshot.analyzed_files,
             "parse_errors": dependency_snapshot.parse_errors,
             "state_update": {
                 "dependencies": dependencies,
-                "dependency_count": dependency_snapshot.total_count,
+                "dependency_count": actual_count,  # 중복 제거된 개수
                 "analyzed_files": dependency_snapshot.analyzed_files
             }
         }
@@ -553,9 +566,12 @@ async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Di
                     "version": clean_version if clean_version else "*"
                 })
 
-    # NVD Client로 취약점 분석
+    # NVD Client로 취약점 분석 (DB 기반 필터링 활성화)
     client = get_nvd_client()
-    result = client.analyze_dependency_vulnerabilities(formatted_deps)
+    result = client.analyze_dependency_vulnerabilities(
+        dependencies=formatted_deps,
+        skip_unmapped=True  # DB에 없는 패키지는 스킵
+    )
 
     if not result.get("success"):
         return {
@@ -569,8 +585,11 @@ async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Di
     vulnerabilities = result.get("vulnerabilities", [])
     severity_counts = result.get("severity_counts", {})
     total_count = result.get("total_count", 0)
+    packages_scanned = result.get("packages_scanned", 0)
+    packages_skipped = result.get("packages_skipped", 0)
 
     print(f"[search_vulnerabilities] Found {total_count} vulnerabilities")
+    print(f"[search_vulnerabilities] Scanned: {packages_scanned}, Skipped: {packages_skipped}")
     print(f"[search_vulnerabilities] Severity: {severity_counts}")
 
     # State 업데이트 데이터
@@ -581,7 +600,9 @@ async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Di
         "high_count": severity_counts.get("HIGH", 0),
         "medium_count": severity_counts.get("MEDIUM", 0),
         "low_count": severity_counts.get("LOW", 0),
-        "unknown_count": severity_counts.get("UNKNOWN", 0)
+        "unknown_count": severity_counts.get("UNKNOWN", 0),
+        "packages_scanned": packages_scanned,
+        "packages_skipped": packages_skipped
     }
 
     return {
@@ -589,6 +610,8 @@ async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Di
         "vulnerabilities": vulnerabilities,
         "total_count": total_count,
         "severity_counts": severity_counts,
+        "packages_scanned": packages_scanned,
+        "packages_skipped": packages_skipped,
         "summary": result.get("summary", ""),
         "state_update": state_update
     }
@@ -782,9 +805,27 @@ async def scan_vulnerabilities_full(state: SecurityAnalysisStateV2, **kwargs) ->
             }
         }
 
-    # NVD Client로 취약점 분석
+    # 의존성 데이터를 analyze_dependency_vulnerabilities 형식으로 변환
+    # dependencies = {"npm": {"react": "^18.0.0", ...}, "pip": {...}}
+    # -> {"npm": [{"name": "react", "version": "18.0.0"}, ...], ...}
+    formatted_deps = {}
+    for ecosystem, packages in dependencies.items():
+        formatted_deps[ecosystem] = []
+        if isinstance(packages, dict):
+            for name, version in packages.items():
+                # 버전 문자열에서 ^, ~, >= 등 제거
+                clean_version = version.replace("^", "").replace("~", "").replace(">=", "").strip()
+                formatted_deps[ecosystem].append({
+                    "name": name,
+                    "version": clean_version if clean_version else "*"
+                })
+
+    # NVD Client로 취약점 분석 (DB 기반 필터링 활성화)
     client = get_nvd_client()
-    result = client.analyze_dependency_vulnerabilities(dependencies)
+    result = client.analyze_dependency_vulnerabilities(
+        dependencies=formatted_deps,
+        skip_unmapped=True  # DB에 없는 패키지는 스킵
+    )
 
     if not result.get("success"):
         return {
@@ -798,8 +839,11 @@ async def scan_vulnerabilities_full(state: SecurityAnalysisStateV2, **kwargs) ->
     vulnerabilities = result.get("vulnerabilities", [])
     severity_counts = result.get("severity_counts", {})
     total_count = result.get("total_count", 0)
+    packages_scanned = result.get("packages_scanned", 0)
+    packages_skipped = result.get("packages_skipped", 0)
 
     print(f"[scan_vulnerabilities_full] Found {total_count} vulnerabilities")
+    print(f"[scan_vulnerabilities_full] Scanned: {packages_scanned}, Skipped: {packages_skipped}")
     print(f"[scan_vulnerabilities_full] Severity: {severity_counts}")
 
     # State 업데이트 데이터
@@ -810,7 +854,9 @@ async def scan_vulnerabilities_full(state: SecurityAnalysisStateV2, **kwargs) ->
         "high_count": severity_counts.get("HIGH", 0),
         "medium_count": severity_counts.get("MEDIUM", 0),
         "low_count": severity_counts.get("LOW", 0),
-        "unknown_count": severity_counts.get("UNKNOWN", 0)
+        "unknown_count": severity_counts.get("UNKNOWN", 0),
+        "packages_scanned": packages_scanned,
+        "packages_skipped": packages_skipped
     }
 
     return {
@@ -818,6 +864,8 @@ async def scan_vulnerabilities_full(state: SecurityAnalysisStateV2, **kwargs) ->
         "vulnerabilities": vulnerabilities,
         "total_count": total_count,
         "severity_counts": severity_counts,
+        "packages_scanned": packages_scanned,
+        "packages_skipped": packages_skipped,
         "summary": result.get("summary", ""),
         "state_update": state_update
     }
