@@ -244,6 +244,28 @@ class SecurityAgentV2:
         print("[Node: 최종(결과)/Finalize]")
         print("="*50)
 
+        # 보안점수가 없으면 자동으로 계산 (취약점 정보가 있는 경우)
+        security_score = state.get("security_score")
+        security_grade = state.get("security_grade")
+        risk_level = state.get("risk_level")
+
+        if security_score is None and state.get("vulnerability_count", 0) >= 0:
+            print("[Finalize] Security score not found, calculating...")
+            from .tool_registry import calculate_security_score
+            score_result = await calculate_security_score(state)
+
+            if score_result.get("success"):
+                security_score = score_result.get("score")
+                security_grade = score_result.get("grade")
+                risk_level = score_result.get("risk_level")
+
+                # State 업데이트
+                state["security_score"] = security_score
+                state["security_grade"] = security_grade
+                state["risk_level"] = risk_level
+
+                print(f"[Finalize] Security score calculated: {security_score}/100 (Grade: {security_grade})")
+
         # 최종 결과 생성
         final_result = {
             "session_id": state.get("session_id"),
@@ -256,6 +278,7 @@ class SecurityAgentV2:
                 "warnings": len(state.get("warnings", []))
             },
             "results": {
+                "security_score": state.get("security_score"),
                 "dependencies": {
                     "total": state.get("dependency_count", 0),
                     "details": state.get("dependencies", {})
@@ -268,9 +291,9 @@ class SecurityAgentV2:
                     "low": state.get("low_count", 0),
                     "details": state.get("vulnerabilities", [])
                 },
-                "security_score": state.get("security_score"),
-                "security_grade": state.get("security_grade"),
-                "risk_level": state.get("risk_level")
+                "security_score": security_score,
+                "security_grade": security_grade,
+                "risk_level": risk_level
             },
             "report": state.get("report"),
             "recommendations": state.get("recommendations", [])
@@ -286,6 +309,10 @@ class SecurityAgentV2:
         print(f"Analysis completed: {'Success' if success else 'Partial'}")
         print(f"Dependencies found: {state.get('dependency_count', 0)}")
         print(f"Vulnerabilities found: {state.get('vulnerability_count', 0)}")
+
+        # 보안점수 로그 출력
+        if security_score is not None:
+            print(f"Security Score: {security_score}/100 (Grade: {security_grade}, Risk: {risk_level})")
 
         return {
             "completed": True,

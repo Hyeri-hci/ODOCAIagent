@@ -592,7 +592,7 @@ async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Di
     print(f"[search_vulnerabilities] Scanned: {packages_scanned}, Skipped: {packages_skipped}")
     print(f"[search_vulnerabilities] Severity: {severity_counts}")
 
-    # State 업데이트 데이터
+    # State 업데이트 데이터 (보안점수 계산을 위해 먼저 state 업데이트)
     state_update = {
         "vulnerabilities": vulnerabilities,
         "vulnerability_count": total_count,
@@ -605,16 +605,52 @@ async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Di
         "packages_skipped": packages_skipped
     }
 
-    return {
-        "success": True,
-        "vulnerabilities": vulnerabilities,
-        "total_count": total_count,
-        "severity_counts": severity_counts,
-        "packages_scanned": packages_scanned,
-        "packages_skipped": packages_skipped,
-        "summary": result.get("summary", ""),
-        "state_update": state_update
-    }
+    # State를 업데이트하여 보안점수 계산에 사용
+    updated_state = {**state, **state_update}
+
+    # 보안 점수 자동 계산
+    print("[search_vulnerabilities] Calculating security score...")
+    score_result = await calculate_security_score(updated_state)
+
+    if score_result.get("success"):
+        security_score = score_result.get("score")
+        security_grade = score_result.get("grade")
+        risk_level = score_result.get("risk_level")
+        deductions = score_result.get("deductions", {})
+
+        # State 업데이트에 보안점수 추가
+        state_update.update({
+            "security_score": security_score,
+            "security_grade": security_grade,
+            "risk_level": risk_level
+        })
+
+        return {
+            "success": True,
+            "vulnerabilities": vulnerabilities,
+            "total_count": total_count,
+            "severity_counts": severity_counts,
+            "packages_scanned": packages_scanned,
+            "packages_skipped": packages_skipped,
+            "summary": result.get("summary", ""),
+            "security_score": security_score,
+            "security_grade": security_grade,
+            "risk_level": risk_level,
+            "deductions": deductions,
+            "state_update": state_update
+        }
+    else:
+        # 보안점수 계산 실패 시에도 취약점 정보는 반환
+        return {
+            "success": True,
+            "vulnerabilities": vulnerabilities,
+            "total_count": total_count,
+            "severity_counts": severity_counts,
+            "packages_scanned": packages_scanned,
+            "packages_skipped": packages_skipped,
+            "summary": result.get("summary", ""),
+            "state_update": state_update
+        }
 
 
 # ===== Assessment Tools =====
@@ -631,38 +667,78 @@ async def check_license_compatibility(state: SecurityAnalysisStateV2, **kwargs) 
 
 @register_tool(
     "calculate_security_score",
-    "Calculate overall security score",
+    "Calculate overall security score based on vulnerability severity",
     "assessment"
 )
 async def calculate_security_score(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
-    """보안 점수 계산"""
-    vuln_count = state.get("vulnerability_count", 0)
+    """
+    보안 점수 계산
+
+    점수 계산 방식 (100점 만점):
+    - CRITICAL: -4점
+    - HIGH: -3점
+    - MEDIUM: -2점
+    - LOW: -1점
+    - 최종 점수: 0 ~ 100 범위로 제한
+    """
     critical = state.get("critical_count", 0)
     high = state.get("high_count", 0)
+    medium = state.get("medium_count", 0)
+    low = state.get("low_count", 0)
 
-    # 간단한 점수 계산
+    # 점수 계산
     base_score = 100
-    score = base_score - (critical * 20) - (high * 10) - (vuln_count * 2)
+    score = base_score - (critical * 4) - (high * 3) - (medium * 2) - (low * 1)
+
+    # 0 ~ 100 범위로 제한
     score = max(0, min(100, score))
 
+    # 등급 산정
     if score >= 90:
         grade = "A"
+        risk_level = "Low"
     elif score >= 75:
         grade = "B"
+        risk_level = "Low"
     elif score >= 60:
         grade = "C"
+        risk_level = "Medium"
     elif score >= 40:
         grade = "D"
+        risk_level = "High"
     else:
         grade = "F"
+        risk_level = "Critical"
+
+    # 점수 계산 상세 정보
+    deductions = {
+        "critical": critical * 4,
+        "high": high * 3,
+        "medium": medium * 2,
+        "low": low * 1,
+        "total": base_score - score
+    }
+
+    print(f"[Security Score] Calculated: {score}/100 (Grade: {grade})")
+    print(f"[Security Score] Deductions: CRITICAL(-{deductions['critical']}), HIGH(-{deductions['high']}), MEDIUM(-{deductions['medium']}), LOW(-{deductions['low']})")
 
     return {
         "success": True,
         "score": score,
         "grade": grade,
+        "risk_level": risk_level,
+        "deductions": deductions,
+        "vulnerability_summary": {
+            "critical": critical,
+            "high": high,
+            "medium": medium,
+            "low": low,
+            "total": critical + high + medium + low
+        },
         "state_update": {
-            "security_score": {"score": score},
-            "security_grade": grade
+            "security_score": score,
+            "security_grade": grade,
+            "risk_level": risk_level
         }
     }
 
@@ -846,7 +922,7 @@ async def scan_vulnerabilities_full(state: SecurityAnalysisStateV2, **kwargs) ->
     print(f"[scan_vulnerabilities_full] Scanned: {packages_scanned}, Skipped: {packages_skipped}")
     print(f"[scan_vulnerabilities_full] Severity: {severity_counts}")
 
-    # State 업데이트 데이터
+    # State 업데이트 데이터 (보안점수 계산을 위해 먼저 state 업데이트)
     state_update = {
         "vulnerabilities": vulnerabilities,
         "vulnerability_count": total_count,
@@ -859,13 +935,49 @@ async def scan_vulnerabilities_full(state: SecurityAnalysisStateV2, **kwargs) ->
         "packages_skipped": packages_skipped
     }
 
-    return {
-        "success": True,
-        "vulnerabilities": vulnerabilities,
-        "total_count": total_count,
-        "severity_counts": severity_counts,
-        "packages_scanned": packages_scanned,
-        "packages_skipped": packages_skipped,
-        "summary": result.get("summary", ""),
-        "state_update": state_update
-    }
+    # State를 업데이트하여 보안점수 계산에 사용
+    updated_state = {**state, **state_update}
+
+    # 보안 점수 자동 계산
+    print("[scan_vulnerabilities_full] Calculating security score...")
+    score_result = await calculate_security_score(updated_state)
+
+    if score_result.get("success"):
+        security_score = score_result.get("score")
+        security_grade = score_result.get("grade")
+        risk_level = score_result.get("risk_level")
+        deductions = score_result.get("deductions", {})
+
+        # State 업데이트에 보안점수 추가
+        state_update.update({
+            "security_score": security_score,
+            "security_grade": security_grade,
+            "risk_level": risk_level
+        })
+
+        return {
+            "success": True,
+            "vulnerabilities": vulnerabilities,
+            "total_count": total_count,
+            "severity_counts": severity_counts,
+            "packages_scanned": packages_scanned,
+            "packages_skipped": packages_skipped,
+            "summary": result.get("summary", ""),
+            "security_score": security_score,
+            "security_grade": security_grade,
+            "risk_level": risk_level,
+            "deductions": deductions,
+            "state_update": state_update
+        }
+    else:
+        # 보안점수 계산 실패 시에도 취약점 정보는 반환
+        return {
+            "success": True,
+            "vulnerabilities": vulnerabilities,
+            "total_count": total_count,
+            "severity_counts": severity_counts,
+            "packages_scanned": packages_scanned,
+            "packages_skipped": packages_skipped,
+            "summary": result.get("summary", ""),
+            "state_update": state_update
+        }
