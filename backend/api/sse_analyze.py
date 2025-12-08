@@ -30,17 +30,8 @@ class ProgressEvent(BaseModel):
     data: dict = Field(default_factory=dict)
 
 
-async def analyze_with_progress(owner: str, repo: str, ref: str) -> AsyncGenerator[str, None]:
-    """
-    분석 진행 상황을 SSE 이벤트로 스트리밍.
-    
-    단계:
-    - github (10%): GitHub 데이터 수집
-    - analyzing (50%): 분석 진행 중
-    - complete (100%): 완료
-    
-    캐시: 동일 저장소는 24시간 동안 캐시됩니다.
-    """
+async def analyze_with_progress(owner: str, repo: str, ref: str, message: str = None) -> AsyncGenerator[str, None]:
+    """분석 진행 상황을 SSE 이벤트로 스트리밍."""
     from concurrent.futures import ThreadPoolExecutor
     from backend.common.cache import analysis_cache
     
@@ -55,6 +46,8 @@ async def analyze_with_progress(owner: str, repo: str, ref: str) -> AsyncGenerat
     
     try:
         # 캐시 확인
+        logger.info(f"Starting SSE generator for {owner}/{repo}")
+        print(f"DEBUG: Starting SSE generator for {owner}/{repo}")
         cached_result = analysis_cache.get_analysis(owner, repo, ref)
         if cached_result:
             logger.info(f"SSE returning cached analysis for {owner}/{repo}@{ref}")
@@ -80,11 +73,12 @@ async def analyze_with_progress(owner: str, repo: str, ref: str) -> AsyncGenerat
             result = await loop.run_in_executor(
                 executor,
                 lambda: run_agent_task(
-                    task_type="diagnose_repo",
+                    task_type="general_inquiry",
                     owner=owner,
                     repo=repo,
                     ref=ref,
-                    use_llm_summary=True
+                    use_llm_summary=True,
+                    user_message=message
                 )
             )
         
@@ -142,27 +136,21 @@ async def analyze_with_progress(owner: str, repo: str, ref: str) -> AsyncGenerat
 
 
 @router.get("/analyze/stream")
-async def analyze_repository_stream(repo_url: str):
-    """
-    저장소 분석 SSE 스트리밍 API.
-    
-    실시간으로 분석 진행 상황을 전달합니다.
-    
-    이벤트 형식:
-    - step: 현재 단계 (github, docs, activity, structure, scoring, llm, complete)
-    - progress: 진행률 (0-100)
-    - message: 사용자에게 표시할 메시지
-    - data: 추가 데이터 (complete 시 전체 결과 포함)
-    """
+async def analyze_repository_stream(repo_url: str, message: str = None):
+    """저장소 분석 SSE 스트리밍 API."""
     from backend.api.http_router import parse_github_url
     
     try:
+        logger.info(f"SSE Request received: repo_url={repo_url}, message={message}")
+        print(f"DEBUG: SSE Request received: repo_url={repo_url}, message={message}")
         owner, repo, ref = parse_github_url(repo_url)
     except ValueError as e:
+        logger.error(f"Invalid URL: {e}")
         raise HTTPException(status_code=400, detail=str(e))
     
+    
     return StreamingResponse(
-        analyze_with_progress(owner, repo, ref),
+        analyze_with_progress(owner, repo, ref, message),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

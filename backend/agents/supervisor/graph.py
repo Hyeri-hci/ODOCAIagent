@@ -33,6 +33,13 @@ from backend.agents.supervisor.nodes.error_recovery_nodes import (
 from backend.agents.supervisor.nodes.reflection_nodes import (
     self_reflection_node,
 )
+from backend.agents.supervisor.nodes.meta_nodes import (
+    parse_supervisor_intent,
+    create_supervisor_plan,
+    execute_supervisor_plan,
+    reflect_supervisor,
+    finalize_supervisor_answer,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +72,50 @@ def build_supervisor_graph() -> StateGraph:
     # 노드 등록 - 자기 성찰 노드
     graph.add_node("self_reflection_node", self_reflection_node)
 
-    # Entry Point
-    graph.set_entry_point("intent_analysis_node")
+    # 노드 등록 - 메타 에이전트 노드
+    graph.add_node("parse_supervisor_intent", parse_supervisor_intent)
+    graph.add_node("create_supervisor_plan", create_supervisor_plan)
+    graph.add_node("execute_supervisor_plan", execute_supervisor_plan)
+    graph.add_node("reflect_supervisor", reflect_supervisor)
+    graph.add_node("finalize_supervisor_answer", finalize_supervisor_answer)
 
+    # Entry Point Router
+    def _entry_router(state: SupervisorState) -> Literal["parse_supervisor_intent", "intent_analysis_node"]:
+        # chat_message도 확인하여 메타 에이전트로 라우팅 (API 입력 호환성)
+        # task_type="diagnose_repo"도 메타 에이전트로 보내서 동적 계획 수립 (FAST/FULL 등)
+        if state.task_type in ["general_inquiry", "diagnose_repo"] or state.user_message or state.chat_message or state.global_intent:
+            return "parse_supervisor_intent"
+        return "intent_analysis_node"
+
+    graph.set_conditional_entry_point(
+        _entry_router,
+        {
+            "parse_supervisor_intent": "parse_supervisor_intent",
+            "intent_analysis_node": "intent_analysis_node",
+        }
+    )
+
+    # 메타 에이전트 플로우
+    graph.add_edge("parse_supervisor_intent", "create_supervisor_plan")
+    graph.add_edge("create_supervisor_plan", "execute_supervisor_plan")
+    graph.add_edge("execute_supervisor_plan", "reflect_supervisor")
+
+    def _route_after_meta_reflection(state: SupervisorState) -> Literal["execute_supervisor_plan", "finalize_supervisor_answer"]:
+        if state.next_node_override == "execute_supervisor_plan":
+            return "execute_supervisor_plan"
+        return "finalize_supervisor_answer"
+
+    graph.add_conditional_edges(
+        "reflect_supervisor",
+        _route_after_meta_reflection,
+        {
+            "execute_supervisor_plan": "execute_supervisor_plan",
+            "finalize_supervisor_answer": "finalize_supervisor_answer",
+        }
+    )
+    graph.add_edge("finalize_supervisor_answer", END)
+
+    # 기존 플로우 연결
     # intent_analysis_node -> decision_node
     graph.add_edge("intent_analysis_node", "decision_node")
 

@@ -12,7 +12,8 @@ def run_agent_task(
     ref: str = "main",
     user_context: Optional[Dict[str, Any]] = None,
     use_llm_summary: bool = True,
-    debug_trace: bool = False
+    debug_trace: bool = False,
+    user_message: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Unified entry point for running agent tasks.
@@ -38,8 +39,8 @@ def run_agent_task(
     logger.info(f"Received agent task: {task_type} for {repo_id} (trace={debug_trace})")
     
     try:
-        if task_type == "diagnose_repo":
-            return _handle_diagnose_repo(owner, repo, ref, use_llm_summary, debug_trace)
+        if task_type in ["diagnose_repo", "general_inquiry"]:
+            return _handle_diagnose_repo(owner, repo, ref, use_llm_summary, debug_trace, user_message, task_type)
         elif task_type == "build_onboarding_plan":
             # user_context is required for onboarding plan
             context = user_context or {}
@@ -64,14 +65,18 @@ def _handle_diagnose_repo(
     repo: str, 
     ref: str, 
     use_llm_summary: bool,
-    debug_trace: bool = False
+    debug_trace: bool = False,
+    user_message: Optional[str] = None,
+    task_type: str = "diagnose_repo"
 ) -> Dict[str, Any]:
     result, error_msg, trace = run_supervisor_diagnosis(
-        owner=owner, 
+        owner=owner,
         repo=repo, 
         ref=ref, 
         use_llm_summary=use_llm_summary,
-        debug_trace=debug_trace
+        debug_trace=debug_trace,
+        user_message=user_message,
+        task_type=task_type
     )
     
     if error_msg:

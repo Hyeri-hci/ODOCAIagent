@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 import logging
-import os
 from typing import Any, Dict, List
 from openai import OpenAI
 
@@ -11,16 +10,12 @@ from .base import LLMClient, ChatRequest, ChatResponse, ChatMessage
 
 logger = logging.getLogger(__name__)
 
-# LangSmith 트레이싱 활성화 여부
-LANGSMITH_ENABLED = os.getenv("LANGCHAIN_TRACING_V2", "").lower() == "true"
-
 
 class OpenAILikeClient(LLMClient):
     """
     LLM client for endpoints compatible with the OpenAI Chat Completions API.
     (e.g., OpenAI, Kanana, local llama.cpp)
     Uses the official OpenAI SDK for better compatibility.
-    LangSmith 트레이싱 지원.
     """
 
     def __init__(
@@ -38,25 +33,10 @@ class OpenAILikeClient(LLMClient):
         self.retry_delay = retry_delay
         
         # OpenAI SDK 클라이언트 초기화
-        base_client = OpenAI(
+        self._client = OpenAI(
             base_url=self.api_base,
             api_key=self.api_key or "dummy-key",
         )
-        
-        # LangSmith 트레이싱 래핑 (활성화된 경우)
-        if LANGSMITH_ENABLED:
-            try:
-                from langsmith import wrappers
-                self._client = wrappers.wrap_openai(base_client)
-                logger.info("[LLM] LangSmith tracing enabled via wrap_openai")
-            except ImportError:
-                logger.warning("[LLM] langsmith not installed, tracing disabled")
-                self._client = base_client
-            except Exception as e:
-                logger.warning(f"[LLM] Failed to enable LangSmith tracing: {e}")
-                self._client = base_client
-        else:
-            self._client = base_client
         
         # 모델명이 없으면 API에서 가져오기
         if not self.default_model or self.default_model == "kanana-1.5-8b-instruct-2505":
@@ -74,7 +54,6 @@ class OpenAILikeClient(LLMClient):
         return [{"role": m.role, "content": m.content} for m in messages]
     
     def chat(self, request: ChatRequest, timeout: int = 60) -> ChatResponse:
-        """LLM 채팅 요청 - LangSmith에서 자동 트레이싱됨."""
         model = request.model or self.default_model
         messages = self._convert_messages(request.messages)
 
@@ -92,14 +71,6 @@ class OpenAILikeClient(LLMClient):
                 
                 content = response.choices[0].message.content
                 raw = response.model_dump() if hasattr(response, 'model_dump') else {}
-                
-                # 토큰 사용량 로깅
-                if hasattr(response, 'usage') and response.usage:
-                    logger.info(
-                        f"[LLM] Tokens: prompt={response.usage.prompt_tokens}, "
-                        f"completion={response.usage.completion_tokens}, "
-                        f"total={response.usage.total_tokens}"
-                    )
                 
                 return ChatResponse(content=content, raw=raw)
                 

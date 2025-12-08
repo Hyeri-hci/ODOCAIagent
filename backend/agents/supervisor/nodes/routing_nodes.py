@@ -152,28 +152,13 @@ def intent_analysis_node(state: SupervisorState) -> Dict[str, Any]:
     """
     사용자 입력 또는 task_type을 분석하여 의도 분류.
     
-    분석 순서:
-    1. 이미 detected_intent가 설정되어 있으면 유지
-    2. 간단한 명령어(/help 등)는 직접 처리
-    3. LLM 파서로 의도 추출 시도
-    4. LLM 실패 또는 낮은 confidence면 패턴 기반 fallback
+    이미 detected_intent가 설정되어 있으면 재계산하지 않음.
     
     설정하는 필드:
     - detected_intent: 분류된 의도
     - intent_confidence: 분류 신뢰도
     - analysis_depth: 분석 깊이 (deep/standard/quick)
-    - parsed_repo_hint: LLM이 추출한 레포 힌트 (optional)
-    - parsed_target_metric: LLM이 추출한 대상 메트릭 (optional)
-    - parsed_options: LLM이 추출한 옵션들 (optional)
-    - follow_up: 후속 질문 여부 (optional)
     """
-    from backend.agents.supervisor.intent_parser import (
-        is_simple_command,
-        handle_simple_command,
-        llm_parse_chat_intent,
-        get_analyzed_repos,
-    )
-    
     result = {"step": state.step + 1}
     
     # 이미 intent가 설정되어 있으면 유지 (API에서 직접 설정한 경우)
@@ -182,54 +167,13 @@ def intent_analysis_node(state: SupervisorState) -> Dict[str, Any]:
             f"Intent already set: {state.detected_intent}, skipping analysis"
         )
     else:
-        message = state.chat_message or state.user_context.get("message", "")
-        used_llm_parser = False
-        
-        # 1. 간단한 명령어 체크 (LLM 호출 불필요)
-        if message and is_simple_command(message):
-            parsed = handle_simple_command(message)
-            result["detected_intent"] = parsed.intent
-            result["intent_confidence"] = parsed.confidence
-            logger.info(f"Simple command detected: {parsed.intent}")
-        
-        # 2. LLM 파서 시도 (채팅 메시지가 있고, 충분히 긴 경우)
-        elif message and len(message.strip()) >= 5:
-            analyzed_repos = get_analyzed_repos()
-            last_context = state.chat_context or {}
-            
-            parsed = llm_parse_chat_intent(
-                message=message,
-                analyzed_repos=analyzed_repos,
-                last_context=last_context,
-            )
-            
-            if parsed and parsed.confidence >= 0.6:
-                result["detected_intent"] = parsed.intent
-                result["intent_confidence"] = parsed.confidence
-                result["parsed_repo_hint"] = parsed.repo_hint
-                result["parsed_target_metric"] = parsed.target_metric
-                result["parsed_options"] = parsed.options
-                result["follow_up"] = parsed.follow_up
-                used_llm_parser = True
-                logger.info(
-                    f"LLM parser success: intent={parsed.intent}, "
-                    f"confidence={parsed.confidence}, repo_hint={parsed.repo_hint}"
-                )
-            else:
-                logger.info(
-                    f"LLM parser returned low confidence or failed, "
-                    f"falling back to pattern-based"
-                )
-        
-        # 3. Fallback: 기존 패턴 기반 로직
-        if "detected_intent" not in result:
-            intent, confidence = infer_intent_from_context(state)
-            result["detected_intent"] = intent
-            result["intent_confidence"] = confidence
-            logger.info(
-                f"Pattern-based intent analysis: task_type={state.task_type}, "
-                f"detected_intent={intent}, confidence={confidence}"
-            )
+        intent, confidence = infer_intent_from_context(state)
+        result["detected_intent"] = intent
+        result["intent_confidence"] = confidence
+        logger.info(
+            f"Intent analysis: task_type={state.task_type}, "
+            f"detected_intent={intent}, confidence={confidence}"
+        )
     
     # 분석 깊이 결정 (아직 설정되지 않은 경우에만)
     if state.analysis_depth == "standard":  # 기본값인 경우에만 재계산
@@ -241,144 +185,118 @@ def intent_analysis_node(state: SupervisorState) -> Dict[str, Any]:
     return result
 
 
-
 def decision_node(state: SupervisorState) -> Dict[str, Any]:
     """
-    LLM 기반 Agentic 의사결정 노드.
-    
-    현재 상태를 분석하고 LLM을 사용하여 다음 행동을 결정합니다.
-    LLM 실패 시 규칙 기반 로직으로 fallback합니다.
+    분석된 의도와 현재 상태를 기반으로 다음 행동 결정.
     
     Agentic 기능:
-    - LLM이 상황을 분석하고 추론
-    - 다음 행동과 그 이유를 결정
-    - 실행 계획 수립 (plan)
-    - 주의사항/경고 생성
+    - 캐시 확인하여 이미 분석된 결과 재사용
+    - 비교 분석 요청 시 여러 저장소 처리
     """
-    from backend.agents.supervisor.agentic_decision import (
-        llm_make_decision,
-        get_node_from_action,
-    )
-    
     intent = state.detected_intent or "unknown"
     adjustments = []
     warnings = []
     cache_hit = False
-    reasoning = ""
-    plan = []
     
-    # 캐시 확인
-    has_cache = _check_cache(state.owner, state.repo)
-    has_diagnosis = state.diagnosis_result is not None
-    
-    # 1. LLM 기반 의사결정 시도
-    decision = llm_make_decision(
-        intent=intent,
-        owner=state.owner,
-        repo=state.repo,
-        has_cache=has_cache,
-        has_diagnosis=has_diagnosis,
-        chat_message=state.chat_message,
-        user_context=state.user_context,
-    )
-    
-    if decision and decision.confidence >= 0.5:
-        # LLM 의사결정 성공
-        next_node = get_node_from_action(decision.action)
-        reasoning = decision.reasoning
-        plan = decision.plan
-        warnings = decision.warnings
-        cache_hit = decision.action == "use_cache"
-        
-        logger.info(
-            f"LLM Decision: action={decision.action}, "
-            f"reasoning={reasoning[:50]}..., confidence={decision.confidence}"
-        )
-    else:
-        # 2. Fallback: 규칙 기반 의사결정
-        logger.info("LLM decision failed or low confidence, using rule-based fallback")
-        
-        # 경험 수준 감지
-        user_exp = state.user_context.get("experience_level")
+    # 경험 수준 감지: 1) 메시지 키워드 → 2) user_context → 3) 기본값 beginner
+    user_exp = state.user_context.get("experience_level")
+    if not user_exp:
+        # 메시지에서 경험 수준 키워드 탐색
+        user_msg = state.chat_message or state.user_context.get("message", "")
+        if user_msg:
+            user_msg_lower = user_msg.lower()
+            for level, keywords in SKILL_LEVEL_KEYWORDS.items():
+                if any(kw in user_msg_lower for kw in keywords):
+                    user_exp = level
+                    logger.info(f"Skill level detected from message: {level}")
+                    break
         if not user_exp:
-            user_msg = state.chat_message or state.user_context.get("message", "")
-            if user_msg:
-                user_msg_lower = user_msg.lower()
-                for level, keywords in SKILL_LEVEL_KEYWORDS.items():
-                    if any(kw in user_msg_lower for kw in keywords):
-                        user_exp = level
-                        break
-            if not user_exp:
-                user_exp = "beginner"
-        
-        if intent == "diagnose":
-            if state.use_cache and has_cache:
-                next_node = "use_cached_result_node"
-                reasoning = f"캐시에 {state.owner}/{state.repo} 분석 결과가 있어 재사용합니다."
-                cache_hit = True
-            else:
-                next_node = "run_diagnosis_node"
-                reasoning = f"{state.owner}/{state.repo} 저장소 분석을 시작합니다."
-        elif intent == "onboard":
-            if state.chat_message and (has_diagnosis or state.chat_context):
-                next_node = "chat_response_node"
-                reasoning = "온보딩 관련 질문에 답변합니다."
-            elif state.use_cache and has_cache:
-                next_node = "use_cached_result_node"
-                reasoning = "캐시된 분석 결과를 사용하여 온보딩을 진행합니다."
-                cache_hit = True
-            else:
-                next_node = "run_diagnosis_node"
-                reasoning = "온보딩을 위해 먼저 저장소를 분석합니다."
-            
-            if user_exp == "beginner":
-                adjustments.append("beginner_friendly_plan")
-            elif user_exp == "intermediate":
-                adjustments.append("intermediate_contributor_plan")
-            elif user_exp == "advanced":
-                adjustments.append("advanced_contributor_plan")
-        elif intent == "compare":
-            next_node = "batch_diagnosis_node"
-            reasoning = f"{len(state.compare_repos)}개 저장소를 비교 분석합니다."
-            if not state.compare_repos:
-                warnings.append("비교할 저장소 목록이 비어 있습니다.")
-                next_node = "__end__"
-        elif intent == "explain":
-            if has_diagnosis or state.chat_context:
-                next_node = "chat_response_node"
-                reasoning = "분석 결과에 대해 설명합니다."
-            elif state.use_cache and has_cache:
-                next_node = "use_cached_result_node"
-                reasoning = "캐시된 결과를 사용하여 설명합니다."
-                cache_hit = True
-            else:
-                next_node = "run_diagnosis_node"
-                reasoning = "설명을 위해 먼저 분석을 진행합니다."
-        elif intent == "chat":
-            next_node = "chat_response_node"
-            reasoning = "채팅 응답을 생성합니다."
-        else:
-            next_node = "__end__"
-            reasoning = f"알 수 없는 의도: {intent}"
+            user_exp = "beginner"  # 기본값
     
-    # 건강 점수 경고
+    if intent == "diagnose":
+        if state.use_cache:
+            cached = _check_cache(state.owner, state.repo)
+            if cached:
+                next_node = "use_cached_result_node"
+                reason = f"Cache hit for {state.owner}/{state.repo}, using cached result"
+                cache_hit = True
+            else:
+                next_node = "run_diagnosis_node"
+                reason = f"Intent is diagnose for {state.owner}/{state.repo}, no cache"
+        else:
+            next_node = "run_diagnosis_node"
+            reason = f"Intent is diagnose for {state.owner}/{state.repo}, cache disabled"
+    elif intent == "onboard":
+        if state.chat_message and (state.diagnosis_result or state.chat_context):
+            next_node = "chat_response_node"
+            reason = "Intent is onboard with chat message, routing to chat response"
+            # beginner_friendly_plan은 아래에서 일괄 추가 (중복 방지)
+        elif state.use_cache:
+            cached = _check_cache(state.owner, state.repo)
+            if cached:
+                next_node = "use_cached_result_node"
+                reason = f"Cache hit for {state.owner}/{state.repo}, using cached for onboard"
+                cache_hit = True
+            else:
+                next_node = "run_diagnosis_node"
+                reason = f"Intent is onboard for {state.owner}/{state.repo}, no cache"
+        else:
+            next_node = "run_diagnosis_node"
+            reason = f"Intent is onboard, starting with diagnosis for {state.owner}/{state.repo}"
+        
+        # 경험 수준에 따른 플랜 조정 (한 번만 추가)
+        if user_exp == "beginner":
+            adjustments.append("beginner_friendly_plan")
+        elif user_exp == "intermediate":
+            adjustments.append("intermediate_contributor_plan")
+        elif user_exp == "advanced":
+            adjustments.append("advanced_contributor_plan")
+    elif intent == "compare":
+        next_node = "batch_diagnosis_node"
+        reason = f"Intent is compare, processing {len(state.compare_repos)} repositories"
+        if not state.compare_repos:
+            warnings.append("비교할 저장소 목록이 비어 있습니다.")
+            next_node = "__end__"
+    elif intent == "explain":
+        if state.diagnosis_result or state.chat_context:
+            next_node = "chat_response_node"
+            reason = "Intent is explain, routing to chat response"
+        else:
+            if state.use_cache:
+                cached = _check_cache(state.owner, state.repo)
+                if cached:
+                    next_node = "use_cached_result_node"
+                    reason = "Intent is explain, using cached diagnosis result"
+                    cache_hit = True
+                else:
+                    next_node = "run_diagnosis_node"
+                    reason = "Intent is explain but no cache, running diagnosis first"
+            else:
+                next_node = "run_diagnosis_node"
+                reason = "Intent is explain but no diagnosis result, running diagnosis first"
+    elif intent == "chat":
+        next_node = "chat_response_node"
+        reason = "Intent is chat, routing to chat response"
+    else:
+        next_node = "__end__"
+        reason = f"Unknown intent: {intent}, ending flow"
+    
     if state.diagnosis_result:
         health = state.diagnosis_result.get("health_score", 100)
         if health < 30:
             warnings.append("이 프로젝트는 건강 상태가 좋지 않아 기여 시 주의가 필요합니다.")
             adjustments.append("add_health_warning")
     
-    logger.info(f"Decision: next_node={next_node}, reasoning={reasoning}, cache_hit={cache_hit}")
+    logger.info(f"Decision: next_node={next_node}, reason={reason}, adjustments={adjustments}, cache_hit={cache_hit}")
     
     return {
         "next_node_override": next_node,
-        "decision_reason": reasoning,
+        "decision_reason": reason,
         "flow_adjustments": adjustments,
         "warnings": warnings,
         "cache_hit": cache_hit,
         "step": state.step + 1,
     }
-
 
 
 def _check_cache(owner: str, repo: str, ref: str = "main") -> bool:

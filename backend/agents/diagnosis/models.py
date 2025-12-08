@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional, Literal
 from pydantic import BaseModel
+from backend.agents.shared.agent_mode import AgentMode, AgentModeLiteral
 
 # 분석 깊이 타입 정의
 AnalysisDepth = Literal["deep", "standard", "quick"]
@@ -9,7 +10,8 @@ class DiagnosisInput(BaseModel):
     repo: str
     ref: str = "main"
     use_llm_summary: bool = True
-    analysis_depth: AnalysisDepth = "standard"  # 분석 깊이 (deep/standard/quick)
+    analysis_depth: AnalysisDepth = "standard"
+    mode: AgentModeLiteral = AgentMode.AUTO  # 분석 깊이 (deep/standard/quick)
 
 
 class DiagnosisOutput(BaseModel):

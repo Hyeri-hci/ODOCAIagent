@@ -33,7 +33,12 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
 
     const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
     const encodedUrl = encodeURIComponent(userProfile.repositoryUrl);
-    const eventSourceUrl = `${apiBaseUrl}/api/analyze/stream?repo_url=${encodedUrl}`;
+    let eventSourceUrl = `${apiBaseUrl}/api/analyze/stream?repo_url=${encodedUrl}`;
+    
+    // 메시지가 있으면 쿼리 파라미터로 추가
+    if (userProfile.message) {
+      eventSourceUrl += `&message=${encodeURIComponent(userProfile.message)}`;
+    }
 
     console.log("[SSE] Connecting to:", eventSourceUrl);
     const eventSource = new EventSource(eventSourceUrl);
@@ -88,7 +93,7 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
       console.log("[SSE] Closing connection");
       eventSource.close();
     };
-  }, [userProfile?.repositoryUrl, useStream, onComplete, onError]);
+  }, [userProfile?.repositoryUrl, userProfile?.message, useStream, onComplete, onError]);
 
   const getStepStatus = (step) => {
     const stepIndex = ANALYSIS_STEPS.findIndex(s => s.id === step.id);

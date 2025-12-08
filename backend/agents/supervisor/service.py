@@ -42,6 +42,7 @@ def init_state_from_input(
         owner=inp.owner,
         repo=inp.repo,
         user_context=inp.user_context,
+        user_message=inp.user_message,
         messages=[],
         step=0,
         max_step=10,
@@ -117,7 +118,9 @@ def run_supervisor_diagnosis(
     repo: str,
     ref: str = "main",
     use_llm_summary: bool = True,
-    debug_trace: bool = False
+    debug_trace: bool = False,
+    user_message: Optional[str] = None,
+    task_type: str = "diagnose_repo",
 ) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
     """
     Supervisor를 통해 저장소 진단을 실행하는 엔트리 포인트.
@@ -134,12 +137,13 @@ def run_supervisor_diagnosis(
             - trace는 debug_trace=True일 때만 포함됨
     """
 
-    task_info = f"task=diagnose_repo owner={owner} repo={repo} ref={ref}"
-    logger.info(f"[{task_info}] Starting diagnosis (LLM Summary: {use_llm_summary}, Trace: {debug_trace})")
+    task_info = f"task={task_type} owner={owner} repo={repo} ref={ref}"
+    logger.info(f"[{task_info}] Starting diagnosis (LLM Summary: {use_llm_summary}, Trace: {debug_trace}, UserMessage: {user_message})")
+    print(f"DEBUG: run_supervisor_diagnosis called with message: {user_message}, type: {task_type}")
     
     # 메트릭 추적 시작
     tracker = get_metrics_tracker()
-    metrics = tracker.start_task("diagnose_repo", owner, repo)
+    metrics = tracker.start_task(task_type, owner, repo)
     
     # 1. 그래프 생성
     graph = get_supervisor_graph()
@@ -155,10 +159,11 @@ def run_supervisor_diagnosis(
     
     # SupervisorInput 생성
     inp = SupervisorInput(
-        task_type="diagnose_repo",
+        task_type=task_type,
         owner=owner,
         repo=repo,
-        user_context={"use_llm_summary": use_llm_summary}
+        user_context={"use_llm_summary": use_llm_summary},
+        user_message=user_message,
     )
     
     initial_state = init_state_from_input(inp)
