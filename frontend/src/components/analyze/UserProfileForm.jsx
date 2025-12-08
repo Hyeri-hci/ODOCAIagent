@@ -1,8 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { Github, Sparkles, ArrowRight, AlertCircle, Search } from "lucide-react";
+import {
+  Github,
+  Sparkles,
+  ArrowRight,
+  AlertCircle,
+  Search,
+} from "lucide-react";
 
 const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
   const [inputValue, setInputValue] = useState("");
+  const [userMessage, setUserMessage] = useState("");
+  const [priority, setPriority] = useState("thoroughness");
   const [validationError, setValidationError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const inputRef = React.useRef(null);
@@ -21,7 +29,7 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
     // 1. Full URL 패턴 (문장 중간에 있어도 찾음)
     const urlPattern = /https?:\/\/(www\.)?github\.com\/[\w-]+\/[\w.-]+/g;
     const urlMatch = text.match(urlPattern);
-    
+
     if (urlMatch) {
       return { url: urlMatch[0], isFullUrl: true };
     }
@@ -54,10 +62,12 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
     if (extracted.isFullUrl) {
       message = inputValue.replace(extracted.url, "").trim();
     }
-    
+
     onSubmit({
       repositoryUrl: extracted.url,
       message: message,
+      userMessage: userMessage,
+      priority: priority,
     });
   };
 
@@ -94,27 +104,36 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
         {validationError && (
           <div className="mb-6 mx-auto max-w-2xl p-4 bg-orange-50 border border-orange-100 rounded-xl flex items-center gap-3 animate-fade-in">
             <AlertCircle className="w-5 h-5 text-orange-500 flex-shrink-0" />
-            <p className="text-sm text-orange-700 font-medium">{validationError}</p>
+            <p className="text-sm text-orange-700 font-medium">
+              {validationError}
+            </p>
           </div>
         )}
 
         {/* Integrated Search Form */}
-        <form onSubmit={handleSubmit} className="relative max-w-2xl mx-auto group">
-          <div 
+        <form
+          onSubmit={handleSubmit}
+          className="relative max-w-2xl mx-auto group"
+        >
+          <div
             className={`
               relative flex items-center bg-white rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.08)] 
               border-2 transition-all duration-300 cursor-text
-              ${isLoading ? 'border-gray-100 bg-gray-50' : 'border-transparent hover:border-gray-200 focus-within:border-black focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.12)]'}
+              ${
+                isLoading
+                  ? "border-gray-100 bg-gray-50"
+                  : "border-transparent hover:border-gray-200 focus-within:border-black focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.12)]"
+              }
             `}
             onClick={() => inputRef.current?.focus()}
           >
             {/* Icon */}
             <div className="pl-6 text-gray-400">
-               {isLoading ? (
-                 <div className="w-6 h-6 border-2 border-gray-300 border-t-black rounded-full animate-spin" />
-               ) : (
-                 <Search className="w-6 h-6" />
-               )}
+              {isLoading ? (
+                <div className="w-6 h-6 border-2 border-gray-300 border-t-black rounded-full animate-spin" />
+              ) : (
+                <Search className="w-6 h-6" />
+              )}
             </div>
 
             {/* Input */}
@@ -142,27 +161,39 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
               <ArrowRight className="w-5 h-5" />
             </button>
           </div>
-          
+
           {/* Helper / Suggestion Chips */}
           {!isLoading && (
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <button
                 type="button"
-                onClick={() => setInputValue("https://github.com/pallets/flask 초보자가 기여하기 좋은 이슈 찾아줘")}
+                onClick={() =>
+                  setInputValue(
+                    "https://github.com/pallets/flask 초보자가 기여하기 좋은 이슈 찾아줘"
+                  )
+                }
                 className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-gray-400 hover:bg-gray-50 transition-colors"
               >
                 Flask 기여하기 좋은 이슈 추천
               </button>
               <button
                 type="button"
-                onClick={() => setInputValue("https://github.com/facebook/react 보안 취약점 분석해줘")}
+                onClick={() =>
+                  setInputValue(
+                    "https://github.com/facebook/react 보안 취약점 분석해줘"
+                  )
+                }
                 className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-gray-400 hover:bg-gray-50 transition-colors"
               >
                 React 보안 분석
               </button>
               <button
                 type="button"
-                onClick={() => setInputValue("https://github.com/django/django 구조랑 기술 스택 설명해줘")}
+                onClick={() =>
+                  setInputValue(
+                    "https://github.com/django/django 구조랑 기술 스택 설명해줘"
+                  )
+                }
                 className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-gray-400 hover:bg-gray-50 transition-colors"
               >
                 Django 구조 분석

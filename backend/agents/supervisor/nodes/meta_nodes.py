@@ -5,9 +5,8 @@ import json
 import logging
 from typing import Dict, Any
 
-from typing import Dict, Any
-
 from backend.agents.supervisor.models import SupervisorState
+from backend.agents.shared.agent_mode import AgentMode, AgentModeLiteral
 from backend.llm.factory import fetch_llm_client
 from backend.llm.base import ChatRequest, ChatMessage
 from backend.common.config import LLM_MODEL_NAME
@@ -231,7 +230,9 @@ def _run_diagnosis_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
     
     result = run_diagnosis(input_data)
     
-    # DiagnosisOutput.to_dict() 메서드 사용 필요
+    # 이미 dict인 경우 그대로 반환, 아니면 to_dict() 또는 dict() 호출
+    if isinstance(result, dict):
+        return result
     if hasattr(result, "to_dict"):
         return result.to_dict()
     return result.dict()

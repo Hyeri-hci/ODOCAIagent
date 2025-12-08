@@ -140,14 +140,16 @@ export const setCachedAnalysis = (repoUrl, data) => {
   }
 };
 
-export const analyzeRepository = async (repoUrl) => {
-  console.log("[analyzeRepository] repoUrl:", repoUrl);
+export const analyzeRepository = async (repoUrl, userMessage = null, priority = "thoroughness") => {
+  console.log("[analyzeRepository] repoUrl:", repoUrl, "userMessage:", userMessage, "priority:", priority);
 
-  // 캐시 확인
-  const cached = getCachedAnalysis(repoUrl);
-  if (cached) {
-    console.log("[analyzeRepository] Returning cached result");
-    return cached;
+  // 메타 에이전트 요청이 없으면 캐시 확인
+  if (!userMessage) {
+    const cached = getCachedAnalysis(repoUrl);
+    if (cached) {
+      console.log("[analyzeRepository] Returning cached result");
+      return cached;
+    }
   }
 
   if (MOCK_MODE) {
@@ -158,11 +160,19 @@ export const analyzeRepository = async (repoUrl) => {
 
   try {
     console.log("[analyzeRepository] Calling API (no cache)");
-    const response = await api.post("/api/analyze", { repo_url: repoUrl });
+    const payload = { repo_url: repoUrl };
+    if (userMessage) {
+      payload.user_message = userMessage;
+    }
+    payload.priority = priority;
+    
+    const response = await api.post("/api/analyze", payload);
     console.log("[analyzeRepository] Response received");
 
-    // 결과 캐시에 저장
-    setCachedAnalysis(repoUrl, response.data);
+    // 메타 에이전트 요청 없을 때만 캐시에 저장
+    if (!userMessage) {
+      setCachedAnalysis(repoUrl, response.data);
+    }
 
     return response.data;
   } catch (error) {

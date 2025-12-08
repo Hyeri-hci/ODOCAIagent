@@ -13,10 +13,13 @@ def run_agent_task(
     user_context: Optional[Dict[str, Any]] = None,
     use_llm_summary: bool = True,
     debug_trace: bool = False,
-    user_message: Optional[str] = None
+    user_message: Optional[str] = None,
+    priority: str = "thoroughness"
 ) -> Dict[str, Any]:
     """
     Unified entry point for running agent tasks.
+    
+    메타 에이전트 지원: user_message와 priority로 동적 계획 수립.
     
     Args:
         task_type: "diagnose_repo" or "build_onboarding_plan"
@@ -26,6 +29,8 @@ def run_agent_task(
         user_context: Additional context for the task (e.g. user profile)
         use_llm_summary: Whether to use LLM for summary (for diagnosis)
         debug_trace: Whether to include execution trace (default: False)
+        user_message: User analysis request message (meta agent)
+        priority: Analysis priority (speed or thoroughness) (meta agent)
         
     Returns:
         Dict with keys:
@@ -36,11 +41,11 @@ def run_agent_task(
             - trace: List[Dict] (if debug_trace=True)
     """
     repo_id = f"{owner}/{repo}@{ref}"
-    logger.info(f"Received agent task: {task_type} for {repo_id} (trace={debug_trace})")
+    logger.info(f"Received agent task: {task_type} for {repo_id} (trace={debug_trace}, user_message={user_message}, priority={priority})")
     
     try:
         if task_type in ["diagnose_repo", "general_inquiry"]:
-            return _handle_diagnose_repo(owner, repo, ref, use_llm_summary, debug_trace, user_message, task_type)
+            return _handle_diagnose_repo(owner, repo, ref, use_llm_summary, debug_trace, user_message, priority, task_type)
         elif task_type == "build_onboarding_plan":
             # user_context is required for onboarding plan
             context = user_context or {}
@@ -67,6 +72,7 @@ def _handle_diagnose_repo(
     use_llm_summary: bool,
     debug_trace: bool = False,
     user_message: Optional[str] = None,
+    priority: str = "thoroughness",
     task_type: str = "diagnose_repo"
 ) -> Dict[str, Any]:
     result, error_msg, trace = run_supervisor_diagnosis(
@@ -76,6 +82,7 @@ def _handle_diagnose_repo(
         use_llm_summary=use_llm_summary,
         debug_trace=debug_trace,
         user_message=user_message,
+        priority=priority,
         task_type=task_type
     )
     

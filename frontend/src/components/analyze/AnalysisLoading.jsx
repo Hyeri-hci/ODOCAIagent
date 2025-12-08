@@ -39,6 +39,14 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
     if (userProfile.message) {
       eventSourceUrl += `&message=${encodeURIComponent(userProfile.message)}`;
     }
+    
+    // 메타 에이전트 파라미터 추가
+    if (userProfile.userMessage) {
+      eventSourceUrl += `&user_message=${encodeURIComponent(userProfile.userMessage)}`;
+    }
+    if (userProfile.priority) {
+      eventSourceUrl += `&priority=${encodeURIComponent(userProfile.priority)}`;
+    }
 
     console.log("[SSE] Connecting to:", eventSourceUrl);
     const eventSource = new EventSource(eventSourceUrl);

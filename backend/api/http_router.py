@@ -23,6 +23,8 @@ router = APIRouter(prefix="/api", tags=["agent"])
 class AnalyzeRequest(BaseModel):
     """프론트엔드 호환 분석 요청."""
     repo_url: str = Field(..., description="GitHub 저장소 URL (예: https://github.com/owner/repo)")
+    user_message: Optional[str] = Field(None, description="분석 요청 메시지 (예: 보안 중점으로 깊게 분석해줘)")
+    priority: str = Field("thoroughness", description="분석 우선순위 (speed 또는 thoroughness)")
 
 
 class AnalyzeResponse(BaseModel):
@@ -35,6 +37,9 @@ class AnalyzeResponse(BaseModel):
     similar: List[Dict[str, Any]]  # Deprecated in favor of recommended_issues
     recommended_issues: Optional[List[Dict[str, Any]]] = None
     readme_summary: Optional[str] = None
+    task_plan: Optional[List[Dict[str, Any]]] = None
+    task_results: Optional[Dict[str, Any]] = None
+    chat_response: Optional[str] = None
 
 
 def parse_github_url(url: str) -> tuple[str, str, str]:
@@ -85,7 +90,10 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     GitHub URL을 받아서 건강도 진단을 수행하고,
     프론트엔드가 기대하는 형식으로 응답합니다.
     
-    캐시: 동일 저장소는 24시간 동안 캐시됩니다.
+    메타 에이전트 지원: user_message와 priority 파라미터로
+    동적 실행 계획 수립 및 조건부 에이전트 실행.
+    
+    캐시: user_message 없는 경우만 24시간 캐시 적용.
     """
     from backend.common.github_client import fetch_beginner_issues
     from backend.common.cache import analysis_cache
@@ -95,18 +103,21 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     
-    # 캐시 확인
-    cached_response = analysis_cache.get_analysis(owner, repo, ref)
-    if cached_response:
-        logger.info(f"Returning cached analysis for {owner}/{repo}@{ref}")
-        return AnalyzeResponse(**cached_response)
+    # user_message가 없으면 캐시 확인 (단순 진단용)
+    if not request.user_message:
+        cached_response = analysis_cache.get_analysis(owner, repo, ref)
+        if cached_response:
+            logger.info(f"Returning cached analysis for {owner}/{repo}@{ref}")
+            return AnalyzeResponse(**cached_response)
     
-    # Diagnosis Agent 호출 (LLM 요약 활성화)
+    # Supervisor 호출 (메타 에이전트 통합)
     result = run_agent_task(
         task_type="diagnose_repo",
         owner=owner,
         repo=repo,
         ref=ref,
+        user_message=request.user_message,
+        priority=request.priority,
         use_llm_summary=True
     )
     
@@ -179,10 +190,14 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
         similar=[],
         recommended_issues=recommended_issues,
         readme_summary=data.get("summary_for_user"),
+        task_plan=data.get("task_plan"),
+        task_results=data.get("task_results"),
+        chat_response=data.get("chat_response"),
     )
     
-    # 캐시에 저장
-    analysis_cache.set_analysis(owner, repo, ref, response.model_dump())
+    # user_message 없는 경우만 캐시에 저장
+    if not request.user_message:
+        analysis_cache.set_analysis(owner, repo, ref, response.model_dump())
     
     return response
 
