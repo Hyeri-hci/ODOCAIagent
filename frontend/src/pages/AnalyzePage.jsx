@@ -40,8 +40,8 @@ const AnalyzePage = () => {
           analysis.health_level === "good"
             ? "excellent"
             : analysis.health_level === "warning"
-            ? "moderate"
-            : "needs-attention",
+              ? "moderate"
+              : "needs-attention",
         contributionOpportunities: (
           apiResponse.recommended_issues ||
           analysis.recommended_issues ||
@@ -51,14 +51,13 @@ const AnalyzePage = () => {
           (analysis.health_score || 0) >= 70
             ? "high"
             : (analysis.health_score || 0) >= 50
-            ? "medium"
-            : "low",
+              ? "medium"
+              : "low",
       },
       projectSummary:
         apiResponse.readme_summary ||
         analysis.summary_for_user ||
-        `이 저장소의 건강 점수는 ${
-          apiResponse.score || analysis.health_score
+        `이 저장소의 건강 점수는 ${apiResponse.score || analysis.health_score
         }점입니다. ${analysis.health_score_interpretation || ""}`,
       recommendations: [
         // 기존 actions
@@ -109,7 +108,7 @@ const AnalyzePage = () => {
         dependencies: analysis.dependency_complexity_score || 0,
         lastCommit:
           analysis.days_since_last_commit !== null &&
-          analysis.days_since_last_commit !== undefined
+            analysis.days_since_last_commit !== undefined
             ? `${analysis.days_since_last_commit}일 전`
             : "알 수 없음",
         openIssues: analysis.open_issues_count || 0,
@@ -144,6 +143,8 @@ const AnalyzePage = () => {
       // Agentic 플로우 결과
       warnings: analysis.warnings || [],
       flowAdjustments: analysis.flow_adjustments || [],
+      // 백엔드에서 생성한 AI 응답 (온보딩 가이드 등)
+      chatResponse: apiResponse.chat_response || analysis.chat_response || null,
     };
   };
 

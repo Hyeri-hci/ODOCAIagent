@@ -86,7 +86,11 @@ def determine_analysis_depth(state: SupervisorState) -> str:
             return depth
     
     # 2. 채팅 메시지에서 깊이 관련 키워드 탐색
-    user_msg = state.chat_message or state.user_context.get("message", "")
+    user_msg = (
+        state.chat_message
+        or state.user_message
+        or state.user_context.get("message", "")
+    )
     if user_msg:
         user_msg_lower = user_msg.lower()
         for depth, keywords in DEPTH_KEYWORDS.items():
@@ -138,7 +142,11 @@ def infer_intent_from_context(state: SupervisorState) -> Tuple[str, float]:
         return intent_override, 0.9
     
     # 채팅 메시지가 있으면 우선 사용
-    user_msg = state.chat_message or state.user_context.get("message", "")
+    user_msg = (
+        state.chat_message
+        or state.user_message
+        or state.user_context.get("message", "")
+    )
     
     if user_msg:
         user_msg_lower = user_msg.lower()

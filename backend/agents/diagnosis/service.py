@@ -8,7 +8,7 @@ from backend.core.activity_core import analyze_activity, analyze_activity_optimi
 from backend.core.structure_core import analyze_structure
 from backend.core.dependencies_core import parse_dependencies
 from backend.core.scoring_core import compute_scores
-from backend.core.models import RepoSnapshot
+from backend.core.models import RepoSnapshot, DependenciesSnapshot
 
 from backend.agents.diagnosis.models import DiagnosisInput, DiagnosisOutput
 
@@ -81,6 +81,12 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
             timings["parse_dependencies"] = round(time.time() - deps_start, 3)
         else:
             logger.info(f"Skipping dependency parsing for {depth} mode")
+            deps = DependenciesSnapshot(
+                repo_id=snapshot.repo_id,
+                dependencies=[],
+                analyzed_files=["skipped:quick_mode"],
+                parse_errors=[],
+            )
         
         # 문서 분석
         docs_start = time.time()

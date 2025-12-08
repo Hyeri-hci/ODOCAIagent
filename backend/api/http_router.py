@@ -766,7 +766,7 @@ async def analyze_repository_stream(request: StreamingAnalyzeRequest):
                 recommended_issues = []
             
             # 최종 응답 생성
-            data = result.get("diagnosis_result", {})
+            data = result.get("diagnosis_result") or result.get("data") or {}
             docs_issues = data.get("docs_issues", [])
             activity_issues = data.get("activity_issues", [])
             
@@ -820,13 +820,22 @@ async def analyze_repository_stream(request: StreamingAnalyzeRequest):
 @router.get("/analyze/stream")
 async def analyze_repository_stream_get(
     repo_url: str,
-    user_message: Optional[str] = None,  
+    user_message: Optional[str] = None,
+    message: Optional[str] = None,  # 프론트엔드 호환용 (user_message와 동일)
     priority: str = "thoroughness",          
     analysis_depth: Optional[str] = None,
+    force_refresh: bool = False,  # 캐시 무시 옵션
 ):
     """
     스트리밍 분석 API (GET) - 프론트엔드 EventSource 호환.
+    
+    Args:
+        user_message: 사용자 메시지 (메타 에이전트용)
+        message: user_message의 별칭 (프론트엔드 호환)
+        force_refresh: True이면 캐시를 무시하고 재분석 수행
     """
+    # message 파라미터를 user_message로 병합
+    local_user_message = user_message or message
     from backend.agents.supervisor.graph import get_supervisor_graph
     from backend.agents.supervisor.models import SupervisorInput
     from backend.agents.supervisor.service import init_state_from_input
@@ -866,12 +875,15 @@ async def analyze_repository_stream_get(
         await asyncio.sleep(0.1)
         
         try:
-            # 캐시 확인
-            cached_response = analysis_cache.get_analysis(owner, repo, ref)
-            if cached_response:
-                yield send_event("github", 50, "캐시된 결과를 찾았습니다!")
-                yield send_event("complete", 100, "분석 완료!", {"result": cached_response})
-                return
+            # 캐시 확인 (force_refresh가 아닐 때만)
+            if not force_refresh:
+                cached_response = analysis_cache.get_analysis(owner, repo, ref)
+                if cached_response:
+                    yield send_event("github", 50, "캐시된 결과를 찾았습니다!")
+                    yield send_event("complete", 100, "분석 완료!", {"result": cached_response})
+                    return
+            else:
+                logger.info(f"Force refresh requested for {owner}/{repo}@{ref}, skipping cache")
             
             # 의도 분석
             yield send_event("intent", 10, "AI가 요청 의도 분석 중...")
@@ -887,8 +899,8 @@ async def analyze_repository_stream_get(
             user_context = {"use_llm_summary": True}
             user_context["priority"] = priority
 
-            if user_message:
-                user_context["user_message"] = user_message
+            if local_user_message:
+                user_context["user_message"] = local_user_message
             
             if analysis_depth:
                 user_context["analysis_depth"] = analysis_depth
@@ -898,7 +910,7 @@ async def analyze_repository_stream_get(
                 owner=owner,
                 repo=repo,
                 user_context=user_context,
-                user_message=user_message,
+                user_message=local_user_message,
             )
             
             initial_state = init_state_from_input(inp)
@@ -951,7 +963,7 @@ async def analyze_repository_stream_get(
                 recommended_issues = []
             
             # 최종 응답 생성
-            data = result.get("diagnosis_result", {})
+            data = result.get("diagnosis_result") or result.get("data") or {}
             docs_issues = data.get("docs_issues", [])
             activity_issues = data.get("activity_issues", [])
             
@@ -977,11 +989,17 @@ async def analyze_repository_stream_get(
                     "stars": data.get("stars", 0),
                     "forks": data.get("forks", 0),
                     "dependency_complexity_score": data.get("dependency_complexity_score", 0),
+                    # 백엔드에서 생성한 AI 응답 (온보딩 가이드 등)
+                    "chat_response": result.get("chat_response"),
                 },
                 "risks": _generate_risks_from_issues(docs_issues, activity_issues, data),
                 "actions": _generate_actions_from_issues(docs_issues, activity_issues, data, recommended_issues),
                 "recommended_issues": recommended_issues,
                 "readme_summary": data.get("summary_for_user"),
+                # 최상위 레벨에도 chat_response 추가 (프론트엔드 호환)
+                "chat_response": result.get("chat_response"),
+                # 온보딩 플랜 (task_results에서 추출)
+                "onboarding_plan": result.get("task_results", {}).get("onboarding", {}).get("onboarding_plan"),
             }
             
             # 캐시에 저장

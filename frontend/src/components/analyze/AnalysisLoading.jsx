@@ -33,13 +33,14 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
 
     const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
     const encodedUrl = encodeURIComponent(userProfile.repositoryUrl);
-    let eventSourceUrl = `${apiBaseUrl}/api/analyze/stream?repo_url=${encodedUrl}`;
-    
+    // 새 세션은 항상 force_refresh=true로 캐시 무시
+    let eventSourceUrl = `${apiBaseUrl}/api/analyze/stream?repo_url=${encodedUrl}&force_refresh=true`;
+
     // 메시지가 있으면 쿼리 파라미터로 추가
     if (userProfile.message) {
       eventSourceUrl += `&message=${encodeURIComponent(userProfile.message)}`;
     }
-    
+
     // 메타 에이전트 파라미터 추가
     if (userProfile.userMessage) {
       eventSourceUrl += `&user_message=${encodeURIComponent(userProfile.userMessage)}`;
@@ -55,7 +56,7 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
       try {
         const data = JSON.parse(event.data);
         console.log("[SSE] Event received:", data);
-        
+
         // 백엔드에서 보내는 형식: { step, progress, message, data? }
         setCurrentStep(data.step);
         setProgress(data.progress);
@@ -148,9 +149,8 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
         {/* 진행률 바 */}
         <div className="w-full bg-gray-200 rounded-full h-3 mb-8 overflow-hidden">
           <div
-            className={`h-3 rounded-full transition-all duration-500 ease-out ${
-              isError ? "bg-red-500" : "bg-gradient-to-r from-blue-500 to-purple-600"
-            }`}
+            className={`h-3 rounded-full transition-all duration-500 ease-out ${isError ? "bg-red-500" : "bg-gradient-to-r from-blue-500 to-purple-600"
+              }`}
             style={{ width: `${progress}%` }}
           ></div>
         </div>

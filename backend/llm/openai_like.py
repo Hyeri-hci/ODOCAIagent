@@ -24,7 +24,7 @@ class OpenAILikeClient(LLMClient):
         api_base: str | None = None,
         api_key: str | None = None,
         default_model: str | None = None,
-        max_retries: int = 3,
+        max_retries: int = 2,  # 빠른 실패를 위해 2회로 제한
         retry_delay: float = 1.0,
     ) -> None:
         self.api_base = api_base or LLM_API_BASE

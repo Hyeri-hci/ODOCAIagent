@@ -10,13 +10,13 @@ from backend.agents.shared.agent_mode import AgentMode, AgentModeLiteral
 from backend.llm.factory import fetch_llm_client
 from backend.llm.base import ChatRequest, ChatMessage
 from backend.common.config import LLM_MODEL_NAME
-from backend.agents.supervisor.nodes.routing_nodes import INTENT_TO_TASK_TYPE
+from backend.agents.supervisor.nodes.routing_nodes import INTENT_TO_TASK_TYPE, INTENT_KEYWORDS
 
 logger = logging.getLogger(__name__)
 
 
-def _predict(prompt: str) -> str:
-    """LLM 예측 헬퍼."""
+def _predict(prompt: str, timeout: int = 15) -> str:
+    """LLM 예측 헬퍼. 타임아웃 시 빠르게 실패."""
     try:
         client = fetch_llm_client()
         request = ChatRequest(
@@ -24,7 +24,7 @@ def _predict(prompt: str) -> str:
             model=LLM_MODEL_NAME,
             temperature=0.1,
         )
-        response = client.chat(request, timeout=30)
+        response = client.chat(request, timeout=timeout)
         content = response.content.strip()
         
         # JSON 포맷팅 제거
@@ -47,10 +47,76 @@ def _map_intent_to_task_type(intent: str, fallback: TaskType) -> TaskType:
     return fallback
 
 
+def _detect_onboard_intent(message: str) -> bool:
+    """온보딩 의도 여부 감지."""
+    if not message:
+        return False
+    msg_lower = message.lower()
+    for keyword in INTENT_KEYWORDS.get("onboard", []):
+        if keyword.lower() in msg_lower:
+            return True
+    return False
+
+
+def _extract_github_repo(message: str) -> tuple[str, str] | None:
+    """메시지에서 GitHub 저장소 정보 추출. (owner, repo) 반환."""
+    import re
+    if not message:
+        return None
+    
+    # 패턴 1: 전체 URL (https://github.com/owner/repo)
+    url_match = re.search(r'github\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)', message, re.IGNORECASE)
+    if url_match:
+        owner, repo = url_match.group(1), url_match.group(2)
+        # .git 제거
+        if repo.endswith('.git'):
+            repo = repo[:-4]
+        return owner, repo
+    
+    # 패턴 2: owner/repo 형식 (문장 내에서 감지)
+    # "Hyeri-hci/OSSDoctor에는" → Hyeri-hci/OSSDoctor
+    short_match = re.search(r'([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)', message)
+    if short_match:
+        owner, repo = short_match.group(1), short_match.group(2)
+        # 일반적인 단어 제외 (e.g., "a/b", "and/or")
+        if len(owner) > 2 and len(repo) > 2:
+            return owner, repo
+    
+    return None
+
 def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
     """사용자 메시지에서 상위 의도 추출."""
     user_msg = state.user_message or state.chat_message or ""
     
+    # 0. 메시지에서 새 저장소 URL 추출 (기존 저장소와 다른 경우 업데이트)
+    new_repo = _extract_github_repo(user_msg)
+    new_owner, new_repo_name = None, None
+    if new_repo:
+        extracted_owner, extracted_repo = new_repo
+        # 현재 저장소와 다른 경우에만 업데이트
+        if (extracted_owner.lower() != (state.owner or "").lower() or 
+            extracted_repo.lower() != (state.repo or "").lower()):
+            new_owner, new_repo_name = extracted_owner, extracted_repo
+            logger.info(f"New repository detected in message: {new_owner}/{new_repo_name}")
+    
+    # 1. 키워드 기반 onboard 의도 우선 감지 (LLM 호출 전)
+    if _detect_onboard_intent(user_msg):
+        logger.info(f"Onboard intent detected via keyword matching: '{user_msg[:50]}...'")
+        result = {
+            "global_intent": "onboard",
+            "detected_intent": "onboard",
+            "task_type": "build_onboarding_plan",
+            "user_preferences": {"focus": ["beginner-friendly", "good first issue"], "ignore": []},
+            "priority": "thoroughness",
+            "step": state.step + 1,
+        }
+        # 새 저장소가 감지된 경우 업데이트
+        if new_owner and new_repo_name:
+            result["owner"] = new_owner
+            result["repo"] = new_repo_name
+        return result
+    
+    # 2. LLM 기반 의도 분류 (키워드로 판별되지 않은 경우)
     prompt = f"""당신은 GitHub 저장소 분석 시스템의 의도 분석 전문가입니다.
 
 사용자 메시지: "{user_msg}"
@@ -65,12 +131,26 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
   "initial_mode_hint": "FAST|FULL|null"
 }}
 
-규칙:
-- 요청 유형이 "diagnose_repo"이면 기본적으로 "diagnose" 의도 (메시지가 없어도)
-- repo 언급 + 분석/진단/보안/추천/비교 → repo 작업
-- onboarding 언급 + 분석/진단/보안/추천/비교 → onboarding 작업
-- compare 언급 + 분석/진단/보안/추천/비교 → compare 작업
-- 그 외 메시지만 있고 요청 유형이 없으면 → chat
+의도 분류 규칙 (우선순위 순서):
+1. **onboard** (온보딩/기여 가이드): 다음 키워드 포함 시
+   - "초보", "beginner", "기여", "contribute", "이슈", "issue", "PR", "참여"
+   - "good first issue", "기여하기 좋은", "시작하기 좋은", "입문"
+   - 예: "초보자가 기여하기 좋은 이슈 찾아줘" → onboard
+   
+2. **diagnose** (저장소 진단): 다음 키워드 포함 시
+   - "진단", "분석", "건강", "health", "score", "점수"
+   - 요청 유형이 "diagnose_repo"인 경우
+   
+3. **compare** (비교 분석): "비교", "compare", "vs" 포함 시
+
+4. **security** (보안 분석): "보안", "security", "취약점" 포함 시
+
+5. **recommend** (일반 추천): 위 카테고리에 해당하지 않는 추천 요청
+   - 주의: "이슈 추천", "기여 추천"은 onboard로 분류
+
+6. **chat** (일반 대화): 위 어느 것에도 해당하지 않음
+
+추가 규칙:
 - "간단히/빨리" → speed/FAST
 - "자세히/깊게" → thoroughness/FULL
 """
@@ -83,7 +163,7 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
         global_intent = parsed.get("task_type", "chat")
         mapped_task_type = _map_intent_to_task_type(global_intent, state.task_type)
         
-        return {
+        result = {
             "global_intent": global_intent,
             "detected_intent": global_intent,
             "task_type": mapped_task_type,
@@ -91,10 +171,15 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
             "priority": parsed.get("priority", "thoroughness"),
             "step": state.step + 1,
         }
+        # 새 저장소가 감지된 경우 업데이트
+        if new_owner and new_repo_name:
+            result["owner"] = new_owner
+            result["repo"] = new_repo_name
+        return result
     except Exception as e:
         logger.error(f"Intent parsing failed: {e}")
         fallback_intent = "chat"
-        return {
+        result = {
             "global_intent": fallback_intent,
             "detected_intent": fallback_intent,
             "task_type": state.task_type,
@@ -102,6 +187,11 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
             "priority": "thoroughness",
             "step": state.step + 1,
         }
+        # 새 저장소가 감지된 경우 업데이트
+        if new_owner and new_repo_name:
+            result["owner"] = new_owner
+            result["repo"] = new_repo_name
+        return result
 
 
 def create_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
@@ -325,6 +415,24 @@ def _extract_recommend_summary(result: Dict[str, Any]) -> Dict[str, Any]:
 
 def reflect_supervisor(state: SupervisorState) -> Dict[str, Any]:
     """계획 반성 및 재조정."""
+    skip_replan_intents = {
+        "diagnose",
+        "recommend",
+        "onboard",
+        "compare",
+        "security",
+        "full_audit",
+    }
+    if (
+        not state.user_context.get("enable_replan")
+        and state.global_intent in skip_replan_intents
+    ):
+        return {
+            "reflection_summary": f"{state.global_intent} intent: skip replan",
+            "next_node_override": "finalize_supervisor_answer",
+            "step": state.step + 1,
+        }
+
     if state.replan_count >= state.max_replan:
         logger.info("Max replan reached")
         return {
@@ -392,10 +500,81 @@ JSON 응답:
 
 
 def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
-    """최종 응답 생성."""
     task_results = state.task_results or {}
     reflection = state.reflection_summary or ""
     
+    # diagnosis 결과를 diagnosis_result로 변환 (http_router.py 호환)
+    diagnosis_data = task_results.get("diagnosis", {})
+    onboarding_data = task_results.get("onboarding", {})
+    
+    # onboard intent: 이미 LLM으로 플랜이 생성됨 → 직접 마크다운 생성
+    if state.global_intent == "onboard" and onboarding_data:
+        report_lines = []
+        
+        # 진단 결과
+        if diagnosis_data:
+            health = diagnosis_data.get("health_score", "N/A")
+            onboard_score = diagnosis_data.get("onboarding_score", "N/A")
+            report_lines.append(f"## 저장소 진단 결과")
+            report_lines.append(f"- **Health Score**: {health}")
+            report_lines.append(f"- **Onboarding Score**: {onboard_score}")
+            if diagnosis_data.get("summary"):
+                report_lines.append(f"\n{diagnosis_data['summary']}")
+            report_lines.append("")
+        
+        # 온보딩 결과
+        report_lines.append("## 온보딩 가이드")
+        
+        # 온보딩 플랜
+        onboarding_plan = onboarding_data.get("onboarding_plan", [])
+        if onboarding_plan:
+            for week in onboarding_plan:
+                week_num = week.get("week", "?")
+                report_lines.append(f"\n### {week_num}주차")
+                
+                goals = week.get("goals", [])
+                if goals:
+                    report_lines.append("**목표:**")
+                    for goal in goals:
+                        report_lines.append(f"- {goal}")
+                
+                tasks = week.get("tasks", [])
+                if tasks:
+                    report_lines.append("**할 일:**")
+                    for task in tasks:
+                        report_lines.append(f"- {task}")
+        
+        # 추천 이슈
+        candidate_issues = onboarding_data.get("candidate_issues", [])
+        if candidate_issues:
+            report_lines.append("\n### 추천 이슈 (Good First Issue)")
+            for issue in candidate_issues[:5]:
+                num = issue.get("number", "?")
+                title = issue.get("title", "제목 없음")
+                url = issue.get("url", "")
+                labels = issue.get("labels", [])
+                label_str = ", ".join(labels[:2]) if labels else ""
+                if url:
+                    report_lines.append(f"- [#{num}]({url}): {title} ({label_str})")
+                else:
+                    report_lines.append(f"- #{num}: {title} ({label_str})")
+        
+        # 온보딩 요약
+        if onboarding_data.get("onboarding_summary"):
+            report_lines.append(f"\n### 요약\n{onboarding_data['onboarding_summary']}")
+        
+        final_answer = "\n".join(report_lines) if report_lines else "온보딩 가이드가 생성되었습니다."
+        
+        logger.info("Final answer generated (onboard intent, no extra LLM call)")
+        
+        return {
+            "chat_response": final_answer,
+            "last_answer_kind": "report",
+            "diagnosis_result": diagnosis_data,
+            "step": state.step + 1,
+        }
+    
+    # 그 외 intent: LLM으로 보고서 생성
     prompt = f"""GitHub 저장소 분석 보고서 작성.
 
 분석 결과:
@@ -415,25 +594,27 @@ def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
     
     try:
         final_answer = _predict(prompt)
+        logger.info("Final answer generated via LLM")
         
         return {
             "chat_response": final_answer,
             "last_answer_kind": "report",
+            "diagnosis_result": diagnosis_data,
             "step": state.step + 1,
         }
     except Exception as e:
         logger.error(f"Final answer failed: {e}")
         
         fallback = "분석 완료.\n\n"
-        if "diagnosis" in task_results:
-            diag = task_results["diagnosis"]
-            fallback += f"**진단**\n- Health: {diag.get('health_score', 'N/A')}\n\n"
+        if diagnosis_data:
+            fallback += f"**진단**\n- Health: {diagnosis_data.get('health_score', 'N/A')}\n\n"
         if "security" in task_results:
             fallback += f"**보안**\n- Risk: {task_results['security'].get('risk_level', 'N/A')}\n\n"
         
         return {
             "chat_response": fallback,
             "last_answer_kind": "report",
+            "diagnosis_result": diagnosis_data,
             "error": str(e),
             "step": state.step + 1,
         }
