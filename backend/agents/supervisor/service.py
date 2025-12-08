@@ -5,14 +5,38 @@ from backend.core.models import DiagnosisCoreResult, ProjectRules, UserGuideline
 import logging
 from backend.agents.supervisor.models import SupervisorInput, SupervisorState
 from backend.agents.supervisor.trace import TracingCallbackHandler
+from backend.agents.supervisor.memory import get_conversation_memory, ConversationMemory
 from backend.common.logging_config import setup_logging
+from backend.common.metrics import get_metrics_tracker, TaskMetrics
 
 logger = logging.getLogger(__name__)
-# Ensure logging is setup (idempotent-ish)
 setup_logging()
 
-def init_state_from_input(inp: SupervisorInput) -> SupervisorState:
-    """SupervisorInput을 기반으로 초기 SupervisorState를 생성합니다."""
+
+def init_state_from_input(
+    inp: SupervisorInput,
+    session_id: Optional[str] = None,
+    load_context: bool = True,
+) -> SupervisorState:
+    """
+    SupervisorInput을 기반으로 초기 SupervisorState를 생성합니다.
+    
+    Args:
+        inp: SupervisorInput 객체
+        session_id: 세션 식별자 (None이면 owner/repo 기반 생성)
+        load_context: True면 기존 대화 컨텍스트 로드
+    """
+    effective_session_id = session_id or f"{inp.owner}/{inp.repo}"
+    long_term_context = None
+    
+    if load_context:
+        try:
+            memory = get_conversation_memory()
+            context = memory.get_context(effective_session_id)
+            long_term_context = context.summary
+        except Exception as e:
+            logger.warning(f"Failed to load conversation context: {e}")
+    
     return SupervisorState(
         task_type=inp.task_type,
         owner=inp.owner,
@@ -27,7 +51,66 @@ def init_state_from_input(inp: SupervisorInput) -> SupervisorState:
         last_answer_kind="none",
         last_explain_target=None,
         error=None,
+        detected_intent=None,
+        intent_confidence=0.0,
+        decision_reason=None,
+        next_node_override=None,
+        rerun_count=0,
+        max_rerun=2,
+        quality_issues=[],
+        use_cache=True,
+        cache_hit=False,
+        session_id=effective_session_id,
+        long_term_context=long_term_context,
+        flow_adjustments=[],
+        warnings=[],
+        analysis_depth="standard",
+        compare_repos=[],
+        compare_results={},
+        compare_summary=None,
     )
+
+
+def save_conversation_turn(
+    session_id: str,
+    user_message: str,
+    assistant_message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """대화 턴을 메모리에 저장합니다."""
+    try:
+        memory = get_conversation_memory()
+        memory.add_turn(session_id, user_message, assistant_message, metadata)
+    except Exception as e:
+        logger.warning(f"Failed to save conversation turn: {e}")
+
+
+def get_conversation_context(session_id: str) -> Dict[str, Any]:
+    """세션의 대화 컨텍스트를 조회합니다."""
+    try:
+        memory = get_conversation_memory()
+        context = memory.get_context(session_id)
+        return context.to_dict()
+    except Exception as e:
+        logger.warning(f"Failed to get conversation context: {e}")
+        return {"session_id": session_id, "recent_turns": [], "summary": None}
+
+
+def check_memory_status() -> Dict[str, Any]:
+    """메모리 백엔드 상태를 확인합니다."""
+    try:
+        memory = get_conversation_memory()
+        return {
+            "backend_type": memory.backend_type,
+            "redis_available": memory.is_redis_available(),
+        }
+    except Exception as e:
+        logger.error(f"Failed to check memory status: {e}")
+        return {
+            "backend_type": "unknown",
+            "redis_available": False,
+            "error": str(e),
+        }
 
 def run_supervisor_diagnosis(
     owner: str,
@@ -54,6 +137,10 @@ def run_supervisor_diagnosis(
     task_info = f"task=diagnose_repo owner={owner} repo={repo} ref={ref}"
     logger.info(f"[{task_info}] Starting diagnosis (LLM Summary: {use_llm_summary}, Trace: {debug_trace})")
     
+    # 메트릭 추적 시작
+    tracker = get_metrics_tracker()
+    metrics = tracker.start_task("diagnose_repo", owner, repo)
+    
     # 1. 그래프 생성
     graph = get_supervisor_graph()
     
@@ -79,16 +166,43 @@ def run_supervisor_diagnosis(
     # 4. 그래프 실행
     result = graph.invoke(initial_state, config=config)
     
-    # 5. 결과 추출
-    if result.get("error"):
-        logger.error(f"[{task_info}] Diagnosis failed: {result.get('error')}")
+    # 결과를 dict로 변환 (Pydantic 모델일 수 있음)
+    if result is None:
+        result = {}
+    elif hasattr(result, "model_dump"):
+        result = result.model_dump()
+    elif not isinstance(result, dict):
+        result = {}
+    
+    # 5. 결과 추출 및 메트릭 수집
+    error_msg = result.get("error")
+    if error_msg:
+        logger.error(f"[{task_info}] Diagnosis failed: {error_msg}")
+        metrics.complete(success=False, error=error_msg)
     else:
         logger.info(f"[{task_info}] Diagnosis completed successfully")
+        metrics.complete(success=True)
+    
+    # Agent 결정 정보 수집
+    metrics.detected_intent = result.get("detected_intent")
+    metrics.decision_reason = result.get("decision_reason")
+    metrics.flow_adjustments = result.get("flow_adjustments", [])
+    metrics.cache_hit = result.get("cache_hit", False)
+    metrics.rerun_count = result.get("rerun_count", 0)
+    
+    # 메트릭 기록
+    tracker.record_task(metrics)
 
     # 6. Trace 수집
     trace = trace_handler.get_trace() if trace_handler else None
     
-    return result.get("diagnosis_result"), result.get("error"), trace
+    # 7. diagnosis_result에 agentic 메타데이터 병합
+    diagnosis_result = result.get("diagnosis_result")
+    if diagnosis_result and isinstance(diagnosis_result, dict):
+        diagnosis_result["warnings"] = result.get("warnings", [])
+        diagnosis_result["flow_adjustments"] = result.get("flow_adjustments", [])
+    
+    return diagnosis_result, error_msg, trace
 
 
 def run_supervisor_diagnosis_with_guidelines(
