@@ -6,7 +6,7 @@ from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..models import DependencyFile, Dependency
-from ..config import DEPENDENCY_FILES
+from ..config import DEPENDENCY_FILES, LOCK_FILES
 from ..extractors import DependencyExtractor
 from .client import GitHubClient
 
@@ -45,6 +45,29 @@ class RepositoryAnalyzer:
                     return True
             else:
                 if filename == pattern:
+                    return True
+        return False
+
+    def is_lockfile(self, path: str) -> bool:
+        """
+        파일이 lock 파일인지 확인
+
+        Args:
+            path: 파일 경로
+
+        Returns:
+            bool: lock 파일이면 True
+        """
+        filename = path.split('/')[-1]
+
+        for lock_pattern in LOCK_FILES:
+            if '*' in lock_pattern:
+                if fnmatch.fnmatch(filename, lock_pattern):
+                    return True
+                if fnmatch.fnmatch(path, lock_pattern):
+                    return True
+            else:
+                if filename == lock_pattern:
                     return True
         return False
 
@@ -92,7 +115,8 @@ class RepositoryAnalyzer:
 
             # 의존성 추출
             filename = file_info['path'].split('/')[-1]
-            dep_file.dependencies = self.extractor.extract(content, filename)
+            is_lock = self.is_lockfile(file_info['path'])
+            dep_file.dependencies = self.extractor.extract(content, filename, is_lock)
 
         return dep_file
 
@@ -166,8 +190,13 @@ class RepositoryAnalyzer:
         """
         all_dependencies = []
         source_stats = {}
+        lock_file_count = 0
 
         for file in analyzed_files:
+            # Lock 파일 카운트
+            if self.is_lockfile(file.path):
+                lock_file_count += 1
+
             if file.dependencies:
                 all_dependencies.extend(file.dependencies)
 
@@ -175,32 +204,45 @@ class RepositoryAnalyzer:
                     if dep.source:
                         source_stats[dep.source] = source_stats.get(dep.source, 0) + 1
 
-        # 중복 제거
+        # 중복 제거 (lock 파일의 의존성을 우선)
         unique_dependencies = {}
         for dep in all_dependencies:
             key = f"{dep.source}:{dep.name}"
             if key not in unique_dependencies:
                 unique_dependencies[key] = dep
-            elif dep.version and (not unique_dependencies[key].version or unique_dependencies[key].version == '*'):
-                unique_dependencies[key] = dep
+            else:
+                existing = unique_dependencies[key]
+                # Lock 파일의 의존성을 우선적으로 사용
+                if dep.is_from_lockfile and not existing.is_from_lockfile:
+                    unique_dependencies[key] = dep
+                # 둘 다 lock 파일이 아닌 경우, 버전이 있는 것을 우선
+                elif not dep.is_from_lockfile and not existing.is_from_lockfile:
+                    if dep.version and (not existing.version or existing.version == '*'):
+                        unique_dependencies[key] = dep
+
+        # Lock 파일에서 추출된 의존성 개수
+        lockfile_dependencies_count = len([d for d in unique_dependencies.values() if d.is_from_lockfile])
 
         # 결과 구성
         result = {
             'owner': owner,
             'repo': repo,
             'total_files': len(analyzed_files),
+            'lock_files_count': lock_file_count,
             'total_dependencies': len(unique_dependencies),
             'files': [
                 {
                     'path': f.path,
                     'size': f.size,
+                    'is_lockfile': self.is_lockfile(f.path),
                     'dependencies_count': len(f.dependencies) if f.dependencies else 0,
                     'dependencies': [
                         {
                             'name': d.name,
                             'version': d.version,
                             'type': d.type,
-                            'source': d.source
+                            'source': d.source,
+                            'is_from_lockfile': d.is_from_lockfile
                         } for d in (f.dependencies or [])
                     ]
                 } for f in analyzed_files
@@ -210,14 +252,17 @@ class RepositoryAnalyzer:
                     'name': d.name,
                     'version': d.version,
                     'type': d.type,
-                    'source': d.source
+                    'source': d.source,
+                    'is_from_lockfile': d.is_from_lockfile
                 } for d in unique_dependencies.values()
             ],
             'summary': {
                 'by_source': source_stats,
                 'runtime_dependencies': len([d for d in unique_dependencies.values() if d.type == 'runtime']),
                 'dev_dependencies': len([d for d in unique_dependencies.values() if d.type == 'dev']),
-                'total_unique': len(unique_dependencies)
+                'total_unique': len(unique_dependencies),
+                'lockfile_dependencies': lockfile_dependencies_count,
+                'non_lockfile_dependencies': len(unique_dependencies) - lockfile_dependencies_count
             }
         }
 

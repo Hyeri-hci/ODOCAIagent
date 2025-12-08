@@ -2,6 +2,72 @@
 의존성 파일 패턴 정의
 """
 
+# Lock 파일 목록 (실제 설치된 패키지의 정확한 버전을 기록)
+# 이 파일들은 일반 의존성 파일보다 우선적으로 처리됩니다.
+LOCK_FILES = [
+    # JavaScript/Node.js
+    "package-lock.json",
+    "yarn.lock",
+    "pnpm-lock.yaml",
+    "npm-shrinkwrap.json",
+
+    # Python
+    "Pipfile.lock",
+    "poetry.lock",
+    "pdm.lock",
+
+    # Ruby
+    "Gemfile.lock",
+
+    # PHP
+    "composer.lock",
+
+    # Go
+    "go.sum",
+    "Gopkg.lock",
+    "glide.lock",
+
+    # Rust
+    "Cargo.lock",
+
+    # Swift/iOS
+    "Package.resolved",
+    "Podfile.lock",
+    "Cartfile.resolved",
+
+    # .NET/C#
+    "project.lock.json",
+    "paket.lock",
+    "packages.lock.json",
+
+    # C/C++
+    "conan.lock",
+
+    # Dart/Flutter
+    "pubspec.lock",
+
+    # Elixir
+    "mix.lock",
+    "rebar.lock",
+
+    # Haskell
+    "stack.yaml.lock",
+    "cabal.project.freeze",
+
+    # R
+    "renv.lock",
+    "packrat.lock",
+
+    # Julia
+    "Manifest.toml",
+
+    # Crystal
+    "shard.lock",
+
+    # Perl
+    "cpanfile.snapshot",
+]
+
 # 전체 의존성 파일 목록
 DEPENDENCY_FILES = [
     # JavaScript/Node.js

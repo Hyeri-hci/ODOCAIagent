@@ -10,7 +10,7 @@ from ..models import Dependency
 class RubyExtractor(BaseExtractor):
     """Ruby 의존성 추출기"""
 
-    def extract(self, content: str, filename: str) -> List[Dependency]:
+    def extract(self, content: str, filename: str, is_lockfile: bool = False) -> List[Dependency]:
         """파일명에 따라 적절한 추출 메서드 호출"""
         extractors = {
             'Gemfile': self._extract_gemfile,
@@ -18,13 +18,19 @@ class RubyExtractor(BaseExtractor):
         }
 
         extractor = extractors.get(filename)
+        dependencies = []
         if extractor:
-            return self._safe_extract(
+            dependencies = self._safe_extract(
                 lambda c: extractor(c),
                 content,
                 f"Error parsing {filename}"
             )
-        return []
+
+        # lock 파일 표시
+        for dep in dependencies:
+            dep.is_from_lockfile = is_lockfile
+
+        return dependencies
 
     @staticmethod
     def _extract_gemfile(content: str) -> List[Dependency]:

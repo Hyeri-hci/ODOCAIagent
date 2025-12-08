@@ -11,30 +11,37 @@ from ..models import Dependency
 class DotNetExtractor(BaseExtractor):
     """.NET/C# 의존성 추출기"""
 
-    def extract(self, content: str, filename: str) -> List[Dependency]:
+    def extract(self, content: str, filename: str, is_lockfile: bool = False) -> List[Dependency]:
         """파일명에 따라 적절한 추출 메서드 호출"""
+        dependencies = []
+
         # .csproj, .fsproj, .vbproj 파일들
         if filename.endswith(('.csproj', '.fsproj', '.vbproj')):
-            return self._safe_extract(
+            dependencies = self._safe_extract(
                 self._extract_csproj,
                 content,
                 f"Error parsing {filename}"
             )
+        else:
+            extractors = {
+                'packages.config': self._extract_packages_config,
+                'project.json': self._extract_project_json,
+                'paket.dependencies': self._extract_paket_dependencies,
+            }
 
-        extractors = {
-            'packages.config': self._extract_packages_config,
-            'project.json': self._extract_project_json,
-            'paket.dependencies': self._extract_paket_dependencies,
-        }
+            extractor = extractors.get(filename)
+            if extractor:
+                dependencies = self._safe_extract(
+                    lambda c: extractor(c),
+                    content,
+                    f"Error parsing {filename}"
+                )
 
-        extractor = extractors.get(filename)
-        if extractor:
-            return self._safe_extract(
-                lambda c: extractor(c),
-                content,
-                f"Error parsing {filename}"
-            )
-        return []
+        # lock 파일 표시
+        for dep in dependencies:
+            dep.is_from_lockfile = is_lockfile
+
+        return dependencies
 
     @staticmethod
     def _extract_packages_config(content: str) -> List[Dependency]:

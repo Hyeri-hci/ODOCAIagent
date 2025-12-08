@@ -10,13 +10,14 @@ class BaseExtractor(ABC):
     """모든 의존성 추출기의 베이스 클래스"""
 
     @abstractmethod
-    def extract(self, content: str, filename: str) -> List[Dependency]:
+    def extract(self, content: str, filename: str, is_lockfile: bool = False) -> List[Dependency]:
         """
         파일 내용에서 의존성 추출
 
         Args:
             content: 파일 내용
             filename: 파일명
+            is_lockfile: lock 파일 여부
 
         Returns:
             List[Dependency]: 추출된 의존성 목록

@@ -13,45 +13,52 @@ from ..models import Dependency
 class OthersExtractor(BaseExtractor):
     """기타 언어 의존성 추출기"""
 
-    def extract(self, content: str, filename: str) -> List[Dependency]:
+    def extract(self, content: str, filename: str, is_lockfile: bool = False) -> List[Dependency]:
         """파일명에 따라 적절한 추출 메서드 호출"""
+        dependencies = []
+
         # .cabal 파일 처리
         if filename.endswith('.cabal'):
-            return self._safe_extract(
+            dependencies = self._safe_extract(
                 self._extract_cabal,
                 content,
                 f"Error parsing {filename}"
             )
+        else:
+            extractors = {
+                # PHP
+                'composer.json': self._extract_composer_json,
+                'composer.lock': self._extract_composer_lock,
+                # Elixir
+                'mix.exs': self._extract_mix_exs,
+                # Haskell
+                'stack.yaml': self._extract_stack_yaml,
+                # Julia
+                'Project.toml': self._extract_project_toml_julia,
+                # Elm
+                'elm.json': self._extract_elm_json,
+                # Crystal
+                'shard.yml': self._extract_shard_yml,
+                # Deno
+                'deno.json': self._extract_deno_json,
+                'deno.jsonc': self._extract_deno_json,
+                # R
+                'DESCRIPTION': self._extract_description_r,
+            }
 
-        extractors = {
-            # PHP
-            'composer.json': self._extract_composer_json,
-            'composer.lock': self._extract_composer_lock,
-            # Elixir
-            'mix.exs': self._extract_mix_exs,
-            # Haskell
-            'stack.yaml': self._extract_stack_yaml,
-            # Julia
-            'Project.toml': self._extract_project_toml_julia,
-            # Elm
-            'elm.json': self._extract_elm_json,
-            # Crystal
-            'shard.yml': self._extract_shard_yml,
-            # Deno
-            'deno.json': self._extract_deno_json,
-            'deno.jsonc': self._extract_deno_json,
-            # R
-            'DESCRIPTION': self._extract_description_r,
-        }
+            extractor = extractors.get(filename)
+            if extractor:
+                dependencies = self._safe_extract(
+                    lambda c: extractor(c),
+                    content,
+                    f"Error parsing {filename}"
+                )
 
-        extractor = extractors.get(filename)
-        if extractor:
-            return self._safe_extract(
-                lambda c: extractor(c),
-                content,
-                f"Error parsing {filename}"
-            )
-        return []
+        # lock 파일 표시
+        for dep in dependencies:
+            dep.is_from_lockfile = is_lockfile
+
+        return dependencies
 
     @staticmethod
     def _extract_composer_json(content: str) -> List[Dependency]:
