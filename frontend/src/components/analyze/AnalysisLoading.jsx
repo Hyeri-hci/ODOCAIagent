@@ -7,7 +7,7 @@ const ANALYSIS_STEPS = [
   { id: "docs", label: "문서 품질 분석 중", icon: FileText, progress: 35 },
   { id: "activity", label: "활동성 분석 중", icon: Activity, progress: 55 },
   { id: "structure", label: "구조 분석 중", icon: Code, progress: 70 },
-  { id: "scoring", label: "건강도 점수 계산 중", icon: BookOpen, progress: 85 },
+  { id: "scoring", label: "분석 결과 종합 중", icon: BookOpen, progress: 85 },
   { id: "quality", label: "AI가 결과 품질 검사 중", icon: Sparkles, progress: 92 },
   { id: "llm", label: "AI 요약 생성 중", icon: Sparkles, progress: 97 },
   { id: "complete", label: "분석 완료", icon: CheckCircle, progress: 100 },
@@ -33,26 +33,47 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
 
     const apiBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:8000";
     const encodedUrl = encodeURIComponent(userProfile.repositoryUrl);
-    const eventSourceUrl = `${apiBaseUrl}/api/analyze/stream?repo_url=${encodedUrl}`;
+    // 새 세션은 항상 force_refresh=true로 캐시 무시
+    let eventSourceUrl = `${apiBaseUrl}/api/analyze/stream?repo_url=${encodedUrl}&force_refresh=true`;
 
+    // 메시지가 있으면 쿼리 파라미터로 추가
+    if (userProfile.message) {
+      eventSourceUrl += `&message=${encodeURIComponent(userProfile.message)}`;
+    }
+
+    // 메타 에이전트 파라미터 추가
+    if (userProfile.userMessage) {
+      eventSourceUrl += `&user_message=${encodeURIComponent(userProfile.userMessage)}`;
+    }
+    if (userProfile.priority) {
+      eventSourceUrl += `&priority=${encodeURIComponent(userProfile.priority)}`;
+    }
+
+    console.log("[SSE] Connecting to:", eventSourceUrl);
     const eventSource = new EventSource(eventSourceUrl);
 
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
-        
+        console.log("[SSE] Event received:", data);
+
+        // 백엔드에서 보내는 형식: { step, progress, message, data? }
         setCurrentStep(data.step);
         setProgress(data.progress);
         setStatusMessage(data.message);
 
+        // 분석 완료
         if (data.step === "complete" && data.data?.result) {
+          console.log("[SSE] Analysis complete, result:", data.data.result);
           eventSource.close();
           if (onComplete) {
             onComplete(data.data.result);
           }
         }
 
+        // 에러 발생
         if (data.step === "error") {
+          console.error("[SSE] Error:", data.data?.error || data.message);
           eventSource.close();
           setIsError(true);
           if (onError) {
@@ -60,12 +81,12 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
           }
         }
       } catch (e) {
-        console.error("SSE parse error:", e);
+        console.error("[SSE] Parse error:", e, "Raw data:", event.data);
       }
     };
 
     eventSource.onerror = (error) => {
-      console.error("SSE connection error:", error);
+      console.error("[SSE] Connection error:", error);
       eventSource.close();
       setIsError(true);
       if (onError) {
@@ -73,10 +94,15 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
       }
     };
 
+    eventSource.onopen = () => {
+      console.log("[SSE] Connection opened");
+    };
+
     return () => {
+      console.log("[SSE] Closing connection");
       eventSource.close();
     };
-  }, [userProfile?.repositoryUrl, useStream, onComplete, onError]);
+  }, [userProfile?.repositoryUrl, userProfile?.message, useStream, onComplete, onError]);
 
   const getStepStatus = (step) => {
     const stepIndex = ANALYSIS_STEPS.findIndex(s => s.id === step.id);
@@ -123,9 +149,8 @@ const AnalysisLoading = ({ userProfile, onComplete, onError, useStream = true })
         {/* 진행률 바 */}
         <div className="w-full bg-gray-200 rounded-full h-3 mb-8 overflow-hidden">
           <div
-            className={`h-3 rounded-full transition-all duration-500 ease-out ${
-              isError ? "bg-red-500" : "bg-gradient-to-r from-blue-500 to-purple-600"
-            }`}
+            className={`h-3 rounded-full transition-all duration-500 ease-out ${isError ? "bg-red-500" : "bg-gradient-to-r from-blue-500 to-purple-600"
+              }`}
             style={{ width: `${progress}%` }}
           ></div>
         </div>

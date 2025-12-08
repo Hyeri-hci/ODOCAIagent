@@ -6,6 +6,7 @@ from backend.core.models import RepoSnapshot
 TaskType = Literal[
     "diagnose_repo",
     "build_onboarding_plan",
+    "general_inquiry",
 ]
 
 # 2. Intent Definition (Agentic Routing)
@@ -15,6 +16,8 @@ Intent = Literal[
     "explain",
     "compare",
     "chat",
+    "security",
+    "full_audit",
     "unknown",
 ]
 
@@ -24,6 +27,7 @@ class SupervisorInput(BaseModel):
     owner: str  # Required
     repo: str   # Required
     user_context: Dict[str, Any] = {}
+    user_message: Optional[str] = None
 
 # 4. OnboardingUserContext - 온보딩 사용자 컨텍스트 스키마
 class OnboardingUserContext(BaseModel):
@@ -55,7 +59,22 @@ class OnboardingUserContext(BaseModel):
         filtered = {k: v for k, v in data.items() if k in valid_keys}
         return cls(**filtered)
 
-# 5. SupervisorState Definition
+
+# 5. Meta Agent Models
+class TaskStep(BaseModel):
+    """메타 에이전트 실행 단계."""
+    step: int
+    agent: Literal["diagnosis", "security", "recommend", "chat", "onboarding", "compare"]
+    mode: str = "auto"
+    condition: str = "always"
+    description: Optional[str] = None
+
+class TaskPlan(BaseModel):
+    """메타 에이전트 실행 계획."""
+    steps: List[TaskStep] = Field(default_factory=list)
+    created_by: str = "supervisor"
+
+# 6. SupervisorState Definition
 AnswerKind = Literal["none", "report", "plan", "explain"]
 
 class SupervisorState(BaseModel):
@@ -95,7 +114,7 @@ class SupervisorState(BaseModel):
 
     # 8) 품질 검사 및 재실행
     rerun_count: int = 0
-    max_rerun: int = 2
+    max_rerun: int = 3
     quality_issues: List[str] = []
 
     # 9) 캐시 제어
@@ -120,4 +139,16 @@ class SupervisorState(BaseModel):
     chat_message: Optional[str] = None
     chat_response: Optional[str] = None
     chat_context: Dict[str, Any] = {}
+    
+    # 14) 메타 에이전트 필드
+    user_message: Optional[str] = None
+    global_intent: Optional[str] = None
+    user_preferences: Dict[str, Any] = Field(default_factory=dict)
+    priority: str = "thoroughness"
+    task_plan: List[Dict[str, Any]] = Field(default_factory=list)
+    task_results: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    replan_count: int = 0
+    max_replan: int = 1
+    reflection_summary: Optional[str] = None
+    plan_history: List[List[Dict[str, Any]]] = Field(default_factory=list)
 

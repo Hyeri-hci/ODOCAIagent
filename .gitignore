@@ -96,3 +96,9 @@ settings.local.json
 # AI Coding Assistant 설정 (로컬 전용)
 # ------------------------------------
 .github/copilot-instructions.md
+
+
+.AGENT.md
+.PLAN_1.md
+PLAN_1.md
+AGENT.md

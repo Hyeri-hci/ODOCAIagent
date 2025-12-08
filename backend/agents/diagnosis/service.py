@@ -8,20 +8,56 @@ from backend.core.activity_core import analyze_activity, analyze_activity_optimi
 from backend.core.structure_core import analyze_structure
 from backend.core.dependencies_core import parse_dependencies
 from backend.core.scoring_core import compute_scores
-from backend.core.models import RepoSnapshot
+from backend.core.models import RepoSnapshot, DependenciesSnapshot
 
 from backend.agents.diagnosis.models import DiagnosisInput, DiagnosisOutput
 
 logger = logging.getLogger(__name__)
 
+# 분석 깊이별 설정
+DEPTH_CONFIG = {
+    "deep": {
+        "use_llm_summary": True,
+        "analyze_structure": True,
+        "parse_dependencies": True,
+        "activity_history_days": 180,  # 더 긴 기간 분석
+        "description": "심층 분석 - 모든 메트릭 상세 분석"
+    },
+    "standard": {
+        "use_llm_summary": True,
+        "analyze_structure": True,
+        "parse_dependencies": True,
+        "activity_history_days": 90,
+        "description": "표준 분석 - 일반 메트릭 분석"
+    },
+    "quick": {
+        "use_llm_summary": False,  # quick 모드에서는 LLM 요약 스킵
+        "analyze_structure": True,
+        "parse_dependencies": False,  # 의존성 분석 스킵
+        "activity_history_days": 30,  # 짧은 기간만 분석
+        "description": "빠른 분석 - 핵심 메트릭만 분석"
+    }
+}
+
+
 def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
     """
     OSSDoctor 진단의 단일 진입점.
     데이터 수집 -> 분석 -> 점수 계산 -> 요약 -> DTO 반환 과정을 수행합니다.
+    
+    분석 깊이(analysis_depth)에 따라 분석 범위가 달라집니다:
+    - deep: 모든 분석 수행, 긴 기간 데이터 수집
+    - standard: 일반 분석 (기본값)
+    - quick: LLM 요약 및 의존성 분석 스킵, 짧은 기간 데이터만 수집
     """
     owner = input_data.owner
     repo = input_data.repo
     ref = input_data.ref
+    depth = input_data.analysis_depth
+    
+    # 분석 깊이 설정 가져오기
+    depth_config = DEPTH_CONFIG.get(depth, DEPTH_CONFIG["standard"])
+    logger.info(f"Running diagnosis with depth={depth}: {depth_config['description']}")
     
     timings = {}
     total_start = time.time()
@@ -37,10 +73,20 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
 
     # 2. Core 분석
     try:
-        # 의존성 파싱
-        deps_start = time.time()
-        deps = parse_dependencies(snapshot)
-        timings["parse_dependencies"] = round(time.time() - deps_start, 3)
+        # 의존성 파싱 (quick 모드에서는 스킵)
+        deps = None
+        if depth_config["parse_dependencies"]:
+            deps_start = time.time()
+            deps = parse_dependencies(snapshot)
+            timings["parse_dependencies"] = round(time.time() - deps_start, 3)
+        else:
+            logger.info(f"Skipping dependency parsing for {depth} mode")
+            deps = DependenciesSnapshot(
+                repo_id=snapshot.repo_id,
+                dependencies=[],
+                analyzed_files=["skipped:quick_mode"],
+                parse_errors=[],
+            )
         
         # 문서 분석
         docs_start = time.time()
@@ -53,9 +99,11 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         timings["analyze_activity"] = round(time.time() - activity_start, 3)
         
         # 구조 분석
-        structure_start = time.time()
-        structure_result = analyze_structure(snapshot)
-        timings["analyze_structure"] = round(time.time() - structure_start, 3)
+        structure_result = None
+        if depth_config["analyze_structure"]:
+            structure_start = time.time()
+            structure_result = analyze_structure(snapshot)
+            timings["analyze_structure"] = round(time.time() - structure_start, 3)
         
         # 3. 점수 계산 (구조 점수 포함)
         scoring_start = time.time()
@@ -67,10 +115,13 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         raise RuntimeError(f"진단 실행 실패: {e}")
     
     timings["total_analysis"] = round(time.time() - total_start, 3)
-    logger.info(f"Diagnosis timings for {owner}/{repo}: {timings}")
+    timings["analysis_depth"] = depth
+    logger.info(f"Diagnosis timings for {owner}/{repo} (depth={depth}): {timings}")
 
-    # 4. 사용자용 요약 생성 (snapshot에서 README 내용 가져옴)
-    summary_text = _generate_summary(diagnosis, docs_result, structure_result, snapshot, input_data.use_llm_summary)
+    # 4. 사용자용 요약 생성
+    # quick 모드이거나 사용자가 명시적으로 LLM 요약을 비활성화한 경우 fallback 사용
+    use_llm = input_data.use_llm_summary and depth_config["use_llm_summary"]
+    summary_text = _generate_summary(diagnosis, docs_result, structure_result, snapshot, use_llm)
 
     # 5. DTO 반환
     return DiagnosisOutput(
@@ -81,7 +132,7 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         onboarding_level=diagnosis.onboarding_level,
         docs=docs_result.to_dict() if hasattr(docs_result, "to_dict") else docs_result.__dict__,
         activity=activity_result.to_dict() if hasattr(activity_result, "to_dict") else activity_result.__dict__,
-        structure=structure_result.to_dict(),
+        structure=structure_result.to_dict() if structure_result else {},
         dependency_complexity_score=diagnosis.dependency_complexity_score,
         dependency_flags=list(diagnosis.dependency_flags),
         stars=snapshot.stars,
@@ -89,6 +140,7 @@ def run_diagnosis(input_data: DiagnosisInput) -> DiagnosisOutput:
         summary_for_user=summary_text,
         raw_metrics=diagnosis.to_dict()
     )
+
 
 def _generate_summary(diagnosis, docs_result, structure_result, snapshot, use_llm_summary: bool) -> str:
     """진단 결과 요약 생성 (Fallback + LLM)"""

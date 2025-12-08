@@ -17,15 +17,34 @@ const USE_STREAM_MODE = true;
 const AnalysisChat = ({
   userProfile,
   analysisResult: initialAnalysisResult,
+  onAnalysisUpdate,  // 새 분석 결과를 부모로 전달하는 콜백
 }) => {
-  const [messages, setMessages] = useState([
-    {
-      id: "initial",
-      role: "assistant",
-      content: `${userProfile.repositoryUrl} 저장소에 대한 분석이 완료되었습니다! 아래에서 상세 리포트를 확인하실 수 있습니다.`,
-      timestamp: new Date(),
-    },
-  ]);
+  // 초기 메시지: onboardingPlan이 있으면 간단한 안내, 없으면 기본 메시지
+  const getInitialMessages = () => {
+    // 온보딩 플랜이 있으면 간단한 안내 메시지만 표시 (상세 내용은 Report 영역에서)
+    if (initialAnalysisResult?.onboardingPlan?.length > 0) {
+      return [
+        {
+          id: "initial",
+          role: "assistant",
+          content: `${userProfile.repositoryUrl} 저장소에 대한 **온보딩 가이드**가 생성되었습니다!\n\n오른쪽 Report 영역에서 **${initialAnalysisResult.onboardingPlan.length}주 학습 플랜**을 확인해 보세요.`,
+          timestamp: new Date(),
+        },
+      ];
+    }
+
+    // 기본 메시지
+    return [
+      {
+        id: "initial",
+        role: "assistant",
+        content: `${userProfile.repositoryUrl} 저장소에 대한 분석이 완료되었습니다! 아래에서 상세 리포트를 확인하실 수 있습니다.`,
+        timestamp: new Date(),
+      },
+    ];
+  };
+
+  const [messages, setMessages] = useState(getInitialMessages());
 
   const [analysisResult, setAnalysisResult] = useState(initialAnalysisResult);
   const [inputValue, setInputValue] = useState("");
@@ -165,8 +184,8 @@ const AnalysisChat = ({
       console.error("온보딩 플랜 생성 오류:", error);
       setPlanGenerateError(
         error.response?.data?.detail ||
-          error.message ||
-          "플랜 생성 중 오류가 발생했습니다."
+        error.message ||
+        "플랜 생성 중 오류가 발생했습니다."
       );
     } finally {
       setIsGeneratingPlan(false);
@@ -211,7 +230,7 @@ const AnalysisChat = ({
   // 비교 분석 핸들러
   const handleCompareAnalysis = async () => {
     const repositories = Array.from(selectedForCompare);
-    
+
     if (repositories.length !== 2) {
       const errorMessage = {
         id: `compare_error_${Date.now()}`,
@@ -303,22 +322,21 @@ const AnalysisChat = ({
           analysis.health_level === "good"
             ? "excellent"
             : analysis.health_level === "warning"
-            ? "moderate"
-            : "needs-attention",
+              ? "moderate"
+              : "needs-attention",
         contributionOpportunities: (apiResponse.recommended_issues || [])
           .length,
         estimatedImpact:
           (analysis.health_score || 0) >= 70
             ? "high"
             : (analysis.health_score || 0) >= 50
-            ? "medium"
-            : "low",
+              ? "medium"
+              : "low",
       },
       projectSummary:
         apiResponse.readme_summary ||
         analysis.summary_for_user ||
-        `이 저장소의 건강 점수는 ${
-          apiResponse.score || analysis.health_score
+        `이 저장소의 건강 점수는 ${apiResponse.score || analysis.health_score
         }점입니다.`,
       recommendations: [
         // 기존 actions
@@ -669,17 +687,17 @@ const AnalysisChat = ({
       const response = await sendChatMessage(
         userMessage,
         {
-          repoUrl: userProfile?.repositoryUrl,
+          repoUrl: analysisResult?.repositoryUrl || userProfile?.repositoryUrl,
           analysisResult: analysisResult
             ? {
-                health_score: analysisResult.summary?.score,
-                documentation_quality:
-                  analysisResult.technicalDetails?.documentationQuality,
-                activity_maintainability:
-                  analysisResult.technicalDetails?.activityMaintainability,
-                stars: analysisResult.technicalDetails?.stars,
-                forks: analysisResult.technicalDetails?.forks,
-              }
+              health_score: analysisResult.summary?.score,
+              documentation_quality:
+                analysisResult.technicalDetails?.documentationQuality,
+              activity_maintainability:
+                analysisResult.technicalDetails?.activityMaintainability,
+              stars: analysisResult.technicalDetails?.stars,
+              forks: analysisResult.technicalDetails?.forks,
+            }
             : null,
         },
         conversationHistory
@@ -705,17 +723,17 @@ const AnalysisChat = ({
       }));
 
     const context = {
-      repoUrl: userProfile?.repositoryUrl,
+      repoUrl: analysisResult?.repositoryUrl || userProfile?.repositoryUrl,
       analysisResult: analysisResult
         ? {
-            health_score: analysisResult.summary?.score,
-            documentation_quality:
-              analysisResult.technicalDetails?.documentationQuality,
-            activity_maintainability:
-              analysisResult.technicalDetails?.activityMaintainability,
-            stars: analysisResult.technicalDetails?.stars,
-            forks: analysisResult.technicalDetails?.forks,
-          }
+          health_score: analysisResult.summary?.score,
+          documentation_quality:
+            analysisResult.technicalDetails?.documentationQuality,
+          activity_maintainability:
+            analysisResult.technicalDetails?.activityMaintainability,
+          stars: analysisResult.technicalDetails?.stars,
+          forks: analysisResult.technicalDetails?.forks,
+        }
         : null,
     };
 
@@ -798,13 +816,18 @@ const AnalysisChat = ({
       setMessages((prev) => [...prev, analyzingMessage]);
 
       try {
-        // 실제 Backend API 호출
-        const apiResponse = await analyzeRepository(detectedUrl);
+        // 실제 Backend API 호출 (userMessage도 전달하여 온보딩 등 메타 에이전트 처리)
+        const apiResponse = await analyzeRepository(detectedUrl, userMessageContent);
         const newAnalysisResult = transformApiResponse(
           apiResponse,
           detectedUrl
         );
         setAnalysisResult(newAnalysisResult);
+
+        // 부모 컴포넌트(AnalyzePage)의 Report 영역도 업데이트
+        if (onAnalysisUpdate) {
+          onAnalysisUpdate(newAnalysisResult);
+        }
 
         // 히스토리에 추가
         addToHistory(newAnalysisResult);
@@ -979,13 +1002,13 @@ const AnalysisChat = ({
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder="궁금한 점을 물어보세요... (GitHub URL 입력 시 바로 분석)"
-                  disabled={isAnalyzing || isStreaming}
+                  disabled={isAnalyzing || isStreaming || isComparing}
                   className="flex-1 px-5 py-3 border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition-all disabled:bg-gray-100"
                 />
                 <button
                   onClick={handleSendMessage}
                   disabled={
-                    !inputValue.trim() || isTyping || isAnalyzing || isStreaming
+                    !inputValue.trim() || isTyping || isAnalyzing || isStreaming || isComparing
                   }
                   className="bg-blue-600 text-white p-3 rounded-2xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105"
                 >
@@ -1032,15 +1055,14 @@ const AnalysisChat = ({
                     <button
                       onClick={() => setShowCompareSelector(!showCompareSelector)}
                       disabled={isComparing || getUniqueRepositories().length < 2}
-                      className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                        isComparing
-                          ? "bg-purple-100 text-purple-600"
-                          : getUniqueRepositories().length < 2
+                      className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${isComparing
+                        ? "bg-purple-100 text-purple-600"
+                        : getUniqueRepositories().length < 2
                           ? "bg-gray-300 text-gray-500 cursor-not-allowed"
                           : showCompareSelector
-                          ? "bg-purple-700 text-white"
-                          : "bg-purple-600 hover:bg-purple-700 text-white"
-                      }`}
+                            ? "bg-purple-700 text-white"
+                            : "bg-purple-600 hover:bg-purple-700 text-white"
+                        }`}
                       title="저장소 비교 분석"
                     >
                       {isComparing ? (
@@ -1052,7 +1074,7 @@ const AnalysisChat = ({
                         <>1:1 비교</>
                       )}
                     </button>
-                    
+
                     {/* 비교 선택 패널 */}
                     {showCompareSelector && (
                       <div className="absolute right-0 top-full mt-2 w-72 bg-white rounded-xl shadow-xl border border-gray-200 z-50 overflow-hidden">
@@ -1064,9 +1086,8 @@ const AnalysisChat = ({
                           {getUniqueRepositories().map((item) => (
                             <label
                               key={item.key}
-                              className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-gray-50 transition-colors ${
-                                selectedForCompare.has(item.key) ? "bg-purple-50" : ""
-                              }`}
+                              className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:bg-gray-50 transition-colors ${selectedForCompare.has(item.key) ? "bg-purple-50" : ""
+                                }`}
                             >
                               <input
                                 type="checkbox"
@@ -1079,11 +1100,10 @@ const AnalysisChat = ({
                                 <p className="text-sm font-medium text-gray-800 truncate">{item.repo}</p>
                                 <p className="text-xs text-gray-500">{item.owner}</p>
                               </div>
-                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                                item.healthScore >= 70 ? "bg-green-100 text-green-700" :
+                              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${item.healthScore >= 70 ? "bg-green-100 text-green-700" :
                                 item.healthScore >= 40 ? "bg-yellow-100 text-yellow-700" :
-                                "bg-red-100 text-red-700"
-                              }`}>
+                                  "bg-red-100 text-red-700"
+                                }`}>
                                 {item.healthScore}점
                               </span>
                             </label>
@@ -1102,11 +1122,10 @@ const AnalysisChat = ({
                           <button
                             onClick={handleCompareAnalysis}
                             disabled={selectedForCompare.size !== 2}
-                            className={`flex-1 px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                              selectedForCompare.size === 2
-                                ? "bg-purple-600 text-white hover:bg-purple-700"
-                                : "bg-gray-300 text-gray-500 cursor-not-allowed"
-                            }`}
+                            className={`flex-1 px-3 py-1.5 text-sm rounded-lg transition-colors ${selectedForCompare.size === 2
+                              ? "bg-purple-600 text-white hover:bg-purple-700"
+                              : "bg-gray-300 text-gray-500 cursor-not-allowed"
+                              }`}
                           >
                             비교 시작
                           </button>
@@ -1117,11 +1136,10 @@ const AnalysisChat = ({
                   <button
                     onClick={goToPreviousAnalysis}
                     disabled={!canGoBack}
-                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                      canGoBack
-                        ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
-                        : "bg-gray-50 text-gray-300 cursor-not-allowed"
-                    }`}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${canGoBack
+                      ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                      : "bg-gray-50 text-gray-300 cursor-not-allowed"
+                      }`}
                   >
                     <ChevronLeft className="w-4 h-4" />
                     이전
@@ -1129,11 +1147,10 @@ const AnalysisChat = ({
                   <button
                     onClick={goToNextAnalysis}
                     disabled={!canGoForward}
-                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                      canGoForward
-                        ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
-                        : "bg-gray-50 text-gray-300 cursor-not-allowed"
-                    }`}
+                    className={`flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${canGoForward
+                      ? "bg-gray-100 hover:bg-gray-200 text-gray-700"
+                      : "bg-gray-50 text-gray-300 cursor-not-allowed"
+                      }`}
                   >
                     다음
                     <ChevronRight className="w-4 h-4" />
@@ -1146,22 +1163,6 @@ const AnalysisChat = ({
               analysisResult={analysisResult}
               isLoading={isAnalyzing}
             />
-
-            {/* 온보딩 플랜 섹션 - 분석 결과가 있을 때 항상 표시 */}
-            {analysisResult && (
-              <OnboardingPlanSection
-                plan={analysisResult.onboardingPlan}
-                userProfile={userProfile}
-                onTaskToggle={(week, taskIdx, completed) => {
-                  console.log(
-                    `Task toggled: Week ${week}, Task ${taskIdx}, Completed: ${completed}`
-                  );
-                }}
-                onGeneratePlan={handleGenerateOnboardingPlan}
-                isGenerating={isGeneratingPlan}
-                generateError={planGenerateError}
-              />
-            )}
           </div>
         </div>
       </div>
@@ -1181,11 +1182,10 @@ const ChatMessage = ({ message }) => {
       )}
 
       <div
-        className={`max-w-[80%] rounded-2xl px-5 py-3 break-words overflow-hidden ${
-          isUser
-            ? "bg-blue-600 text-white rounded-tr-none"
-            : "bg-gray-100 text-gray-900 rounded-tl-none"
-        }`}
+        className={`max-w-[80%] rounded-2xl px-5 py-3 break-words overflow-hidden ${isUser
+          ? "bg-blue-600 text-white rounded-tr-none"
+          : "bg-gray-100 text-gray-900 rounded-tl-none"
+          }`}
       >
         {isUser ? (
           <p className="whitespace-pre-wrap leading-relaxed break-words">

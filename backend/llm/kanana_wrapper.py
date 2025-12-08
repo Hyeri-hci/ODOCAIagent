@@ -60,6 +60,14 @@ class KananaWrapper:
         }
         level_desc = level_descriptions.get(experience_level, level_descriptions['beginner'])
         
+        # 난이도별 구체적 지침
+        level_guidelines = {
+            'beginner': '- good first issue나 docs 라벨의 쉬운 이슈로 시작하세요\n- 프로젝트 구조 이해와 환경 설정에 초점\n- 첫 PR은 문서 수정이나 간단한 버그 수정 권장',
+            'intermediate': '- help wanted, enhancement, bug 라벨의 이슈를 다루세요\n- 기능 개선이나 버그 수정에 초점\n- 코드 리뷰와 테스트 작성 경험을 쌓도록 계획\n- good first issue는 언급하지 마세요',
+            'advanced': '- core, architecture, performance, security 관련 이슈를 다루세요\n- 아키텍처 이해와 핵심 모듈 분석에 초점\n- 성능 최적화나 보안 개선 작업 권장\n- 입문자용 내용(good first issue 등)은 언급하지 마세요'
+        }
+        level_guideline = level_guidelines.get(experience_level, level_guidelines['beginner'])
+        
         system_prompt = (
             "당신은 오픈소스 프로젝트 온보딩을 도와주는 전문 멘토입니다. "
             "새로운 기여자를 위한 체계적인 온보딩 플랜을 한국어로 작성하세요. "
@@ -75,11 +83,12 @@ class KananaWrapper:
         user_prompt = (
             f"저장소: {repo_id}\n"
             f"프로젝트 요약: {diagnosis_summary}\n"
-            f"사용자 난이도: {level_desc}\n"
-            f"추천 이슈:\n{issues_text}\n\n"
-            f"위 정보를 바탕으로 {experience_level} 수준에 맞는 1-4주 온보딩 플랜을 한국어로 생성하세요.\n"
+            f"사용자 수준: {level_desc}\n\n"
+            f"**{experience_level.upper()} 레벨 지침:**\n{level_guideline}\n\n"
+            f"관련 이슈:\n{issues_text}\n\n"
+            f"위 정보를 바탕으로 {experience_level} 수준에 **맞는** 1-4주 온보딩 플랜을 한국어로 생성하세요.\n"
             "각 주차마다 명확한 목표와 구체적인 태스크를 포함하세요.\n"
-            "입문자의 경우 기초적인 내용부터, 숙련자의 경우 심화 내용을 포함하세요."
+            f"**중요: {experience_level} 레벨 지침을 반드시 따르세요.**"
         )
         
         last_error = None

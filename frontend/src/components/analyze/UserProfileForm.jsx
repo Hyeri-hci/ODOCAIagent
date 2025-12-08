@@ -1,10 +1,19 @@
 import React, { useState, useEffect } from "react";
-import { Github, Sparkles, ArrowRight, AlertCircle } from "lucide-react";
+import {
+  Github,
+  Sparkles,
+  ArrowRight,
+  AlertCircle,
+  Search,
+} from "lucide-react";
 
 const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
-  const [repositoryUrl, setRepositoryUrl] = useState("");
+  const [inputValue, setInputValue] = useState("");
+  const [userMessage, setUserMessage] = useState("");
+  const [priority, setPriority] = useState("thoroughness");
   const [validationError, setValidationError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const inputRef = React.useRef(null);
 
   // 외부 로딩 상태가 끝나면 (에러 발생 시) 제출 상태 해제
   useEffect(() => {
@@ -15,135 +24,182 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
 
   const isLoading = isSubmitting || externalLoading;
 
-  const validateGitHubUrl = (url) => {
-    const pattern = /^https?:\/\/(www\.)?github\.com\/[\w-]+\/[\w.-]+\/?$/;
-    const shortPattern = /^[\w-]+\/[\w.-]+$/;
-    return pattern.test(url.trim()) || shortPattern.test(url.trim());
-  };
+  // GitHub URL 추출 및 정규화 로직
+  const extractGitHubUrl = (text) => {
+    // 1. Full URL 패턴 (문장 중간에 있어도 찾음)
+    const urlPattern = /https?:\/\/(www\.)?github\.com\/[\w-]+\/[\w.-]+/g;
+    const urlMatch = text.match(urlPattern);
 
-  const normalizeGitHubUrl = (url) => {
-    const trimmed = url.trim();
-    if (trimmed.startsWith("http")) return trimmed;
-    return `https://github.com/${trimmed}`;
+    if (urlMatch) {
+      return { url: urlMatch[0], isFullUrl: true };
+    }
+
+    // 2. Short Pattern (owner/repo) - 전체 텍스트가 정확히 일치할 때만
+    const shortPattern = /^[\w-]+\/[\w.-]+$/;
+    if (shortPattern.test(text.trim())) {
+      return { url: `https://github.com/${text.trim()}`, isFullUrl: false };
+    }
+
+    return null;
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setValidationError("");
 
-    // 검증
-    if (!repositoryUrl.trim()) {
-      setValidationError("GitHub 저장소 URL을 입력해주세요.");
-      return;
-    }
+    const extracted = extractGitHubUrl(inputValue);
 
-    if (!validateGitHubUrl(repositoryUrl)) {
+    if (!extracted) {
       setValidationError(
-        "올바른 GitHub URL 형식이 아닙니다. (예: owner/repo 또는 https://github.com/owner/repo)"
+        "GitHub 저장소 URL이 포함되어 있지 않습니다. (예: https://github.com/owner/repo 또는 owner/repo)"
       );
       return;
     }
 
     setIsSubmitting(true);
 
-    // 제출
+    let message = "";
+    if (extracted.isFullUrl) {
+      message = inputValue.replace(extracted.url, "").trim();
+    }
+
     onSubmit({
-      repositoryUrl: normalizeGitHubUrl(repositoryUrl),
+      repositoryUrl: extracted.url,
+      message: message,
+      userMessage: userMessage,
+      priority: priority,
     });
   };
+
   return (
-    <div className="min-h-screen flex items-center justify-center py-12 px-4">
-      <div className="w-full max-w-2xl">
+    <div className="min-h-screen flex flex-col items-center justify-center py-12 px-4 bg-[#f8f9fa]">
+      <div className="w-full max-w-3xl">
         {/* Header */}
         <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-500/10 to-purple-500/10 backdrop-blur-sm px-4 py-2 rounded-full border border-blue-200/30 mb-6">
-            <Sparkles className="w-4 h-4 text-blue-600" />
-            <span className="text-sm font-semibold text-blue-700">
-              AI 기반 저장소 분석
-            </span>
+          {/* Logo or Brand */}
+          <div className="inline-flex items-center gap-2 mb-6">
+            <div className="w-10 h-10 bg-black rounded-xl flex items-center justify-center">
+              <Sparkles className="w-6 h-6 text-white" />
+            </div>
           </div>
 
-          <h1 className="text-5xl md:text-6xl font-black text-gray-900 mb-4 tracking-tight">
-            GitHub 저장소
-            <br />
-            <span className="text-blue-600">
-              분석하기
-            </span>
+          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-6 tracking-tight">
+            무엇을 도와드릴까요?
           </h1>
 
-          <p className="text-xl text-gray-600 max-w-xl mx-auto">
-            GitHub 저장소 URL을 입력하면 AI가 프로젝트 건강도, 리스크, 기여
-            기회를 분석합니다
+          <p className="text-lg text-gray-500 max-w-xl mx-auto">
+            GitHub 저장소 주소와 함께 궁금한 점을 자연스럽게 물어보세요.
           </p>
         </div>
 
         {/* Error Alert */}
         {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-2xl flex items-center gap-3">
+          <div className="mb-6 mx-auto max-w-2xl p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 animate-fade-in">
             <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
-            <p className="text-red-700">{error}</p>
+            <p className="text-sm text-red-700 font-medium">{error}</p>
           </div>
         )}
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-6">
-          {/* GitHub Repository URL */}
-          <div className="bg-white rounded-3xl p-8 shadow-lg border border-gray-100">
-            <label className="block text-2xl font-bold text-gray-900 mb-4">
-              GitHub 저장소
-            </label>
-            <div className="relative">
-              <Github className="absolute left-5 top-1/2 -translate-y-1/2 w-6 h-6 text-gray-400" />
-              <input
-                type="text"
-                value={repositoryUrl}
-                onChange={(e) => {
-                  setRepositoryUrl(e.target.value);
-                  setValidationError("");
-                }}
-                placeholder="owner/repo 또는 https://github.com/owner/repo"
-                className="w-full px-6 py-5 pl-16 text-lg border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition-all"
-                disabled={isLoading}
-              />
-            </div>
-            {validationError && (
-              <p className="mt-3 text-sm text-red-600 font-medium flex items-center gap-2">
-                <AlertCircle className="w-4 h-4" />
-                {validationError}
-              </p>
-            )}
-            <p className="mt-3 text-sm text-gray-500">
-              예:{" "}
-              <code className="bg-gray-100 px-2 py-1 rounded">
-                pallets/flask
-              </code>{" "}
-              또는{" "}
-              <code className="bg-gray-100 px-2 py-1 rounded">
-                https://github.com/facebook/react
-              </code>
+        {/* Validation Alert */}
+        {validationError && (
+          <div className="mb-6 mx-auto max-w-2xl p-4 bg-orange-50 border border-orange-100 rounded-xl flex items-center gap-3 animate-fade-in">
+            <AlertCircle className="w-5 h-5 text-orange-500 flex-shrink-0" />
+            <p className="text-sm text-orange-700 font-medium">
+              {validationError}
             </p>
           </div>
+        )}
 
-          {/* Submit Button */}
-          <div className="flex justify-center pt-4">
+        {/* Integrated Search Form */}
+        <form
+          onSubmit={handleSubmit}
+          className="relative max-w-2xl mx-auto group"
+        >
+          <div
+            className={`
+              relative flex items-center bg-white rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.08)] 
+              border-2 transition-all duration-300 cursor-text
+              ${
+                isLoading
+                  ? "border-gray-100 bg-gray-50"
+                  : "border-transparent hover:border-gray-200 focus-within:border-black focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.12)]"
+              }
+            `}
+            onClick={() => inputRef.current?.focus()}
+          >
+            {/* Icon */}
+            <div className="pl-6 text-gray-400">
+              {isLoading ? (
+                <div className="w-6 h-6 border-2 border-gray-300 border-t-black rounded-full animate-spin" />
+              ) : (
+                <Search className="w-6 h-6" />
+              )}
+            </div>
+
+            {/* Input */}
+            <input
+              ref={inputRef}
+              type="text"
+              value={inputValue}
+              onChange={(e) => {
+                setInputValue(e.target.value);
+                setValidationError("");
+              }}
+              placeholder="https://github.com/owner/repo 보안 취약점 분석해줘"
+              className="w-full px-4 py-6 text-lg bg-transparent border-none focus:ring-0 focus:outline-none placeholder:text-gray-400 text-gray-900"
+              disabled={isLoading}
+              autoFocus
+            />
+
+            {/* Submit Arrow */}
             <button
               type="submit"
-              disabled={isLoading}
-              className="group inline-flex items-center gap-3 bg-blue-600 text-white px-12 py-6 rounded-full text-xl font-bold hover:bg-blue-700 shadow-2xl hover:shadow-blue-500/50 hover:scale-105 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100"
+              disabled={isLoading || !inputValue.trim()}
+              className="mr-3 p-3 rounded-xl bg-gray-100 text-gray-500 hover:bg-black hover:text-white disabled:opacity-50 disabled:hover:bg-gray-100 disabled:hover:text-gray-500 transition-all duration-200"
+              onClick={(e) => e.stopPropagation()} // Prevent double focus trigger
             >
-              {isLoading ? (
-                <>
-                  <div className="w-6 h-6 border-3 border-white border-t-transparent rounded-full animate-spin" />
-                  분석 중...
-                </>
-              ) : (
-                <>
-                  분석 시작하기
-                  <ArrowRight className="w-6 h-6 group-hover:translate-x-1 transition-transform" />
-                </>
-              )}
+              <ArrowRight className="w-5 h-5" />
             </button>
           </div>
+
+          {/* Helper / Suggestion Chips */}
+          {!isLoading && (
+            <div className="mt-6 flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={() =>
+                  setInputValue(
+                    "https://github.com/pallets/flask 초보자가 기여하기 좋은 이슈 찾아줘"
+                  )
+                }
+                className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-gray-400 hover:bg-gray-50 transition-colors"
+              >
+                Flask 기여하기 좋은 이슈 추천
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setInputValue(
+                    "https://github.com/facebook/react 보안 취약점 분석해줘"
+                  )
+                }
+                className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-gray-400 hover:bg-gray-50 transition-colors"
+              >
+                React 보안 분석
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setInputValue(
+                    "https://github.com/django/django 구조랑 기술 스택 설명해줘"
+                  )
+                }
+                className="px-4 py-2 bg-white border border-gray-200 rounded-full text-sm text-gray-600 hover:border-gray-400 hover:bg-gray-50 transition-colors"
+              >
+                Django 구조 분석
+              </button>
+            </div>
+          )}
         </form>
       </div>
     </div>

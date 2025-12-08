@@ -18,14 +18,6 @@ def init_state_from_input(
     session_id: Optional[str] = None,
     load_context: bool = True,
 ) -> SupervisorState:
-    """
-    SupervisorInput을 기반으로 초기 SupervisorState를 생성합니다.
-    
-    Args:
-        inp: SupervisorInput 객체
-        session_id: 세션 식별자 (None이면 owner/repo 기반 생성)
-        load_context: True면 기존 대화 컨텍스트 로드
-    """
     effective_session_id = session_id or f"{inp.owner}/{inp.repo}"
     long_term_context = None
     
@@ -42,6 +34,7 @@ def init_state_from_input(
         owner=inp.owner,
         repo=inp.repo,
         user_context=inp.user_context,
+        user_message=inp.user_message,
         messages=[],
         step=0,
         max_step=10,
@@ -117,29 +110,19 @@ def run_supervisor_diagnosis(
     repo: str,
     ref: str = "main",
     use_llm_summary: bool = True,
-    debug_trace: bool = False
+    debug_trace: bool = False,
+    user_message: Optional[str] = None,
+    priority: str = "thoroughness",
+    task_type: str = "diagnose_repo",
 ) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
-    """
-    Supervisor를 통해 저장소 진단을 실행하는 엔트리 포인트.
-    
-    Args:
-        owner: GitHub 저장소 소유자
-        repo: 저장소 이름
-        ref: 브랜치 또는 커밋 (기본: main)
-        use_llm_summary: LLM 요약 사용 여부
-        debug_trace: 노드 실행 추적 활성화 여부
-        
-    Returns:
-        tuple: (diagnosis_result, error_msg, trace)
-            - trace는 debug_trace=True일 때만 포함됨
-    """
 
-    task_info = f"task=diagnose_repo owner={owner} repo={repo} ref={ref}"
-    logger.info(f"[{task_info}] Starting diagnosis (LLM Summary: {use_llm_summary}, Trace: {debug_trace})")
+
+    task_info = f"task={task_type} owner={owner} repo={repo} ref={ref}"
+    logger.info(f"[{task_info}] Starting diagnosis (LLM Summary: {use_llm_summary}, Trace: {debug_trace}, UserMessage: {user_message}, Priority: {priority})")
     
     # 메트릭 추적 시작
     tracker = get_metrics_tracker()
-    metrics = tracker.start_task("diagnose_repo", owner, repo)
+    metrics = tracker.start_task(task_type, owner, repo)
     
     # 1. 그래프 생성
     graph = get_supervisor_graph()
@@ -155,13 +138,16 @@ def run_supervisor_diagnosis(
     
     # SupervisorInput 생성
     inp = SupervisorInput(
-        task_type="diagnose_repo",
+        task_type=task_type,
         owner=owner,
         repo=repo,
-        user_context={"use_llm_summary": use_llm_summary}
+        user_context={"use_llm_summary": use_llm_summary},
+        user_message=user_message,
     )
     
     initial_state = init_state_from_input(inp)
+    # 메타 에이전트 필드 설정
+    initial_state.priority = priority
     
     # 4. 그래프 실행
     result = graph.invoke(initial_state, config=config)
@@ -196,11 +182,15 @@ def run_supervisor_diagnosis(
     # 6. Trace 수집
     trace = trace_handler.get_trace() if trace_handler else None
     
-    # 7. diagnosis_result에 agentic 메타데이터 병합
+    # 7. diagnosis_result에 메타데이터 병합
     diagnosis_result = result.get("diagnosis_result")
     if diagnosis_result and isinstance(diagnosis_result, dict):
         diagnosis_result["warnings"] = result.get("warnings", [])
         diagnosis_result["flow_adjustments"] = result.get("flow_adjustments", [])
+        # 메타 에이전트 필드 포함
+        diagnosis_result["task_plan"] = result.get("task_plan")
+        diagnosis_result["task_results"] = result.get("task_results")
+        diagnosis_result["chat_response"] = result.get("chat_response")
     
     return diagnosis_result, error_msg, trace
 
@@ -256,9 +246,6 @@ def run_supervisor_onboarding(
 ) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
     """
     온보딩 플랜 생성을 실행하는 엔트리 포인트.
-    
-    Returns: (result_dict, error_msg, trace)
-        result_dict includes: diagnosis, onboarding_plan, onboarding_summary, candidate_issues
     """
     task_info = f"task=build_onboarding_plan owner={owner} repo={repo}"
     logger.info(f"[{task_info}] Starting onboarding plan generation (Trace: {debug_trace})")

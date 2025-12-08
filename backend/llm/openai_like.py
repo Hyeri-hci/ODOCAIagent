@@ -1,4 +1,5 @@
 from __future__ import annotations
+from openai import APIError, APITimeoutError
 
 import time
 import logging
@@ -23,7 +24,7 @@ class OpenAILikeClient(LLMClient):
         api_base: str | None = None,
         api_key: str | None = None,
         default_model: str | None = None,
-        max_retries: int = 3,
+        max_retries: int = 2,  # 빠른 실패를 위해 2회로 제한
         retry_delay: float = 1.0,
     ) -> None:
         self.api_base = api_base or LLM_API_BASE
@@ -53,7 +54,7 @@ class OpenAILikeClient(LLMClient):
     ) -> List[Dict[str, str]]:
         return [{"role": m.role, "content": m.content} for m in messages]
     
-    def chat(self, request: ChatRequest, timeout: int = 60) -> ChatResponse:
+    def chat(self, request: ChatRequest, timeout: int = 300) -> ChatResponse:
         model = request.model or self.default_model
         messages = self._convert_messages(request.messages)
 
@@ -74,9 +75,12 @@ class OpenAILikeClient(LLMClient):
                 
                 return ChatResponse(content=content, raw=raw)
                 
-            except Exception as e:
-                last_error = ConnectionError(f"LLM request failed: {e}")
+            except (APIError, APITimeoutError) as e:
+                last_error = ConnectionError(f"LLM request failed: {type(e).__name__}: {e}")
                 logger.warning(f"[LLM] Error (attempt {attempt + 1}/{self.max_retries}): {e}")
+
+            except Exception as e:
+                last_error = ConnectionError(f"Unexpected LLM error: {e}")
             
             # If not the last attempt, wait and retry
             if attempt < self.max_retries - 1:
