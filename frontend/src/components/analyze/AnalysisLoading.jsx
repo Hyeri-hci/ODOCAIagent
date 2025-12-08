@@ -7,7 +7,7 @@ const ANALYSIS_STEPS = [
   { id: "docs", label: "문서 품질 분석 중", icon: FileText, progress: 35 },
   { id: "activity", label: "활동성 분석 중", icon: Activity, progress: 55 },
   { id: "structure", label: "구조 분석 중", icon: Code, progress: 70 },
-  { id: "scoring", label: "건강도 점수 계산 중", icon: BookOpen, progress: 85 },
+  { id: "scoring", label: "분석 결과 종합 중", icon: BookOpen, progress: 85 },
   { id: "quality", label: "AI가 결과 품질 검사 중", icon: Sparkles, progress: 92 },
   { id: "llm", label: "AI 요약 생성 중", icon: Sparkles, progress: 97 },
   { id: "complete", label: "분석 완료", icon: CheckCircle, progress: 100 },

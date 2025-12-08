@@ -40,6 +40,7 @@ class AnalyzeResponse(BaseModel):
     task_plan: Optional[List[Dict[str, Any]]] = None
     task_results: Optional[Dict[str, Any]] = None
     chat_response: Optional[str] = None
+    onboarding_plan: Optional[List[Dict[str, Any]]] = None  # 온보딩 플랜
 
 
 def parse_github_url(url: str) -> tuple[str, str, str]:
@@ -193,6 +194,11 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
         task_plan=data.get("task_plan"),
         task_results=data.get("task_results"),
         chat_response=data.get("chat_response"),
+        # 온보딩 플랜 (task_results 또는 직접 전달)
+        onboarding_plan=(
+            data.get("task_results", {}).get("onboarding", {}).get("onboarding_plan") or
+            data.get("onboarding_plan")
+        ),
     )
     
     # user_message 없는 경우만 캐시에 저장
@@ -927,8 +933,8 @@ async def analyze_repository_stream_get(
                 progress_updates = [
                     ("structure", 55, "구조 분석 중..."),
                     ("structure", 65, "의존성 분석 중..."),
-                    ("scoring", 75, "건강도 점수 계산 중..."),
-                    ("scoring", 82, "온보딩 점수 계산 중..."),
+                    ("scoring", 75, "분석 결과 종합 중..."),
+                    ("scoring", 82, "AI가 플랜 생성 중..."),
                 ]
                 
                 for step, pct, msg in progress_updates:

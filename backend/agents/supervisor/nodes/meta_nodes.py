@@ -558,44 +558,13 @@ def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
         # 온보딩 플랜
         onboarding_plan = onboarding_data.get("onboarding_plan", [])
         if onboarding_plan:
-            for week in onboarding_plan:
-                week_num = week.get("week", "?")
-                report_lines.append(f"\n### {week_num}주차")
-                
-                goals = week.get("goals", [])
-                if goals:
-                    report_lines.append("**목표:**")
-                    for goal in goals:
-                        report_lines.append(f"- {goal}")
-                
-                tasks = week.get("tasks", [])
-                if tasks:
-                    report_lines.append("**할 일:**")
-                    for task in tasks:
-                        report_lines.append(f"- {task}")
+            weeks_count = len(onboarding_plan)
+            # 간단한 안내 메시지만 반환 (상세 내용은 프론트엔드 Report에서 표시)
+            final_answer = f"{state.owner}/{state.repo} 저장소에 대한 **{weeks_count}주 온보딩 가이드**가 생성되었습니다!\n\n오른쪽 Report 영역에서 상세 플랜을 확인하세요."
+        else:
+            final_answer = "온보딩 가이드 생성 중 문제가 발생했습니다."
         
-        # 추천 이슈
-        candidate_issues = onboarding_data.get("candidate_issues", [])
-        if candidate_issues:
-            report_lines.append("\n### 추천 이슈 (Good First Issue)")
-            for issue in candidate_issues[:5]:
-                num = issue.get("number", "?")
-                title = issue.get("title", "제목 없음")
-                url = issue.get("url", "")
-                labels = issue.get("labels", [])
-                label_str = ", ".join(labels[:2]) if labels else ""
-                if url:
-                    report_lines.append(f"- [#{num}]({url}): {title} ({label_str})")
-                else:
-                    report_lines.append(f"- #{num}: {title} ({label_str})")
-        
-        # 온보딩 요약
-        if onboarding_data.get("onboarding_summary"):
-            report_lines.append(f"\n### 요약\n{onboarding_data['onboarding_summary']}")
-        
-        final_answer = "\n".join(report_lines) if report_lines else "온보딩 가이드가 생성되었습니다."
-        
-        logger.info("Final answer generated (onboard intent, no extra LLM call)")
+        logger.info("Final answer generated (onboard intent, simple message)")
         
         return {
             "chat_response": final_answer,

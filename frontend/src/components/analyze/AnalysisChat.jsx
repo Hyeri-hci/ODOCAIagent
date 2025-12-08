@@ -1163,22 +1163,6 @@ const AnalysisChat = ({
               analysisResult={analysisResult}
               isLoading={isAnalyzing}
             />
-
-            {/* 온보딩 플랜 섹션 - 분석 결과가 있을 때 항상 표시 */}
-            {analysisResult && (
-              <OnboardingPlanSection
-                plan={analysisResult.onboardingPlan}
-                userProfile={userProfile}
-                onTaskToggle={(week, taskIdx, completed) => {
-                  console.log(
-                    `Task toggled: Week ${week}, Task ${taskIdx}, Completed: ${completed}`
-                  );
-                }}
-                onGeneratePlan={handleGenerateOnboardingPlan}
-                isGenerating={isGeneratingPlan}
-                generateError={planGenerateError}
-              />
-            )}
           </div>
         </div>
       </div>
