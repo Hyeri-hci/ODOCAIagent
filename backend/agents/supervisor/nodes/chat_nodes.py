@@ -57,6 +57,7 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
     from backend.llm.base import ChatRequest, ChatMessage
     from backend.common.config import LLM_MODEL_NAME
     from backend.common.cache import analysis_cache
+    from backend.agents.supervisor.intent_parser import resolve_repo, get_analyzed_repos
     import re
 
     intent = state.detected_intent
@@ -86,6 +87,37 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
     context_repo_url = context.get("repo_url") or context.get("repoUrl")
     logger.info(f"Chat context repo_url={context_repo_url}, state.owner={state.owner}, state.repo={state.repo}")
     
+    # 1. LLM 파서에서 추출한 repo_hint가 있으면 우선 사용 (하이브리드 매칭)
+    if state.parsed_repo_hint:
+        analyzed_repos = get_analyzed_repos()
+        resolved = resolve_repo(
+            repo_hint=state.parsed_repo_hint,
+            analyzed_repos=analyzed_repos,
+            message=message,
+        )
+        if resolved:
+            parts = resolved.split("/")
+            if len(parts) >= 2:
+                chat_owner, chat_repo = parts[0], parts[1]
+                logger.info(f"Resolved repo from LLM hint '{state.parsed_repo_hint}' -> {chat_owner}/{chat_repo}")
+                
+                # 해당 레포의 캐시된 진단 결과 로드
+                cached = analysis_cache.get_analysis(chat_owner, chat_repo, "main")
+                if cached:
+                    diagnosis = cached
+                    candidate_issues = cached.get("recommended_issues", []) or []
+                    logger.info(f"Loaded diagnosis from resolved repo: {chat_owner}/{chat_repo}")
+    
+    # 2. context_repo_url 기반 (LLM 파서에서 repo를 찾지 못한 경우)
+    if 'chat_owner' not in dir() or not chat_owner:
+        if context_repo_url:
+            chat_owner, chat_repo = parse_github_url(context_repo_url)
+            logger.info(f"Parsed from context: {chat_owner}/{chat_repo}")
+        else:
+            chat_owner, chat_repo = state.owner, state.repo
+            logger.info(f"Using state fallback: {chat_owner}/{chat_repo}")
+
+    # 3. 메시지에서 다른 저장소 이름 언급 감지 (기존 regex 기반 - fallback)
     # 메시지에서 다른 저장소 이름 언급 감지
     def extract_repo_from_message(msg: str):
         """메시지에서 저장소 이름 추출 (e.g., 'OSSDoctor에서 기여하는 법')"""
@@ -103,15 +135,9 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
         return None
     
     mentioned_repo = extract_repo_from_message(message) if message else None
-    
-    if context_repo_url:
-        chat_owner, chat_repo = parse_github_url(context_repo_url)
-        logger.info(f"Parsed from context: {chat_owner}/{chat_repo}")
-    else:
-        chat_owner, chat_repo = state.owner, state.repo
-        logger.info(f"Using state fallback: {chat_owner}/{chat_repo}")
 
     # 메시지에서 언급된 저장소와 현재 컨텍스트 저장소가 다른 경우, 캐시에서 해당 저장소 찾기
+
     if mentioned_repo and chat_repo and mentioned_repo.lower() != chat_repo.lower():
         # mentioned_repo가 owner/repo 형식인지 확인
         if "/" in mentioned_repo:

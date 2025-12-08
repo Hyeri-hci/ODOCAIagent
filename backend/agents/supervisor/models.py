@@ -121,3 +121,9 @@ class SupervisorState(BaseModel):
     chat_response: Optional[str] = None
     chat_context: Dict[str, Any] = {}
 
+    # 14) LLM 파서 결과 (Global Intent Parser)
+    parsed_repo_hint: Optional[str] = None
+    parsed_target_metric: Optional[str] = None
+    parsed_options: Dict[str, Any] = {}
+    follow_up: bool = False
+
