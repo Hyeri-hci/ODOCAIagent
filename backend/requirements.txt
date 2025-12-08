@@ -8,3 +8,4 @@ pytest
 fastapi
 uvicorn[standard]
 pydantic
+langchain-openai>=0.1.0

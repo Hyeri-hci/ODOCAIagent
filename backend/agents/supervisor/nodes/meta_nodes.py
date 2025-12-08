@@ -1,6 +1,6 @@
 """메타 에이전트 노드."""
 from __future__ import annotations
-
+import asyncio 
 import json
 import logging
 from typing import Any, Dict, cast
@@ -243,13 +243,12 @@ def create_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
             "step": 1, "agent": "diagnosis", "mode": default_mode,
             "condition": "always", "description": "저장소 진단"
         })
-            # [Future] 조건부 보안 분석 예시 (현재 실행하지 않음)
-            # if "security" not in user_prefs.get("ignore", []):
-            #     plan.append({
-            #         "step": 2, "agent": "security", "mode": "FAST",
-            #         "condition": "if diagnosis.health_score < 50",
-            #         "description": "조건부 보안 분석"
-            #     })
+        if "security" not in user_prefs.get("ignore", []):
+            plan.append({
+                "step": 2, "agent": "security", "mode": "FAST",
+                "condition": "if diagnosis.health_score < 50",
+                "description": "조건부 보안 분석"
+            })
         # [Future] 추천 예시 (현재 실행하지 않음)
         # plan.append({
         #     "step": 3, "agent": "recommend", "mode": "AUTO",
@@ -258,14 +257,12 @@ def create_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
     elif global_intent == "security":
         plan.extend([
             {"step": 1, "agent": "diagnosis", "mode": "FAST", "condition": "always"},
-        # [Future]
-            # {"step": 2, "agent": "security", "mode": "FULL", "condition": "always"},
-            # {"step": 3, "agent": "recommend", "mode": "AUTO", "condition": "always"},
+            {"step": 2, "agent": "security", "mode": "FULL", "condition": "always"},  # 활성화
         ])
     elif global_intent == "full_audit":
         plan.extend([
             {"step": 1, "agent": "diagnosis", "mode": "FULL", "condition": "always"},
-        # [Future]
+            # [Future]
             # {"step": 2, "agent": "security", "mode": "FULL", "condition": "always"},
             # {"step": 3, "agent": "recommend", "mode": "FULL", "condition": "always"},
         ])
@@ -387,13 +384,47 @@ def _run_diagnosis_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
 
 
 def _run_security_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
-    """Security 실행 (스텁)."""
-    from backend.agents.security.service import analyze_repository
-    
+    """Security Agent V2 실행."""
+    from backend.common.config import (
+        SECURITY_LLM_BASE_URL,
+        SECURITY_LLM_API_KEY,
+        SECURITY_LLM_MODEL,
+        SECURITY_LLM_TEMPERATURE,
+    )
+
+    if not all([SECURITY_LLM_BASE_URL, SECURITY_LLM_API_KEY]):
+        logger.error("Security LLM settings not configured")
+        return {"error": "Security LLM settings not configured"}
+
     try:
-        return analyze_repository(owner=state.owner, repo=state.repo)
+        from backend.agents.security.agent.security_agent_v2 import SecurityAgentV2
+
+        execution_mode = "fast" if mode == "FAST" else "intelligent"
+        agent = SecurityAgentV2(
+            llm_base_url=SECURITY_LLM_BASE_URL,
+            llm_api_key=SECURITY_LLM_API_KEY,
+            llm_model=SECURITY_LLM_MODEL,
+            llm_temperature=SECURITY_LLM_TEMPERATURE,
+            execution_mode=execution_mode,
+        )
+
+        user_request = f"{state.owner}/{state.repo} 프로젝트의 보안 취약점을 분석해줘"
+
+        async def _run_async():
+            return await agent.analyze(user_request=user_request)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            result = asyncio.run(_run_async())
+        else:
+            fut = asyncio.run_coroutine_threadsafe(_run_async(), loop)
+            result = fut.result(timeout=300)
+
+        return result
+
     except Exception as e:
-        logger.error(f"Security failed: {e}")
+        logger.error(f"Security Agent V2 failed: {e}")
         return {"error": str(e)}
 
 
