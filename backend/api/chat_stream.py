@@ -92,12 +92,16 @@ def _invoke_supervisor_chat(
         if len(parts) >= 2:
             owner, repo = parts[-2], parts[-1]
     
+    # chat_context에 repo_url 포함 (chat_nodes.py에서 올바른 캐시 조회를 위해)
+    chat_ctx = analysis_context.copy() if analysis_context else {}
+    chat_ctx["repo_url"] = repo_url
+    
     initial_state = SupervisorState(
         task_type="diagnose_repo",
         owner=owner or "unknown",
         repo=repo or "unknown",
         chat_message=message,
-        chat_context=analysis_context or {},
+        chat_context=chat_ctx,
         user_context={"message": message},
     )
     
@@ -116,20 +120,6 @@ def _invoke_supervisor_chat(
 async def chat_stream(request: ChatStreamRequest):
     """
     AI 어시스턴트와 스트리밍 채팅.
-    
-    SSE를 통해 토큰 단위로 응답을 전송합니다.
-    타이핑 효과를 위해 약간의 딜레이가 추가됩니다.
-    
-    이벤트 형식:
-    - type: "token" | "done" | "error"
-    - content: 토큰 내용
-    - is_fallback: LLM 실패 시 fallback 응답 여부
-    
-    예시:
-    ```
-    data: {"type": "token", "content": "안녕", "is_fallback": false}
-    data: {"type": "token", "content": "하세요", "is_fallback": false}
-    data: {"type": "done", "content": "", "is_fallback": false}
     ```
     """
     return StreamingResponse(

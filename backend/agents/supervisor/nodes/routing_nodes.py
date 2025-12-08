@@ -27,6 +27,13 @@ INTENT_KEYWORDS = {
     "compare": ["비교", "compare", "vs", "차이", "difference", "versus"],
 }
 
+# 경험 수준 키워드
+SKILL_LEVEL_KEYWORDS = {
+    "beginner": ["초보", "초급", "입문", "처음", "beginner", "newbie", "starter", "first", "시작"],
+    "intermediate": ["중급", "중간", "intermediate", "experienced", "경험"],
+    "advanced": ["고급", "전문", "advanced", "expert", "senior", "숙련"],
+}
+
 # 분석 깊이 임계값 설정
 ANALYSIS_DEPTH_THRESHOLDS = {
     "deep": {
@@ -191,7 +198,20 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
     warnings = []
     cache_hit = False
     
-    user_exp = state.user_context.get("experience_level", "beginner")
+    # 경험 수준 감지: 1) 메시지 키워드 → 2) user_context → 3) 기본값 beginner
+    user_exp = state.user_context.get("experience_level")
+    if not user_exp:
+        # 메시지에서 경험 수준 키워드 탐색
+        user_msg = state.chat_message or state.user_context.get("message", "")
+        if user_msg:
+            user_msg_lower = user_msg.lower()
+            for level, keywords in SKILL_LEVEL_KEYWORDS.items():
+                if any(kw in user_msg_lower for kw in keywords):
+                    user_exp = level
+                    logger.info(f"Skill level detected from message: {level}")
+                    break
+        if not user_exp:
+            user_exp = "beginner"  # 기본값
     
     if intent == "diagnose":
         if state.use_cache:
@@ -210,8 +230,7 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
         if state.chat_message and (state.diagnosis_result or state.chat_context):
             next_node = "chat_response_node"
             reason = "Intent is onboard with chat message, routing to chat response"
-            if user_exp == "beginner":
-                adjustments.append("beginner_friendly_plan")
+            # beginner_friendly_plan은 아래에서 일괄 추가 (중복 방지)
         elif state.use_cache:
             cached = _check_cache(state.owner, state.repo)
             if cached:
@@ -224,8 +243,14 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
         else:
             next_node = "run_diagnosis_node"
             reason = f"Intent is onboard, starting with diagnosis for {state.owner}/{state.repo}"
+        
+        # 경험 수준에 따른 플랜 조정 (한 번만 추가)
         if user_exp == "beginner":
             adjustments.append("beginner_friendly_plan")
+        elif user_exp == "intermediate":
+            adjustments.append("intermediate_contributor_plan")
+        elif user_exp == "advanced":
+            adjustments.append("advanced_contributor_plan")
     elif intent == "compare":
         next_node = "batch_diagnosis_node"
         reason = f"Intent is compare, processing {len(state.compare_repos)} repositories"

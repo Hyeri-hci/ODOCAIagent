@@ -47,6 +47,20 @@ def run_diagnosis_node(state: SupervisorState) -> dict:
         # 분석 깊이 정보를 결과에 추가
         result_dict["analysis_depth_used"] = analysis_depth
         
+        # API 호환성을 위해 중첩된 점수를 최상위로 추출
+        docs_data = result_dict.get("docs", {})
+        activity_data = result_dict.get("activity", {})
+        result_dict["documentation_quality"] = docs_data.get("total_score", 0)
+        result_dict["activity_maintainability"] = activity_data.get("total_score", 0)
+        
+        # 활동성 메트릭 추출
+        result_dict["days_since_last_commit"] = activity_data.get("days_since_last_commit")
+        result_dict["total_commits_30d"] = activity_data.get("total_commits_30d", 0)
+        result_dict["unique_contributors"] = activity_data.get("unique_contributors", 0)
+        result_dict["issue_close_rate"] = activity_data.get("issue_close_rate", 0)
+        result_dict["median_pr_merge_days"] = activity_data.get("median_pr_merge_days")
+        result_dict["open_issues_count"] = activity_data.get("open_issues_count", 0)
+        
         logger.info(
             f"Diagnosis completed for {state.owner}/{state.repo}: "
             f"health_score={output.health_score}, depth={analysis_depth}"

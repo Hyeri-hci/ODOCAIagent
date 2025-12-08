@@ -211,23 +211,10 @@ def get_supervisor_graph():
     """컴파일된 Supervisor 그래프 반환 (Checkpointer 포함)."""
     graph = build_supervisor_graph()
     
-    # Checkpointer 설정
-    try:
-        from langgraph.checkpoint.sqlite import SqliteSaver
-        import sqlite3
-        
-        # SqliteSaver는 sqlite3.Connection 객체를 직접 받음
-        conn = sqlite3.connect("odo_state.db", check_same_thread=False)
-        checkpointer = SqliteSaver(conn)
-        logger.info("Using SqliteSaver for state persistence.")
-    except ImportError:
-        logger.warning("SqliteSaver not found. Using MemorySaver.")
-        from langgraph.checkpoint.memory import MemorySaver
-        checkpointer = MemorySaver()
-    except Exception as e:
-        logger.warning(f"Failed to create SqliteSaver: {e}. Using MemorySaver instead.")
-        from langgraph.checkpoint.memory import MemorySaver
-        checkpointer = MemorySaver()
+    # MemorySaver 사용 (SqliteSaver 대신 - sqlite 미사용)
+    from langgraph.checkpoint.memory import MemorySaver
+    checkpointer = MemorySaver()
+    logger.info("Using MemorySaver for state persistence.")
 
     return graph.compile(checkpointer=checkpointer)
 

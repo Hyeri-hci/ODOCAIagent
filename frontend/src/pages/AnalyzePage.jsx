@@ -154,7 +154,9 @@ const AnalyzePage = () => {
     const repoUrl = userProfile?.repositoryUrl || sseResult?.repo_id || "";
 
     // SSE 결과를 캐시에 저장 (채팅에서 같은 URL 입력시 재사용)
-    const cacheData = { ...sseResult, analysis: sseResult };
+    // sseResult가 이미 { analysis: {...} } 구조인 경우 이중 래핑 방지
+    const analysisData = sseResult.analysis || sseResult;
+    const cacheData = { ...sseResult, analysis: analysisData };
     setCachedAnalysis(repoUrl, cacheData);
     console.log("[SSE] Cached result for:", repoUrl);
 

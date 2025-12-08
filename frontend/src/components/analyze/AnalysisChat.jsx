@@ -669,7 +669,7 @@ const AnalysisChat = ({
       const response = await sendChatMessage(
         userMessage,
         {
-          repoUrl: userProfile?.repositoryUrl,
+          repoUrl: analysisResult?.repositoryUrl || userProfile?.repositoryUrl,
           analysisResult: analysisResult
             ? {
                 health_score: analysisResult.summary?.score,
@@ -705,7 +705,7 @@ const AnalysisChat = ({
       }));
 
     const context = {
-      repoUrl: userProfile?.repositoryUrl,
+      repoUrl: analysisResult?.repositoryUrl || userProfile?.repositoryUrl,
       analysisResult: analysisResult
         ? {
             health_score: analysisResult.summary?.score,
@@ -979,13 +979,13 @@ const AnalysisChat = ({
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyPress={handleKeyPress}
                   placeholder="궁금한 점을 물어보세요... (GitHub URL 입력 시 바로 분석)"
-                  disabled={isAnalyzing || isStreaming}
+                  disabled={isAnalyzing || isStreaming || isComparing}
                   className="flex-1 px-5 py-3 border-2 border-gray-200 rounded-2xl focus:border-blue-500 focus:outline-none transition-all disabled:bg-gray-100"
                 />
                 <button
                   onClick={handleSendMessage}
                   disabled={
-                    !inputValue.trim() || isTyping || isAnalyzing || isStreaming
+                    !inputValue.trim() || isTyping || isAnalyzing || isStreaming || isComparing
                   }
                   className="bg-blue-600 text-white p-3 rounded-2xl hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:scale-105"
                 >

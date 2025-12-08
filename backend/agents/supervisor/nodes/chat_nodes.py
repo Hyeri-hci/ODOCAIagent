@@ -43,7 +43,11 @@ ODOC은 오픈소스 프로젝트의 건강 상태를 분석하는 시스템입�
 - 40-59점: Fair (보통)
 - 40점 미만: Poor (미흡)
 
-사용자 질문에 위 기준을 바탕으로 정확하게 답변하세요.
+[중요 지침]
+- 사용자 질문에 위 기준을 바탕으로 정확하게 답변하세요.
+- 반드시 현재 분석 중인 저장소에 대해서만 답변하세요.
+- 다른 저장소(예: Flask, React, Django 등)를 예시로 사용하지 마세요.
+- 현재 저장소의 실제 분석 결과를 기반으로 답변하세요.
 """
 
 
@@ -53,21 +57,99 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
     from backend.llm.base import ChatRequest, ChatMessage
     from backend.common.config import LLM_MODEL_NAME
     from backend.common.cache import analysis_cache
+    import re
 
     intent = state.detected_intent
     message = state.chat_message or ""
     context = state.chat_context or {}
+    
+    # diagnosis 우선순위: 1) state.diagnosis_result → 2) chat_context.analysisResult
     diagnosis = state.diagnosis_result or {}
+    if not diagnosis and context.get("analysisResult"):
+        # 프론트엔드에서 전달한 analysisResult 사용 (캐시 미스 시 폴백)
+        diagnosis = context.get("analysisResult")
+        logger.info("Using analysisResult from chat_context as diagnosis fallback")
+    
     candidate_issues = list(state.candidate_issues)
 
-    if not diagnosis and state.owner and state.owner != "unknown":
-        cached = analysis_cache.get_analysis(state.owner, state.repo, "main")
+    # repo_url에서 owner/repo 파싱 (chat_context에서 우선 사용)
+    def parse_github_url(url: str):
+        """GitHub URL에서 owner, repo 추출."""
+        if not url:
+            return None, None
+        match = re.match(r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+        if match:
+            return match.group(1), match.group(2)
+        return None, None
+
+    # chat_context의 repo_url을 우선 사용
+    context_repo_url = context.get("repo_url") or context.get("repoUrl")
+    logger.info(f"Chat context repo_url={context_repo_url}, state.owner={state.owner}, state.repo={state.repo}")
+    
+    # 메시지에서 다른 저장소 이름 언급 감지
+    def extract_repo_from_message(msg: str):
+        """메시지에서 저장소 이름 추출 (e.g., 'OSSDoctor에서 기여하는 법')"""
+        import re as re_module
+        patterns = [
+            r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:에서|에|의|을|를)",  # owner/repo 형식
+            r"([A-Za-z][A-Za-z0-9_.-]{2,})(?:에서|에|의|을|를|는|로)",  # repo 이름만 (최소 3글자, 알파벳으로 시작)
+        ]
+        for pattern in patterns:
+            match = re_module.search(pattern, msg)
+            if match:
+                repo_name = match.group(1)
+                logger.info(f"Extracted repo name from message: {repo_name}")
+                return repo_name
+        return None
+    
+    mentioned_repo = extract_repo_from_message(message) if message else None
+    
+    if context_repo_url:
+        chat_owner, chat_repo = parse_github_url(context_repo_url)
+        logger.info(f"Parsed from context: {chat_owner}/{chat_repo}")
+    else:
+        chat_owner, chat_repo = state.owner, state.repo
+        logger.info(f"Using state fallback: {chat_owner}/{chat_repo}")
+
+    # 메시지에서 언급된 저장소와 현재 컨텍스트 저장소가 다른 경우, 캐시에서 해당 저장소 찾기
+    if mentioned_repo and chat_repo and mentioned_repo.lower() != chat_repo.lower():
+        # mentioned_repo가 owner/repo 형식인지 확인
+        if "/" in mentioned_repo:
+            m_owner, m_repo = mentioned_repo.split("/", 1)
+        else:
+            m_owner, m_repo = None, mentioned_repo
+        
+        # 캐시에서 해당 저장소 찾기 (전체 캐시 검색)
+        cached_for_mentioned = None
+        if m_owner:
+            cached_for_mentioned = analysis_cache.get_analysis(m_owner, m_repo, "main")
+        else:
+            # owner가 없으면 repo 이름으로 검색 (간단한 휴리스틱: 전체 캐시에서 repo 이름 매칭)
+            all_cached = analysis_cache._analyses if hasattr(analysis_cache, '_analyses') else {}
+            for key, cached_data in all_cached.items():
+                if m_repo.lower() in key.lower():
+                    cached_for_mentioned = cached_data.get('data')
+                    parts = key.split('/')
+                    if len(parts) >= 2:
+                        m_owner = parts[0]
+                        m_repo = parts[1].split('@')[0]  # Remove @branch
+                    break
+        
+        if cached_for_mentioned:
+            logger.info(f"Found mentioned repo in cache: {m_owner}/{m_repo}, switching context")
+            chat_owner, chat_repo = m_owner, m_repo
+            diagnosis = cached_for_mentioned
+            candidate_issues = cached_for_mentioned.get("recommended_issues", []) or []
+
+    # 캐시에서 진단 결과 로드 (chat_context 기반 owner/repo 사용)
+    if not diagnosis and chat_owner and chat_owner != "unknown":
+        cached = analysis_cache.get_analysis(chat_owner, chat_repo, "main")
         if cached:
             diagnosis = cached
-            logger.info(f"Chat loaded cached diagnosis for {state.owner}/{state.repo}")
+            logger.info(f"Chat loaded cached diagnosis for {chat_owner}/{chat_repo}")
             candidate_issues = cached.get("recommended_issues", []) or []
 
-    logger.info(f"Chat response: intent={intent}, message={message[:50]}, has_diagnosis={bool(diagnosis)}...")
+    logger.info(f"Chat response: intent={intent}, message={message[:50] if message else ''}, has_diagnosis={bool(diagnosis)}, repo={chat_owner}/{chat_repo}")
 
     try:
         client = fetch_llm_client()
