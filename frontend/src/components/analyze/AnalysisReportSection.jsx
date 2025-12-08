@@ -154,22 +154,13 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
 
       {/* 온보딩 가이드 (onboardingPlan이 있을 때 표시) */}
       {analysisResult.onboardingPlan && analysisResult.onboardingPlan.length > 0 && (
-        <CollapsibleCard
-          title="온보딩 가이드"
-          icon={<BookOpen className="w-5 h-5 text-indigo-600" />}
-          subtitle={`${analysisResult.onboardingPlan.length}주 학습 플랜`}
-          isExpanded={expandedSections.onboarding}
-          onToggle={() => toggleSection("onboarding")}
-          headerBg="bg-gradient-to-r from-indigo-50 to-purple-50"
-        >
-          <OnboardingPlanSection
-            plan={analysisResult.onboardingPlan}
-            userProfile={{ repositoryUrl: analysisResult.repositoryUrl }}
-          />
-        </CollapsibleCard>
+        <OnboardingPlanSection
+          plan={analysisResult.onboardingPlan}
+          userProfile={{ repositoryUrl: analysisResult.repositoryUrl }}
+        />
       )}
 
-      {/* 종합 점수 및 Repository Statistics */}
+      {/* 종합 점수 및 Repository Statistics (항상 표시) */}
       <CollapsibleCard
         title="분석 결과 리포트"
         isExpanded={expandedSections.overview}

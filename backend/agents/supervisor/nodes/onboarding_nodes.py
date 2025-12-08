@@ -10,18 +10,31 @@ from backend.common.github_client import fetch_beginner_issues
 def fetch_issues_node(state: SupervisorState) -> Dict[str, Any]:
     """
     GitHub 이슈 수집 노드.
-    good first issue, help wanted 라벨이 붙은 이슈를 GitHub API로 수집.
+    경험 레벨에 따라 적절한 라벨의 이슈를 GitHub API로 수집.
     """
     import logging
     logger = logging.getLogger(__name__)
+    
+    # 경험 레벨에 따른 라벨 설정
+    exp_level = (state.user_preferences or {}).get("experience_level", "beginner")
+    
+    label_map = {
+        "beginner": ["good first issue", "help wanted", "beginner", "easy", "starter", "first-timers-only", "docs"],
+        "intermediate": ["help wanted", "enhancement", "bug", "feature", "improvement"],
+        "advanced": ["core", "architecture", "performance", "security", "critical", "priority"],
+    }
+    labels = label_map.get(exp_level, label_map["beginner"])
+    
+    logger.info(f"Fetching issues for {state.owner}/{state.repo} with experience_level={exp_level}")
     
     try:
         issues = fetch_beginner_issues(
             owner=state.owner,
             repo=state.repo,
+            labels=labels,
             max_count=10
         )
-        logger.info(f"Fetched {len(issues)} beginner issues for {state.owner}/{state.repo}")
+        logger.info(f"Fetched {len(issues)} issues for {state.owner}/{state.repo} (level={exp_level})")
         return {"candidate_issues": issues}
     except Exception as e:
         logger.warning(f"Failed to fetch issues: {e}. Using empty list.")

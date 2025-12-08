@@ -998,8 +998,12 @@ async def analyze_repository_stream_get(
                 "readme_summary": data.get("summary_for_user"),
                 # 최상위 레벨에도 chat_response 추가 (프론트엔드 호환)
                 "chat_response": result.get("chat_response"),
-                # 온보딩 플랜 (task_results에서 추출)
-                "onboarding_plan": result.get("task_results", {}).get("onboarding", {}).get("onboarding_plan"),
+                # 온보딩 플랜 (여러 경로에서 추출 시도)
+                "onboarding_plan": (
+                    result.get("task_results", {}).get("onboarding", {}).get("onboarding_plan") or
+                    result.get("onboarding_plan") or
+                    data.get("onboarding_plan")
+                ),
             }
             
             # 캐시에 저장

@@ -58,6 +58,27 @@ def _detect_onboard_intent(message: str) -> bool:
     return False
 
 
+def _extract_experience_level(message: str) -> str:
+    """메시지에서 경험 레벨 추출. beginner/intermediate/advanced 반환."""
+    if not message:
+        return "beginner"
+    msg_lower = message.lower()
+    
+    # 중급/고급 키워드 감지
+    intermediate_keywords = ["중급", "intermediate", "중간", "보통", "일반"]
+    advanced_keywords = ["고급", "advanced", "숙련", "전문가", "expert", "senior", "시니어"]
+    
+    for kw in advanced_keywords:
+        if kw in msg_lower:
+            return "advanced"
+    
+    for kw in intermediate_keywords:
+        if kw in msg_lower:
+            return "intermediate"
+    
+    # 기본값: 초보/beginner
+    return "beginner"
+
 def _extract_github_repo(message: str) -> tuple[str, str] | None:
     """메시지에서 GitHub 저장소 정보 추출. (owner, repo) 반환."""
     import re
@@ -101,12 +122,21 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
     
     # 1. 키워드 기반 onboard 의도 우선 감지 (LLM 호출 전)
     if _detect_onboard_intent(user_msg):
-        logger.info(f"Onboard intent detected via keyword matching: '{user_msg[:50]}...'")
+        # 경험 레벨에 따른 포커스 설정
+        exp_level = _extract_experience_level(user_msg)
+        focus_map = {
+            "beginner": ["beginner-friendly", "good first issue", "easy"],
+            "intermediate": ["help wanted", "enhancement", "bug"],
+            "advanced": ["core", "architecture", "performance", "security"],
+        }
+        focus = focus_map.get(exp_level, focus_map["beginner"])
+        
+        logger.info(f"Onboard intent detected via keyword matching: '{user_msg[:50]}...', experience_level={exp_level}")
         result = {
             "global_intent": "onboard",
             "detected_intent": "onboard",
             "task_type": "build_onboarding_plan",
-            "user_preferences": {"focus": ["beginner-friendly", "good first issue"], "ignore": []},
+            "user_preferences": {"focus": focus, "ignore": [], "experience_level": exp_level},
             "priority": "thoroughness",
             "step": state.step + 1,
         }

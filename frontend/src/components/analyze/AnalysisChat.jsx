@@ -17,6 +17,7 @@ const USE_STREAM_MODE = true;
 const AnalysisChat = ({
   userProfile,
   analysisResult: initialAnalysisResult,
+  onAnalysisUpdate,  // 새 분석 결과를 부모로 전달하는 콜백
 }) => {
   // 초기 메시지: onboardingPlan이 있으면 간단한 안내, 없으면 기본 메시지
   const getInitialMessages = () => {
@@ -815,13 +816,18 @@ const AnalysisChat = ({
       setMessages((prev) => [...prev, analyzingMessage]);
 
       try {
-        // 실제 Backend API 호출
-        const apiResponse = await analyzeRepository(detectedUrl);
+        // 실제 Backend API 호출 (userMessage도 전달하여 온보딩 등 메타 에이전트 처리)
+        const apiResponse = await analyzeRepository(detectedUrl, userMessageContent);
         const newAnalysisResult = transformApiResponse(
           apiResponse,
           detectedUrl
         );
         setAnalysisResult(newAnalysisResult);
+
+        // 부모 컴포넌트(AnalyzePage)의 Report 영역도 업데이트
+        if (onAnalysisUpdate) {
+          onAnalysisUpdate(newAnalysisResult);
+        }
 
         // 히스토리에 추가
         addToHistory(newAnalysisResult);

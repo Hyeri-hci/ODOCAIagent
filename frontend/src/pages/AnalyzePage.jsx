@@ -219,6 +219,7 @@ const AnalyzePage = () => {
         <AnalysisChat
           userProfile={userProfile}
           analysisResult={analysisResult}
+          onAnalysisUpdate={setAnalysisResult}
         />
       )}
     </div>
