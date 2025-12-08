@@ -18,14 +18,6 @@ def init_state_from_input(
     session_id: Optional[str] = None,
     load_context: bool = True,
 ) -> SupervisorState:
-    """
-    SupervisorInput을 기반으로 초기 SupervisorState를 생성합니다.
-    
-    Args:
-        inp: SupervisorInput 객체
-        session_id: 세션 식별자 (None이면 owner/repo 기반 생성)
-        load_context: True면 기존 대화 컨텍스트 로드
-    """
     effective_session_id = session_id or f"{inp.owner}/{inp.repo}"
     long_term_context = None
     

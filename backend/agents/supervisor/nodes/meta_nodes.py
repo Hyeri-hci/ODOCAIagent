@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Dict, Any
+from typing import Any, Dict, cast
 
-from backend.agents.supervisor.models import SupervisorState
+from backend.agents.supervisor.models import SupervisorState, TaskType
 from backend.agents.shared.agent_mode import AgentMode, AgentModeLiteral
 from backend.llm.factory import fetch_llm_client
 from backend.llm.base import ChatRequest, ChatMessage
 from backend.common.config import LLM_MODEL_NAME
+from backend.agents.supervisor.nodes.routing_nodes import INTENT_TO_TASK_TYPE
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,14 @@ def _predict(prompt: str) -> str:
         raise
 
 
+def _map_intent_to_task_type(intent: str, fallback: TaskType) -> TaskType:
+    """LLM이 반환한 intent를 TaskType으로 정규화."""
+    mapped = INTENT_TO_TASK_TYPE.get(intent)
+    if mapped in ("diagnose_repo", "build_onboarding_plan", "general_inquiry"):
+        return cast(TaskType, mapped)
+    return fallback
+
+
 def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
     """사용자 메시지에서 상위 의도 추출."""
     user_msg = state.user_message or state.chat_message or ""
@@ -50,7 +59,7 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
 
 다음 JSON 형식으로 추출:
 {{
-  "task_type": "chat|diagnose|security|recommend|compare|full_audit",
+  "task_type": "chat|diagnose|onboard|security|recommend|compare|full_audit",
   "user_preferences": {{"focus": [], "ignore": []}},
   "priority": "speed|thoroughness",
   "initial_mode_hint": "FAST|FULL|null"
@@ -59,6 +68,8 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
 규칙:
 - 요청 유형이 "diagnose_repo"이면 기본적으로 "diagnose" 의도 (메시지가 없어도)
 - repo 언급 + 분석/진단/보안/추천/비교 → repo 작업
+- onboarding 언급 + 분석/진단/보안/추천/비교 → onboarding 작업
+- compare 언급 + 분석/진단/보안/추천/비교 → compare 작업
 - 그 외 메시지만 있고 요청 유형이 없으면 → chat
 - "간단히/빨리" → speed/FAST
 - "자세히/깊게" → thoroughness/FULL
@@ -69,17 +80,24 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
         parsed = json.loads(response)
         
         logger.info(f"Parsed intent: {parsed}")
+        global_intent = parsed.get("task_type", "chat")
+        mapped_task_type = _map_intent_to_task_type(global_intent, state.task_type)
         
         return {
-            "global_intent": parsed.get("task_type", "chat"),
+            "global_intent": global_intent,
+            "detected_intent": global_intent,
+            "task_type": mapped_task_type,
             "user_preferences": parsed.get("user_preferences", {"focus": [], "ignore": []}),
             "priority": parsed.get("priority", "thoroughness"),
             "step": state.step + 1,
         }
     except Exception as e:
         logger.error(f"Intent parsing failed: {e}")
+        fallback_intent = "chat"
         return {
-            "global_intent": "chat",
+            "global_intent": fallback_intent,
+            "detected_intent": fallback_intent,
+            "task_type": state.task_type,
             "user_preferences": {"focus": [], "ignore": []},
             "priority": "thoroughness",
             "step": state.step + 1,
@@ -142,6 +160,13 @@ def create_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
         # [Future]
             # {"step": 2, "agent": "recommend", "mode": "FULL", "condition": "always"},
         ])
+    elif global_intent == "onboard":
+        plan.extend([
+            {"step": 1, "agent": "diagnosis", "mode": "FAST", "condition": "always", "description": "저장소 구조 파악"},
+            {"step": 2, "agent": "onboarding", "mode": "AUTO", "condition": "always", "description": "기여 가이드 및 추천"},
+        ])
+
+    
     
     logger.info(f"Created plan: {len(plan)} steps")
     return {
@@ -178,6 +203,9 @@ def execute_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
         elif agent_name == "recommend":
             result = _run_recommend_agent(state, mode)
             task_results["recommend"] = _extract_recommend_summary(result)
+        elif agent_name == "onboarding":
+            result = _run_onboarding_agent(state, mode)
+            task_results["onboarding"] = result
     
     logger.info(f"Plan executed: {list(task_results.keys())}")
     return {
@@ -409,3 +437,36 @@ def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
             "error": str(e),
             "step": state.step + 1,
         }
+
+def _run_onboarding_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
+    """온보딩(Onboarding) 에이전트 실행 헬퍼."""
+    from backend.agents.supervisor.nodes.onboarding_nodes import (
+        fetch_issues_node, 
+        plan_onboarding_node
+    )
+    
+    logger.info(f"Running Onboarding Agent ({mode})")
+    
+    try:
+        temp_state = state.model_copy()
+        
+        issues_update = fetch_issues_node(temp_state)
+
+        if isinstance(issues_update, dict):
+            for k, v in issues_update.items():
+                if hasattr(temp_state, k):
+                    setattr(temp_state, k, v)
+        
+        plan_update = plan_onboarding_node(temp_state)
+        
+        return {
+            "onboarding_plan": plan_update.get("onboarding_plan"),
+            "onboarding_summary": plan_update.get("onboarding_summary"),
+            "candidate_issues": getattr(temp_state, "candidate_issues", []),
+            "summary": "온보딩 플랜 생성 완료"
+        }
+    except Exception as e:
+        logger.error(f"Onboarding execution failed: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"error": str(e)}

@@ -475,7 +475,7 @@ async def chat_with_assistant(request: ChatRequest) -> ChatResponse:
     
     # ChatService 호출
     service = get_chat_service()
-    response = service.chat(service_request, timeout=60)
+    response = service.chat(service_request, timeout=300)
     
     return ChatResponse(
         ok=response.ok,
@@ -533,10 +533,10 @@ async def compare_repositories(request: CompareRequest) -> CompareResponse:
         config = {"configurable": {"thread_id": f"compare_{owner}/{repo}"}}
         
         inp = SupervisorInput(
-            task_type="diagnose_repo",
+            task_type="general_inquiry",
             owner=owner,
             repo=repo,
-            user_context={"intent": "compare"}
+            user_context={"intent": "compare"},
         )
         
         initial_state = init_state_from_input(inp)
@@ -724,7 +724,7 @@ async def analyze_repository_stream(request: StreamingAnalyzeRequest):
                         await asyncio.sleep(1.5)
                 
                 # 결과 대기
-                result = future.result(timeout=120)
+                result = future.result(timeout=300)
             
             # 결과 처리
             if result is None:
@@ -820,6 +820,8 @@ async def analyze_repository_stream(request: StreamingAnalyzeRequest):
 @router.get("/analyze/stream")
 async def analyze_repository_stream_get(
     repo_url: str,
+    user_message: Optional[str] = None,  
+    priority: str = "thoroughness",          
     analysis_depth: Optional[str] = None,
 ):
     """
@@ -881,16 +883,22 @@ async def analyze_repository_stream_get(
             # Supervisor 그래프 실행 준비
             graph = get_supervisor_graph()
             config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
-            
+
             user_context = {"use_llm_summary": True}
+            user_context["priority"] = priority
+
+            if user_message:
+                user_context["user_message"] = user_message
+            
             if analysis_depth:
                 user_context["analysis_depth"] = analysis_depth
             
             inp = SupervisorInput(
-                task_type="diagnose_repo",
+                task_type="general_inquiry",
                 owner=owner,
                 repo=repo,
                 user_context=user_context,
+                user_message=user_message,
             )
             
             initial_state = init_state_from_input(inp)
@@ -916,7 +924,7 @@ async def analyze_repository_stream_get(
                         yield send_event(step, pct, msg)
                         await asyncio.sleep(1.2)
                 
-                result = future.result(timeout=120)
+                result = future.result(timeout=300)
             
             # 품질 검사
             yield send_event("quality", 90, "AI가 결과 품질 검사 중...")
@@ -996,4 +1004,3 @@ async def analyze_repository_stream_get(
             "Access-Control-Allow-Origin": "*",
         }
     )
-

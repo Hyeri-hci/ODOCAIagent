@@ -87,13 +87,13 @@ def _handle_diagnose_repo(
     )
     
     if error_msg:
-        response = {"ok": False, "task_type": "diagnose_repo", "error": error_msg}
+        response = {"ok": False, "task_type": task_type, "error": error_msg}
         if debug_trace and trace:
             response["trace"] = trace
         return response
         
     if not result:
-        response = {"ok": False, "task_type": "diagnose_repo", "error": "Diagnosis result is None"}
+        response = {"ok": False, "task_type": task_type, "error": "Diagnosis result is None"}
         if debug_trace and trace:
             response["trace"] = trace
         return response
@@ -104,7 +104,7 @@ def _handle_diagnose_repo(
     
     response = {
         "ok": True,
-        "task_type": "diagnose_repo",
+        "task_type": task_type,
         "data": dto.to_dict()
     }
     
@@ -142,4 +142,3 @@ def _handle_onboarding_plan(
         response["trace"] = trace
     
     return response
-

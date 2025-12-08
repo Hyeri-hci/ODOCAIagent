@@ -17,6 +17,12 @@ TASK_TYPE_TO_INTENT = {
 INTENT_TO_TASK_TYPE = {
     "diagnose": "diagnose_repo",
     "onboard": "build_onboarding_plan",
+    "compare": "general_inquiry",
+    "explain": "general_inquiry",
+    "chat": "general_inquiry",
+    "security": "general_inquiry",
+    "full_audit": "general_inquiry",
+    "recommend": "general_inquiry",
 }
 
 # 의도 추론을 위한 키워드
@@ -127,6 +133,10 @@ def map_task_type_to_intent(task_type: str) -> str:
 
 def infer_intent_from_context(state: SupervisorState) -> Tuple[str, float]:
     """user_context, chat_message 또는 task_type에서 의도 추론."""
+    intent_override = state.user_context.get("intent") or state.global_intent
+    if isinstance(intent_override, str) and intent_override:
+        return intent_override, 0.9
+    
     # 채팅 메시지가 있으면 우선 사용
     user_msg = state.chat_message or state.user_context.get("message", "")
     

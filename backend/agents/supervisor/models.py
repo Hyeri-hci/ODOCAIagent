@@ -64,7 +64,7 @@ class OnboardingUserContext(BaseModel):
 class TaskStep(BaseModel):
     """메타 에이전트 실행 단계."""
     step: int
-    agent: Literal["diagnosis", "security", "recommend", "chat"]
+    agent: Literal["diagnosis", "security", "recommend", "chat", "onboarding", "compare"]
     mode: str = "auto"
     condition: str = "always"
     description: Optional[str] = None
@@ -114,7 +114,7 @@ class SupervisorState(BaseModel):
 
     # 8) 품질 검사 및 재실행
     rerun_count: int = 0
-    max_rerun: int = 2
+    max_rerun: int = 3
     quality_issues: List[str] = []
 
     # 9) 캐시 제어
