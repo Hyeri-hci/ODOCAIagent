@@ -50,6 +50,26 @@ def _invoke_chain(prompt: ChatPromptTemplate, params: Dict[str, Any]) -> str:
         raise
 
 
+async def _ainvoke_chain(prompt: ChatPromptTemplate, params: Dict[str, Any]) -> str:
+    """LangChain 체인 파이프라인 비동기 호출."""
+    try:
+        llm = _get_llm()
+        chain = prompt | llm
+        response = await chain.ainvoke(params)
+        content = response.content.strip()
+        
+        # JSON 포맷팅 제거
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+            
+        return content
+    except Exception as e:
+        logger.error(f"Async chain invoke failed: {e}")
+        raise
+
+
 def _extract_json(content: str) -> Dict[str, Any]:
     """LLM 응답에서 JSON 추출."""
     json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
@@ -213,6 +233,88 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
             "step": state.step + 1,
         }
         # 새 저장소가 감지된 경우 업데이트
+        if new_owner and new_repo_name:
+            result["owner"] = new_owner
+            result["repo"] = new_repo_name
+        return result
+
+
+async def parse_supervisor_intent_async(state: SupervisorState) -> Dict[str, Any]:
+    """사용자 메시지에서 상위 의도 추출 (비동기 버전)."""
+    user_msg = state.user_message or state.chat_message or ""
+    
+    # 메시지에서 새 저장소 URL 추출
+    new_repo = _extract_github_repo(user_msg)
+    new_owner, new_repo_name = None, None
+    if new_repo:
+        extracted_owner, extracted_repo = new_repo
+        if (extracted_owner.lower() != (state.owner or "").lower() or 
+            extracted_repo.lower() != (state.repo or "").lower()):
+            new_owner, new_repo_name = extracted_owner, extracted_repo
+            logger.info(f"New repository detected in message: {new_owner}/{new_repo_name}")
+    
+    # 키워드 기반 onboard 의도 우선 감지
+    if _detect_onboard_intent(user_msg):
+        exp_level = _extract_experience_level(user_msg)
+        focus_map = {
+            "beginner": ["beginner-friendly", "good first issue", "easy"],
+            "intermediate": ["help wanted", "enhancement", "bug"],
+            "advanced": ["core", "architecture", "performance", "security"],
+        }
+        focus = focus_map.get(exp_level, focus_map["beginner"])
+        
+        logger.info(f"Onboard intent detected via keyword matching: '{user_msg[:50]}...', experience_level={exp_level}")
+        result = {
+            "global_intent": "onboard",
+            "detected_intent": "onboard",
+            "task_type": "build_onboarding_plan",
+            "user_preferences": {"focus": focus, "ignore": [], "experience_level": exp_level},
+            "priority": "thoroughness",
+            "step": state.step + 1,
+        }
+        if new_owner and new_repo_name:
+            result["owner"] = new_owner
+            result["repo"] = new_repo_name
+        return result
+    
+    # LLM 기반 의도 분류 (비동기 호출)
+    response = None
+    try:
+        response = await _ainvoke_chain(INTENT_PARSE_PROMPT, {
+            "user_message": user_msg,
+            "task_type": state.task_type,
+            "owner": state.owner or "",
+            "repo": state.repo or "",
+        })
+        parsed = json.loads(response)
+        
+        logger.info(f"Parsed intent (async): {parsed}")
+        global_intent = parsed.get("task_type", "chat")
+        mapped_task_type = _map_intent_to_task_type(global_intent, state.task_type)
+        
+        result = {
+            "global_intent": global_intent,
+            "detected_intent": global_intent,
+            "task_type": mapped_task_type,
+            "user_preferences": parsed.get("user_preferences", {"focus": [], "ignore": []}),
+            "priority": parsed.get("priority", "thoroughness"),
+            "step": state.step + 1,
+        }
+        if new_owner and new_repo_name:
+            result["owner"] = new_owner
+            result["repo"] = new_repo_name
+        return result
+    except Exception as e:
+        logger.error(f"Intent parsing failed (async): {e}, raw_response={response!r}")
+        fallback_intent = "chat"
+        result = {
+            "global_intent": fallback_intent,
+            "detected_intent": fallback_intent,
+            "task_type": state.task_type,
+            "user_preferences": {"focus": [], "ignore": []},
+            "priority": "thoroughness",
+            "step": state.step + 1,
+        }
         if new_owner and new_repo_name:
             result["owner"] = new_owner
             result["repo"] = new_repo_name
@@ -798,3 +900,174 @@ def _run_onboarding_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
         import traceback
         logger.error(traceback.format_exc())
         return {"error": str(e)}
+
+
+async def reflect_supervisor_async(state: SupervisorState) -> Dict[str, Any]:
+    """계획 반성 및 재조정 (비동기 버전)."""
+    skip_replan_intents = {
+        "diagnose",
+        "recommend",
+        "onboard",
+        "compare",
+        "security",
+        "full_audit",
+    }
+    if (
+        not state.user_context.get("enable_replan")
+        and state.global_intent in skip_replan_intents
+    ):
+        return {
+            "reflection_summary": f"{state.global_intent} intent: skip replan",
+            "next_node_override": "finalize_supervisor_answer",
+            "step": state.step + 1,
+        }
+
+    if state.replan_count >= state.max_replan:
+        logger.info("Max replan reached")
+        return {
+            "reflection_summary": "재계획 제한 도달",
+            "next_node_override": "finalize_supervisor_answer",
+            "step": state.step + 1,
+        }
+    
+    # LLM 기반 자기 점검 (비동기 호출)
+    response = None
+    try:
+        response = await _ainvoke_chain(REFLECTION_PROMPT, {
+            "task_plan": json.dumps(state.task_plan, ensure_ascii=False),
+            "task_results": json.dumps(state.task_results, ensure_ascii=False),
+            "user_preferences": json.dumps(state.user_preferences, ensure_ascii=False),
+        })
+        reflection = json.loads(response)
+        
+        should_replan = reflection.get("should_replan", False)
+        plan_adjustments = reflection.get("plan_adjustments", [])
+        reflection_summary = reflection.get("reflection_summary", "")
+        
+        if should_replan and plan_adjustments:
+            new_plan = list(state.task_plan)
+            for adj in plan_adjustments:
+                if adj.get("action") == "append":
+                    new_step = adj.get("step")
+                    if new_step:
+                        new_step["step"] = len(new_plan) + 1
+                        new_plan.append(new_step)
+            
+            return {
+                "task_plan": new_plan,
+                "replan_count": state.replan_count + 1,
+                "reflection_summary": reflection_summary,
+                "next_node_override": "execute_supervisor_plan",
+                "step": state.step + 1,
+            }
+        else:
+            return {
+                "reflection_summary": reflection_summary,
+                "next_node_override": "finalize_supervisor_answer",
+                "step": state.step + 1,
+            }
+    except Exception as e:
+        logger.error(f"Reflection failed (async): {e}, raw_response={response!r}")
+        return {
+            "reflection_summary": f"자기 점검 실패: {e}",
+            "next_node_override": "finalize_supervisor_answer",
+            "step": state.step + 1,
+        }
+
+
+async def finalize_supervisor_answer_async(state: SupervisorState) -> Dict[str, Any]:
+    """최종 응답 생성 (비동기 버전)."""
+    task_results = state.task_results or {}
+    reflection = state.reflection_summary or ""
+    
+    diagnosis_data = task_results.get("diagnosis", {})
+    onboarding_data = task_results.get("onboarding", {})
+    
+    if state.global_intent == "onboard" and onboarding_data:
+        report_lines = []
+        
+        if diagnosis_data:
+            health = diagnosis_data.get("health_score", "N/A")
+            onboard_score = diagnosis_data.get("onboarding_score", "N/A")
+            report_lines.append(f"## 저장소 진단 결과")
+            report_lines.append(f"- **Health Score**: {health}")
+            report_lines.append(f"- **Onboarding Score**: {onboard_score}")
+            if diagnosis_data.get("summary"):
+                report_lines.append(f"\n{diagnosis_data['summary']}")
+            report_lines.append("")
+        
+        report_lines.append("## 온보딩 가이드")
+        
+        onboarding_plan = onboarding_data.get("onboarding_plan", [])
+        if onboarding_plan:
+            weeks_count = len(onboarding_plan)
+            final_answer = f"{state.owner}/{state.repo} 저장소에 대한 **{weeks_count}주 온보딩 가이드**가 생성되었습니다!\n\n오른쪽 Report 영역에서 상세 플랜을 확인하세요."
+        else:
+            final_answer = "온보딩 가이드 생성 중 문제가 발생했습니다."
+        
+        logger.info("Final answer generated (async, onboard intent)")
+        
+        return {
+            "chat_response": final_answer,
+            "last_answer_kind": "report",
+            "diagnosis_result": diagnosis_data,
+            "step": state.step + 1,
+        }
+    
+    # security intent: LLM 호출 없이 직접 마크다운 보고서 생성
+    security_data = task_results.get("security", {})
+    if state.global_intent == "security" and security_data:
+        report = _generate_security_report(state, diagnosis_data, security_data)
+        logger.info("Final answer generated (async, security intent)")
+        
+        return {
+            "chat_response": report,
+            "last_answer_kind": "report",
+            "diagnosis_result": diagnosis_data,
+            "step": state.step + 1,
+        }
+    
+    # 그 외 intent: LLM으로 보고서 생성 (비동기 호출)
+    try:
+        final_answer = await _ainvoke_chain(FINALIZE_REPORT_PROMPT, {
+            "task_results": json.dumps(task_results, indent=2, ensure_ascii=False),
+            "reflection_summary": reflection,
+        })
+        logger.info("Final answer generated via LLM (async)")
+        
+        return {
+            "chat_response": final_answer,
+            "last_answer_kind": "report",
+            "diagnosis_result": diagnosis_data,
+            "step": state.step + 1,
+        }
+    except Exception as e:
+        logger.error(f"Final answer failed (async): {e}")
+        fallback = "분석 완료.\n\n"
+
+        if diagnosis_data:
+            fallback += (
+                "**진단 요약**\n"
+                f"- Health Score: {diagnosis_data.get('health_score', 'N/A')}\n"
+                f"- Onboarding Score: {diagnosis_data.get('onboarding_score', 'N/A')}\n\n"
+            )
+
+        security_data = task_results.get("security")
+        if security_data:
+            fallback += "**보안 요약**\n"
+            fallback += f"- Risk Level: {security_data.get('risk_level', 'N/A')}\n"
+            fallback += f"- Vulnerabilities: {security_data.get('vuln_count', 'N/A')}개\n"
+            score = security_data.get("security_score")
+            grade = security_data.get("grade")
+            if score is not None or grade is not None:
+                fallback += f"- Security Score: {score} (Grade: {grade})\n"
+            fallback += "\n"
+
+        return {
+            "chat_response": fallback,
+            "last_answer_kind": "report",
+            "diagnosis_result": diagnosis_data,
+            "error": str(e),
+            "step": state.step + 1,
+        }
+

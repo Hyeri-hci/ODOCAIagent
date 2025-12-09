@@ -286,3 +286,133 @@ def run_supervisor_onboarding(
     }
     return output, None, trace
 
+
+# =============================================================================
+# 비동기 버전
+# =============================================================================
+
+async def run_supervisor_diagnosis_async(
+    owner: str,
+    repo: str,
+    ref: str = "main",
+    use_llm_summary: bool = True,
+    debug_trace: bool = False,
+    user_message: Optional[str] = None,
+    priority: str = "thoroughness",
+    task_type: str = "diagnose_repo",
+) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
+    """비동기 Supervisor 진단 실행."""
+    from backend.agents.supervisor.graph import get_supervisor_graph_async
+
+    task_info = f"task={task_type} owner={owner} repo={repo} ref={ref}"
+    logger.info(f"[{task_info}] Starting async diagnosis")
+    
+    tracker = get_metrics_tracker()
+    metrics = tracker.start_task(task_type, owner, repo)
+    
+    # 비동기 그래프 사용
+    graph = get_supervisor_graph_async()
+    
+    config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
+    
+    trace_handler = None
+    if debug_trace:
+        trace_handler = TracingCallbackHandler()
+        config["callbacks"] = [trace_handler]
+    
+    inp = SupervisorInput(
+        task_type=task_type,
+        owner=owner,
+        repo=repo,
+        user_context={"use_llm_summary": use_llm_summary},
+        user_message=user_message,
+    )
+    
+    initial_state = init_state_from_input(inp)
+    initial_state.priority = priority
+    
+    # 비동기 그래프 실행
+    result = await graph.ainvoke(initial_state, config=config)
+    
+    if result is None:
+        result = {}
+    elif hasattr(result, "model_dump"):
+        result = result.model_dump()
+    elif not isinstance(result, dict):
+        result = {}
+    
+    error_msg = result.get("error")
+    if error_msg:
+        logger.error(f"[{task_info}] Async diagnosis failed: {error_msg}")
+        metrics.complete(success=False, error=error_msg)
+    else:
+        logger.info(f"[{task_info}] Async diagnosis completed successfully")
+        metrics.complete(success=True)
+    
+    metrics.detected_intent = result.get("detected_intent")
+    metrics.decision_reason = result.get("decision_reason")
+    metrics.flow_adjustments = result.get("flow_adjustments", [])
+    metrics.cache_hit = result.get("cache_hit", False)
+    metrics.rerun_count = result.get("rerun_count", 0)
+    
+    tracker.record_task(metrics)
+    trace = trace_handler.get_trace() if trace_handler else None
+    
+    diagnosis_result = result.get("diagnosis_result")
+    if diagnosis_result and isinstance(diagnosis_result, dict):
+        diagnosis_result["warnings"] = result.get("warnings", [])
+        diagnosis_result["flow_adjustments"] = result.get("flow_adjustments", [])
+        diagnosis_result["task_plan"] = result.get("task_plan")
+        diagnosis_result["task_results"] = result.get("task_results")
+        diagnosis_result["chat_response"] = result.get("chat_response")
+    
+    return diagnosis_result, error_msg, trace
+
+
+async def run_supervisor_onboarding_async(
+    owner: str,
+    repo: str,
+    user_context: dict,
+    debug_trace: bool = False
+) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
+    """비동기 온보딩 플랜 생성."""
+    from backend.agents.supervisor.graph import get_supervisor_graph_async
+    
+    task_info = f"task=build_onboarding_plan owner={owner} repo={repo}"
+    logger.info(f"[{task_info}] Starting async onboarding plan generation")
+    
+    graph = get_supervisor_graph_async()
+    config = {"configurable": {"thread_id": f"{owner}/{repo}@onboarding"}}
+    
+    trace_handler = None
+    if debug_trace:
+        trace_handler = TracingCallbackHandler()
+        config["callbacks"] = [trace_handler]
+    
+    inp = SupervisorInput(
+        task_type="build_onboarding_plan",
+        owner=owner,
+        repo=repo,
+        user_context=user_context
+    )
+    
+    initial_state = init_state_from_input(inp)
+    result = await graph.ainvoke(initial_state, config=config)
+    
+    trace = trace_handler.get_trace() if trace_handler else None
+    
+    if result.get("error"):
+        logger.error(f"[{task_info}] Async onboarding plan failed: {result.get('error')}")
+        return None, result.get("error"), trace
+        
+    logger.info(f"[{task_info}] Async onboarding plan completed successfully")
+    
+    output = {
+        "diagnosis": result.get("diagnosis_result"),
+        "onboarding_plan": result.get("onboarding_plan"),
+        "onboarding_summary": result.get("onboarding_summary"),
+        "candidate_issues": result.get("candidate_issues")
+    }
+    return output, None, trace
+
+

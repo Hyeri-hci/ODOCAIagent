@@ -303,3 +303,89 @@ def route_after_reflection(state: SupervisorState) -> str:
         return "compare_results_node"
     
     return "__end__"
+
+
+async def self_reflection_node_async(state: SupervisorState) -> Dict[str, Any]:
+    """LLM 기반 자가 성찰 노드 (비동기 버전)."""
+    diagnosis = state.diagnosis_result
+    if not diagnosis:
+        return {
+            "step": state.step + 1,
+            "next_node_override": "__end__",
+        }
+    
+    reflection: Optional[ReflectionResult] = None
+    
+    try:
+        user_prompt = build_reflection_prompt(diagnosis)
+        
+        llm = ChatOpenAI(
+            model=LLM_MODEL_NAME,
+            api_key=LLM_API_KEY,
+            base_url=LLM_API_BASE,
+            temperature=0.1
+        )
+        chain = SELF_REFLECTION_PROMPT | llm
+        response = await chain.ainvoke({"reflection_prompt": user_prompt})
+        reflection = parse_reflection_response(response.content)
+        logger.info(f"LLM reflection completed (async): is_consistent={reflection.is_consistent}")
+        
+    except Exception as e:
+        logger.warning(f"LLM reflection failed (async), using rule-based: {e}")
+        reflection = None
+    
+    # LLM 실패 시 규칙 기반 검사
+    if reflection is None or reflection.confidence < 0.5:
+        rule_reflection = rule_based_reflection(diagnosis)
+        if reflection is None:
+            reflection = rule_reflection
+        else:
+            reflection.issues.extend(rule_reflection.issues)
+            reflection.suggestions.extend(rule_reflection.suggestions)
+            if not reflection.is_consistent or not rule_reflection.is_consistent:
+                reflection.is_consistent = False
+    
+    # 결과 처리
+    warnings = list(state.warnings)
+    quality_issues = list(state.quality_issues)
+    
+    result: Dict[str, Any] = {
+        "step": state.step + 1,
+    }
+    
+    if reflection.issues:
+        quality_issues.extend(reflection.issues)
+        result["quality_issues"] = quality_issues
+    
+    if not reflection.is_consistent and len(reflection.issues) >= 2:
+        if state.rerun_count < state.max_rerun:
+            logger.info(f"Significant inconsistencies found (async), scheduling rerun")
+            warnings.append("진단 결과에 불일치가 발견되어 재분석을 수행합니다.")
+            result["rerun_count"] = state.rerun_count + 1
+            result["next_node_override"] = "run_diagnosis_node"
+            result["diagnosis_result"] = None
+        else:
+            logger.warning("Max rerun reached despite inconsistencies")
+            warnings.extend(reflection.suggestions)
+            result["next_node_override"] = "__end__"
+    else:
+        if reflection.suggestions:
+            warnings.extend(reflection.suggestions[:2])
+        result["next_node_override"] = "__end__"
+    
+    result["warnings"] = warnings
+    
+    if diagnosis:
+        diagnosis_updated = dict(diagnosis)
+        diagnosis_updated["reflection"] = {
+            "is_consistent": reflection.is_consistent,
+            "issues": reflection.issues,
+            "suggestions": reflection.suggestions,
+            "confidence": reflection.confidence,
+        }
+        result["diagnosis_result"] = diagnosis_updated
+    
+    logger.info(f"Self-reflection complete (async): is_consistent={reflection.is_consistent}")
+    
+    return result
+

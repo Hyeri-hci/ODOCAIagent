@@ -142,3 +142,140 @@ def _handle_onboarding_plan(
         response["trace"] = trace
     
     return response
+
+
+# =============================================================================
+# 비동기 버전
+# =============================================================================
+
+async def run_agent_task_async(
+    task_type: str,
+    owner: str,
+    repo: str,
+    ref: str = "main",
+    user_context: Optional[Dict[str, Any]] = None,
+    use_llm_summary: bool = True,
+    debug_trace: bool = False,
+    user_message: Optional[str] = None,
+    priority: str = "thoroughness"
+) -> Dict[str, Any]:
+    """
+    비동기 에이전트 작업 실행.
+    
+    ainvoke()를 사용하는 비동기 그래프 버전.
+    """
+    from backend.agents.supervisor.service import run_supervisor_diagnosis_async
+    
+    repo_id = f"{owner}/{repo}@{ref}"
+    logger.info(f"Received async agent task: {task_type} for {repo_id}")
+    
+    try:
+        if task_type in ["diagnose_repo", "general_inquiry"]:
+            return await _handle_diagnose_repo_async(
+                owner, repo, ref, use_llm_summary, debug_trace, 
+                user_message, priority, task_type
+            )
+        elif task_type == "build_onboarding_plan":
+            context = user_context or {}
+            return await _handle_onboarding_plan_async(owner, repo, context, debug_trace)
+        else:
+            return {
+                "ok": False,
+                "task_type": task_type,
+                "error": f"Unknown task_type: {task_type}"
+            }
+            
+    except Exception as e:
+        logger.exception(f"Async agent task failed: {e}")
+        return {
+            "ok": False,
+            "task_type": task_type,
+            "error": str(e)
+        }
+
+
+async def _handle_diagnose_repo_async(
+    owner: str, 
+    repo: str, 
+    ref: str, 
+    use_llm_summary: bool,
+    debug_trace: bool = False,
+    user_message: Optional[str] = None,
+    priority: str = "thoroughness",
+    task_type: str = "diagnose_repo"
+) -> Dict[str, Any]:
+    """비동기 진단 핸들러."""
+    from backend.agents.supervisor.service import run_supervisor_diagnosis_async
+    
+    result, error_msg, trace = await run_supervisor_diagnosis_async(
+        owner=owner,
+        repo=repo, 
+        ref=ref, 
+        use_llm_summary=use_llm_summary,
+        debug_trace=debug_trace,
+        user_message=user_message,
+        priority=priority,
+        task_type=task_type
+    )
+    
+    if error_msg:
+        response = {"ok": False, "task_type": task_type, "error": error_msg}
+        if debug_trace and trace:
+            response["trace"] = trace
+        return response
+        
+    if not result:
+        response = {"ok": False, "task_type": task_type, "error": "Diagnosis result is None"}
+        if debug_trace and trace:
+            response["trace"] = trace
+        return response
+        
+    # DTO Conversion
+    repo_id = f"{owner}/{repo}@{ref}"
+    dto = to_summary_dto(repo_id, result)
+    
+    response = {
+        "ok": True,
+        "task_type": task_type,
+        "data": dto.to_dict()
+    }
+    
+    if debug_trace and trace:
+        response["trace"] = trace
+    
+    return response
+
+
+async def _handle_onboarding_plan_async(
+    owner: str, 
+    repo: str, 
+    user_context: Dict[str, Any],
+    debug_trace: bool = False
+) -> Dict[str, Any]:
+    """비동기 온보딩 플랜 핸들러."""
+    from backend.agents.supervisor.service import run_supervisor_onboarding_async
+    
+    result, error_msg, trace = await run_supervisor_onboarding_async(
+        owner, 
+        repo, 
+        user_context,
+        debug_trace=debug_trace
+    )
+    
+    if error_msg:
+        response = {"ok": False, "task_type": "build_onboarding_plan", "error": error_msg}
+        if debug_trace and trace:
+            response["trace"] = trace
+        return response
+        
+    response = {
+        "ok": True,
+        "task_type": "build_onboarding_plan",
+        "data": result
+    }
+    
+    if debug_trace and trace:
+        response["trace"] = trace
+    
+    return response
+
