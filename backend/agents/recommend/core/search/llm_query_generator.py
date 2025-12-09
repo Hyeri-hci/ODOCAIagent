@@ -211,3 +211,61 @@ Output:
         logger.error(f"[GitHubQueryGen] LLM Output is not valid JSON: {e}. Content:\n{content}")
         # JSON 파싱 실패 시 최소한의 쿼리만 반환하여 파이프라인 유지
         return {"q": "", "sort": None, "order": None, "other": None}
+    
+async def correct_github_query(original_request: str, failed_content: str, error_message: str) -> Dict:
+    """
+    LLM 출력이 JSON 파싱에 실패했을 때, 오류 내용을 기반으로 LLM에게 수정을 요청 (비동기).
+    """
+    print(f"\n--- 🤖 LLM Correction Request ---")
+    print(f"⚙️ [LLMQueryCorrec] Requesting correction based on error: {error_message}")
+    
+    correction_prompt = f"""
+    # Role
+    당신은 GitHub 검색 쿼리 JSON 교정기입니다. 주어진 사용자 요청과 이전에 생성된 잘못된 JSON 결과, 그리고 발생한 오류 메시지를 바탕으로 **올바른 JSON 객체**를 다시 생성하세요.
+
+    # Context
+    **원래 사용자 요청**: "{original_request}"
+    **이전 LLM이 생성한 잘못된 JSON**:
+    {failed_content}
+    **발생한 파싱/문법 오류**: {error_message}
+
+    # 규칙 (Rules)
+    1. **문법 수정**: 이전 응답에서 JSON 파싱 오류(따옴표, 이스케이프 오류 등)를 **반드시** 수정하세요.
+    2. **의미 수정 (Semantic Correction)**: 이전 쿼리(`q` 필드)에 **핵심 키워드 필터(`topic:`, `language:`, `stars:`)**가 누락되었거나 일반 텍스트로 잘못 변환되었다면, **원래 사용자 요청의 의도**에 맞게 이들을 **`topic:` 필터로 복원**하세요.
+       - 예시: 'topic:"machine learning" library'로 나와야 할 것이 'machine learning library'처럼 일반 키워드로만 남지 않도록 주의.
+    3. 모든 규칙(q 필드 작성 규칙, other 필드 등)은 원본 시스템 프롬프트를 따릅니다.
+    4. JSON 객체만 반환하세요. 다른 설명은 절대 포함하지 마세요.
+    """
+    
+    messages: List[ChatMessage] = [
+        ChatMessage(role="system", content=correction_prompt),
+        ChatMessage(role="user", content="올바른 JSON 쿼리를 다시 생성해 주세요.")
+    ]
+
+    try:
+        response = await asyncio.to_thread(
+            llm_chat,
+            messages=messages,
+            model=None 
+        )
+    except Exception as e:
+        logger.error(f"[GitHubQueryCorrec] LLM Call Failed during correction: {e}")
+        return {"q": "", "sort": None, "order": None, "other": None} # 실패 시 최소 쿼리
+
+    content = response.content.strip()
+    
+    print("\n--- 🤖 LLM Raw Response Log (Correction) ---")
+    print(content)
+    print("------------------------------------------\n")
+    
+    # 코드 블록 제거 및 파싱 로직 (generate_github_query와 동일)
+    if content.startswith("```"):
+        content = "\n".join(content.split("\n")[1:-1])
+
+    try:
+        query_dict = json.loads(content)
+        print(f"✅ [GitHubQueryCorrec] Correction successful. q: {query_dict.get('q')}")
+        return query_dict
+    except json.JSONDecodeError as e:
+        logger.error(f"[GitHubQueryCorrec] Correction failed to produce valid JSON: {e}")
+        return {"q": "", "sort": None, "order": None, "other": None}
