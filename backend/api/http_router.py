@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Optional
 
-from backend.api.agent_service import run_agent_task
+from backend.api.agent_service import run_agent_task, run_agent_task_async
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +112,8 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
             logger.info(f"Returning cached analysis for {owner}/{repo}@{ref}")
             return AnalyzeResponse(**cached_response)
     
-    # Supervisor 호출 (메타 에이전트 통합)
-    result = run_agent_task(
+    # Supervisor 호출 (메타 에이전트 통합 - 비동기)
+    result = await run_agent_task_async(
         task_type="diagnose_repo",
         owner=owner,
         repo=repo,
@@ -426,7 +426,7 @@ async def execute_agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
     - build_onboarding_plan: 온보딩 플랜 생성 (LLM 필요)
     """
     try:
-        result = run_agent_task(
+        result = await run_agent_task_async(
             task_type=request.task_type,
             owner=request.owner,
             repo=request.repo,

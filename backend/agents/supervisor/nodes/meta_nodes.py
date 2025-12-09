@@ -322,10 +322,37 @@ async def parse_supervisor_intent_async(state: SupervisorState) -> Dict[str, Any
 
 
 def create_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
-    """에이전트 실행 계획 수립."""
+    """에이전트 실행 계획 수립. Clarification 루프 포함."""
+    from backend.agents.supervisor.planner import DynamicPlanner
+    
     global_intent = state.global_intent or "chat"
     user_prefs = state.user_preferences or {"focus": [], "ignore": []}
     priority = state.priority or "thoroughness"
+    
+    # Clarification 체크 (Agentic 기능)
+    try:
+        planner = DynamicPlanner()
+        context = {
+            "owner": state.owner,
+            "repo": state.repo,
+            "compare_repos": state.user_context.get("compare_repos", []),
+            "experience_level": state.user_context.get("experience_level"),
+            "branch": state.user_context.get("branch") or state.user_context.get("ref"),
+        }
+        
+        clarification = planner.check_clarification_needed(global_intent, context)
+        if clarification and clarification.get("needs_clarification"):
+            logger.info(f"Clarification needed: {clarification.get('question')}")
+            return {
+                "needs_clarification": True,
+                "clarification_question": clarification.get("question"),
+                "clarification_suggestions": clarification.get("suggestions", []),
+                "clarification_missing_info": clarification.get("missing_info"),
+                "task_plan": [],
+                "step": state.step + 1,
+            }
+    except Exception as e:
+        logger.warning(f"Clarification check failed: {e}")
     
     default_mode = "FULL" if priority == "thoroughness" else "FAST"
     plan = []
