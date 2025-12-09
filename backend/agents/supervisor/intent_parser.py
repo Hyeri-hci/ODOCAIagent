@@ -528,4 +528,78 @@ class IntentParser:
             return "complex"
             
         return "moderate"
+    
+    async def parse_intent_async(
+        self,
+        message: str,
+        analyzed_repos: List[str] = None,
+        last_context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[ParsedChatIntent]:
+        """
+        사용자 메시지를 분석하여 ParsedChatIntent 반환 (비동기 버전).
+        
+        Args:
+            message: 사용자 입력 메시지
+            analyzed_repos: 분석 완료된 레포 목록
+            last_context: 이전 대화 컨텍스트
+            
+        Returns:
+            ParsedChatIntent 또는 파싱 실패 시 None
+        """
+        if not message or len(message.strip()) < 2:
+            return None
+            
+        # 간단한 명령어 먼저 확인
+        if is_simple_command(message):
+            return handle_simple_command(message)
+        
+        analyzed_repos = analyzed_repos or []
+        repos_str = ", ".join(analyzed_repos[:10]) if analyzed_repos else "없음"
+        
+        context_info = "없음"
+        if last_context:
+            last_repo = last_context.get("repo_id") or last_context.get("repo_url", "")
+            if last_repo:
+                context_info = f"마지막 분석 저장소: {last_repo}"
+        
+        response = None
+        try:
+            chain = self.intent_prompt | self.llm
+            response = await chain.ainvoke({
+                "user_message": message,
+                "analyzed_repos": repos_str,
+                "context_info": context_info,
+            })
+            raw_content = response.content.strip()
+            
+            # JSON 추출
+            if "```json" in raw_content:
+                raw_content = raw_content.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw_content:
+                raw_content = raw_content.split("```")[1].split("```")[0].strip()
+            
+            parsed = json.loads(raw_content)
+            
+            # 필드 검증
+            intent = parsed.get("intent", "chat")
+            valid_intents = ["diagnose", "compare", "explain", "onboard", "chat", "help", "security", "full_audit"]
+            if intent not in valid_intents:
+                intent = "chat"
+            
+            return ParsedChatIntent(
+                intent=intent,
+                repo_hint=parsed.get("repo_hint"),
+                target_metric=parsed.get("target_metric"),
+                options=parsed.get("options", {}),
+                follow_up=parsed.get("follow_up", False),
+                confidence=float(parsed.get("confidence", 0.7)),
+            )
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"IntentParser (async) JSON decode error: {e}, raw_response={response}")
+            return None
+        except Exception as e:
+            logger.warning(f"IntentParser (async) failed: {e}, raw_response={response}")
+            return None
+
 

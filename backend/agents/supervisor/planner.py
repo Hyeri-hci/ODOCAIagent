@@ -579,6 +579,97 @@ class DynamicPlanner:
             estimated_duration=len(steps) * 15,
             complexity="moderate" if len(steps) <= 2 else "complex",
         )
+    
+    async def create_plan_async(
+        self,
+        intent: str,
+        owner: str,
+        repo: str,
+        user_preferences: Dict[str, Any] = None,
+        priority: str = "thoroughness",
+    ) -> ExecutionPlan:
+        """
+        사용자 의도와 선호를 기반으로 실행 계획 생성 (비동기 버전).
+        """
+        user_preferences = user_preferences or {"focus": [], "ignore": []}
+        
+        response = None
+        try:
+            chain = self.planning_prompt | self.llm
+            response = await chain.ainvoke({
+                "intent": intent,
+                "owner": owner,
+                "repo": repo,
+                "user_preferences": json.dumps(user_preferences, ensure_ascii=False),
+                "priority": priority,
+            })
+            raw_content = response.content.strip()
+            
+            # JSON 추출
+            if "```json" in raw_content:
+                raw_content = raw_content.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw_content:
+                raw_content = raw_content.split("```")[1].split("```")[0].strip()
+            
+            parsed = json.loads(raw_content)
+            
+            # ExecutionPlan 생성
+            steps = []
+            for step_data in parsed.get("steps", []):
+                steps.append(ExecutionStep(
+                    step=step_data.get("step", len(steps) + 1),
+                    agent=step_data.get("agent", "diagnosis"),
+                    mode=step_data.get("mode", "AUTO"),
+                    condition=step_data.get("condition", "always"),
+                    description=step_data.get("description", ""),
+                ))
+            
+            return ExecutionPlan(
+                primary_task_type=parsed.get("primary_task_type", intent),
+                steps=steps,
+                secondary_tasks=parsed.get("secondary_tasks", []),
+                suggested_sequence=parsed.get("suggested_sequence", []),
+                estimated_duration=parsed.get("estimated_duration", 30),
+                complexity=parsed.get("complexity", "moderate"),
+            )
+            
+        except Exception as e:
+            logger.error(f"DynamicPlanner.create_plan_async failed: {e}, raw_response={response}")
+            return self._create_fallback_plan(intent, priority)
+    
+    async def validate_plan_async(
+        self,
+        plan: ExecutionPlan,
+        intent: str,
+        user_preferences: Dict[str, Any] = None,
+    ) -> Dict[str, Any]:
+        """
+        실행 계획 검증 (비동기 버전).
+        """
+        user_preferences = user_preferences or {"focus": [], "ignore": []}
+        
+        response = None
+        try:
+            chain = self.validation_prompt | self.llm
+            response = await chain.ainvoke({
+                "intent": intent,
+                "user_preferences": json.dumps(user_preferences, ensure_ascii=False),
+                "plan": json.dumps(plan.to_dict(), ensure_ascii=False),
+            })
+            raw_content = response.content.strip()
+            
+            # JSON 추출
+            if "```json" in raw_content:
+                raw_content = raw_content.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw_content:
+                raw_content = raw_content.split("```")[1].split("```")[0].strip()
+            
+            return json.loads(raw_content)
+            
+        except Exception as e:
+            logger.error(f"DynamicPlanner.validate_plan_async failed: {e}, raw_response={response}")
+            return {"is_valid": True, "issues": [], "suggestions": [], "confidence": 0.5}
+
 
 class AgenticPlanExecutor:
     """
