@@ -55,7 +55,7 @@ GitHub 검색 쿼리 변환기입니다. 사용자 요청을 분석하여 정확
         - 예: `topic:\\"machine learning\\"`, `\\"state management\\"`
         - **공백이 없는 경우**: 따옴표를 쓰지 않는 것을 권장합니다.
         - 예: `topic:python`, `dashboard`
-    - **필수 토픽 추가**: "Library"->`topic:library`, "Framework"->`topic:framework`. "API" -> `topic:api`
+    - **필수 토픽 추가**: "Library"->`topic:library`, "Framework"->`topic:framework`. "API" -> `topic:api` 사용자가 언급한 중요 키워드는 반드시 추가해야합니다.
     - **단순화**: "Django Framework" -> `topic:"django"`.
     - **초보자**: "초보자", "beginner" -> `good-first-issues:>5`.
     - 아무런 언급이 없는 경우는 공백을 넣으세요 (이슈가 많은 레포 -> `q: ''`)
