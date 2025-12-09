@@ -14,7 +14,7 @@ from backend.agents.supervisor.nodes.meta_nodes import (
 
 @pytest.fixture
 def mock_predict():
-    with patch("backend.agents.supervisor.nodes.meta_nodes._predict") as mock:
+    with patch("backend.agents.supervisor.nodes.meta_nodes._invoke_chain") as mock:
         yield mock
 
 

@@ -17,7 +17,7 @@ def mock_diagnosis_service():
 @pytest.fixture
 def mock_llm_predict():
     """LLM 예측 모킹."""
-    with patch("backend.agents.supervisor.nodes.meta_nodes._predict") as mock:
+    with patch("backend.agents.supervisor.nodes.meta_nodes._invoke_chain") as mock:
         yield mock
 
 

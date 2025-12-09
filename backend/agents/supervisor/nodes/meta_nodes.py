@@ -1,30 +1,41 @@
 """메타 에이전트 노드."""
 from __future__ import annotations
-import asyncio 
 import json
 import logging
+import re
 from typing import Any, Dict, cast
 
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
 from backend.agents.supervisor.models import SupervisorState, TaskType
-from backend.agents.shared.agent_mode import AgentMode, AgentModeLiteral
-from backend.llm.factory import fetch_llm_client
-from backend.llm.base import ChatRequest, ChatMessage
-from backend.common.config import LLM_MODEL_NAME
+from backend.common.config import LLM_MODEL_NAME, LLM_API_BASE, LLM_API_KEY
 from backend.agents.supervisor.nodes.routing_nodes import INTENT_TO_TASK_TYPE, INTENT_KEYWORDS
+from backend.agents.supervisor.prompts import (
+    INTENT_PARSE_PROMPT,
+    REFLECTION_PROMPT,
+    FINALIZE_REPORT_PROMPT,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _predict(prompt: str, timeout: int = 60) -> str:
-    """LLM 예측 헬퍼. 타임아웃 시 빠르게 실패."""
+def _get_llm() -> ChatOpenAI:
+    """ChatOpenAI 인스턴스 반환."""
+    return ChatOpenAI(
+        model=LLM_MODEL_NAME,
+        api_key=LLM_API_KEY,
+        base_url=LLM_API_BASE,
+        temperature=0.1
+    )
+
+
+def _invoke_chain(prompt: ChatPromptTemplate, params: Dict[str, Any]) -> str:
+    """LangChain 체인 파이프라인 동기 호출."""
     try:
-        client = fetch_llm_client()
-        request = ChatRequest(
-            messages=[ChatMessage(role="user", content=prompt)],
-            model=LLM_MODEL_NAME,
-            temperature=0.1,
-        )
-        response = client.chat(request, timeout=timeout)
+        llm = _get_llm()
+        chain = prompt | llm
+        response = chain.invoke(params)
         content = response.content.strip()
         
         # JSON 포맷팅 제거
@@ -35,8 +46,24 @@ def _predict(prompt: str, timeout: int = 60) -> str:
             
         return content
     except Exception as e:
-        logger.error(f"LLM predict failed: {e}")
+        logger.error(f"Chain invoke failed: {e}")
         raise
+
+
+def _extract_json(content: str) -> Dict[str, Any]:
+    """LLM 응답에서 JSON 추출."""
+    json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+    if json_match:
+        content = json_match.group(1)
+    elif '```' in content:
+        parts = content.split('```')
+        if len(parts) >= 2:
+            content = parts[1].strip()
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        return {"raw_response": content}
+
 
 
 def _map_intent_to_task_type(intent: str, fallback: TaskType) -> TaskType:
@@ -109,7 +136,7 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
     """사용자 메시지에서 상위 의도 추출."""
     user_msg = state.user_message or state.chat_message or ""
     
-    # 0. 메시지에서 새 저장소 URL 추출 (기존 저장소와 다른 경우 업데이트)
+    # 메시지에서 새 저장소 URL 추출 (기존 저장소와 다른 경우 업데이트)
     new_repo = _extract_github_repo(user_msg)
     new_owner, new_repo_name = None, None
     if new_repo:
@@ -120,7 +147,7 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
             new_owner, new_repo_name = extracted_owner, extracted_repo
             logger.info(f"New repository detected in message: {new_owner}/{new_repo_name}")
     
-    # 1. 키워드 기반 onboard 의도 우선 감지 (LLM 호출 전)
+    # 키워드 기반 onboard 의도 우선 감지 (LLM 호출 전)
     if _detect_onboard_intent(user_msg):
         # 경험 레벨에 따른 포커스 설정
         exp_level = _extract_experience_level(user_msg)
@@ -146,47 +173,15 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
             result["repo"] = new_repo_name
         return result
     
-    # 2. LLM 기반 의도 분류 (키워드로 판별되지 않은 경우)
-    prompt = f"""당신은 GitHub 저장소 분석 시스템의 의도 분석 전문가입니다.
-
-사용자 메시지: "{user_msg}"
-요청 유형 (시스템): "{state.task_type}" (diagnose_repo인 경우 진단 필수)
-저장소: {state.owner}/{state.repo}
-
-다음 JSON 형식으로 추출:
-{{
-  "task_type": "chat|diagnose|onboard|security|recommend|compare|full_audit",
-  "user_preferences": {{"focus": [], "ignore": []}},
-  "priority": "speed|thoroughness",
-  "initial_mode_hint": "FAST|FULL|null"
-}}
-
-의도 분류 규칙 (우선순위 순서):
-1. **onboard** (온보딩/기여 가이드): 다음 키워드 포함 시
-   - "초보", "beginner", "기여", "contribute", "이슈", "issue", "PR", "참여"
-   - "good first issue", "기여하기 좋은", "시작하기 좋은", "입문"
-   - 예: "초보자가 기여하기 좋은 이슈 찾아줘" → onboard
-   
-2. **diagnose** (저장소 진단): 다음 키워드 포함 시
-   - "진단", "분석", "건강", "health", "score", "점수"
-   - 요청 유형이 "diagnose_repo"인 경우
-   
-3. **compare** (비교 분석): "비교", "compare", "vs" 포함 시
-
-4. **security** (보안 분석): "보안", "security", "취약점" 포함 시
-
-5. **recommend** (일반 추천): 위 카테고리에 해당하지 않는 추천 요청
-   - 주의: "이슈 추천", "기여 추천"은 onboard로 분류
-
-6. **chat** (일반 대화): 위 어느 것에도 해당하지 않음
-
-추가 규칙:
-- "간단히/빨리" → speed/FAST
-- "자세히/깊게" → thoroughness/FULL
-"""
-    
+    # LLM 기반 의도 분류 (ChatPromptTemplate 사용)
+    response = None  # 예외 처리 시 로깅을 위해 스코프 밖에서 선언
     try:
-        response = _predict(prompt)
+        response = _invoke_chain(INTENT_PARSE_PROMPT, {
+            "user_message": user_msg,
+            "task_type": state.task_type,
+            "owner": state.owner or "",
+            "repo": state.repo or "",
+        })
         parsed = json.loads(response)
         
         logger.info(f"Parsed intent: {parsed}")
@@ -207,7 +202,7 @@ def parse_supervisor_intent(state: SupervisorState) -> Dict[str, Any]:
             result["repo"] = new_repo_name
         return result
     except Exception as e:
-        logger.error(f"Intent parsing failed: {e}")
+        logger.error(f"Intent parsing failed: {e}, raw_response={response!r}")
         fallback_intent = "chat"
         result = {
             "global_intent": fallback_intent,
@@ -249,22 +244,16 @@ def create_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
                 "condition": "always",
                 "description": "보안 취약점 분석"
             })
-        # [Future] 추천 예시 (현재 실행하지 않음)
-        # plan.append({
-        #     "step": 3, "agent": "recommend", "mode": "AUTO",
-        #     "condition": "always", "description": "개선 추천"
-        # })
     elif global_intent == "security":
         plan.extend([
             {"step": 1, "agent": "diagnosis", "mode": "FAST", "condition": "always"},
-            {"step": 2, "agent": "security", "mode": "FULL", "condition": "always"},  # 활성화
+            {"step": 2, "agent": "security", "mode": "FULL", "condition": "always"},
         ])
     elif global_intent == "full_audit":
         plan.extend([
             {"step": 1, "agent": "diagnosis", "mode": "FULL", "condition": "always"},
-            # [Future]
-            # {"step": 2, "agent": "security", "mode": "FULL", "condition": "always"},
-            # {"step": 3, "agent": "recommend", "mode": "FULL", "condition": "always"},
+            {"step": 2, "agent": "security", "mode": "FULL", "condition": "always"},
+            {"step": 3, "agent": "onboarding", "mode": "AUTO", "condition": "always"},
         ])
     elif global_intent == "compare":
         plan.append({
@@ -375,7 +364,6 @@ def _run_diagnosis_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
     
     result = run_diagnosis(input_data)
     
-    # 이미 dict인 경우 그대로 반환, 아니면 to_dict() 또는 dict() 호출
     if isinstance(result, dict):
         return result
     if hasattr(result, "to_dict"):
@@ -475,16 +463,13 @@ def _extract_diagnosis_summary(result: Dict[str, Any]) -> Dict[str, Any]:
 
 def _extract_security_summary(result: Dict[str, Any]) -> Dict[str, Any]:
     """Security 요약 추출. Security Agent V2 출력 형식에 맞춤."""
-    # 1. 성공 응답: result.results 구조
     results = result.get("results", {})
     vulnerabilities = results.get("vulnerabilities", {})
     
-    # 2. 에러 응답: partial_results 구조
     if not results or not vulnerabilities:
         partial = result.get("partial_results", {})
         if partial:
             vulnerabilities = partial.get("vulnerabilities", [])
-            # partial_results.vulnerabilities가 리스트인 경우 개수 계산
             if isinstance(vulnerabilities, list):
                 vuln_list = vulnerabilities
                 vulnerabilities = {
@@ -495,22 +480,17 @@ def _extract_security_summary(result: Dict[str, Any]) -> Dict[str, Any]:
                     "low": sum(1 for v in vuln_list if v.get("severity") == "LOW"),
                 }
     
-    # 3. final_result가 중첩된 경우 (fallback)
     if not results:
         final_result = result.get("final_result", {})
         results = final_result.get("results", {})
         if not vulnerabilities:
             vulnerabilities = results.get("vulnerabilities", {})
-    
-    # 여러 경로에서 값 추출 시도
     vuln_count = (
         vulnerabilities.get("total") or
         result.get("vulnerability_count") or
         result.get("total_vulnerabilities") or
         0
     )
-    
-    # score/grade 추출 - 여러 경로 시도
     security_score = (
         results.get("security_score") or 
         result.get("security_score") or
@@ -527,14 +507,10 @@ def _extract_security_summary(result: Dict[str, Any]) -> Dict[str, Any]:
         result.get("partial_results", {}).get("risk_level") or
         "unknown"
     )
-    
-    # critical/high/medium/low 개수 - 여러 경로 시도
     critical = vulnerabilities.get("critical") or result.get("critical_count", 0)
     high = vulnerabilities.get("high") or result.get("high_count", 0)
     medium = vulnerabilities.get("medium") or result.get("medium_count", 0)
     low = vulnerabilities.get("low") or result.get("low_count", 0)
-    
-    # 취약점 상세 정보 추출
     vuln_details = vulnerabilities.get("details", [])
     if not vuln_details:
         vuln_details = result.get("partial_results", {}).get("vulnerabilities", [])
@@ -550,7 +526,6 @@ def _extract_security_summary(result: Dict[str, Any]) -> Dict[str, Any]:
         "high_count": high,
         "medium_count": medium,
         "low_count": low,
-        # 취약점 상세 정보 (CVE ID, 설명, 심각도 등)
         "vulnerability_details": vuln_details,
         "summary": result.get("report") or "보안 분석 완료",
         "flags": ["security_present"],
@@ -565,7 +540,6 @@ def _generate_security_report(
     """Security 분석 결과를 마크다운 보고서로 생성."""
     lines = [f"# {state.owner}/{state.repo} 보안 분석 보고서\n"]
     
-    # 진단 요약
     if diagnosis_data:
         lines.append("## 저장소 진단 요약")
         lines.append(f"- **Health Score**: {diagnosis_data.get('health_score', 'N/A')}")
@@ -574,7 +548,6 @@ def _generate_security_report(
             lines.append(f"\n{diagnosis_data['summary']}")
         lines.append("")
     
-    # 보안 분석 결과
     lines.append("## 보안 분석 결과")
     
     risk_level = security_data.get("risk_level", "unknown")
@@ -589,7 +562,6 @@ def _generate_security_report(
     lines.append(f"- **Risk Level**: {risk_level}")
     lines.append(f"- **총 발견된 취약점**: {vuln_count}개")
     
-    # 취약점 상세 (Critical/High/Medium/Low)
     critical = security_data.get("critical_count", 0)
     high = security_data.get("high_count", 0)
     medium = security_data.get("medium_count", 0)
@@ -605,14 +577,12 @@ def _generate_security_report(
     
     lines.append("")
     
-    # 요약
     summary = security_data.get("summary", "")
     if summary:
         lines.append("## 분석 요약")
         lines.append(summary)
         lines.append("")
     
-    # 안내 메시지
     lines.append("---")
     lines.append("*상세 분석 결과는 오른쪽 Report 영역에서 확인하세요.*")
     
@@ -656,27 +626,14 @@ def reflect_supervisor(state: SupervisorState) -> Dict[str, Any]:
             "step": state.step + 1,
         }
     
-    prompt = f"""Supervisor 자기 점검.
-
-실행 계획: {state.task_plan}
-실행 결과: {state.task_results}
-사용자 선호: {state.user_preferences}
-
-질문:
-1. focus가 충분히 커버되었는가?
-2. ignore를 존중했는가?
-3. 결과 기반으로 추가 실행 필요한가?
-
-JSON 응답:
-{{
-  "should_replan": true/false,
-  "plan_adjustments": [{{"action": "append", "step": {{...}}}}],
-  "reflection_summary": "..."
-}}
-"""
-    
+    # LLM 기반 자기 점검 (ChatPromptTemplate 사용 - LangSmith 추적 가능)
+    response = None  # 예외 처리 시 로깅을 위해 스코프 밖에서 선언
     try:
-        response = _predict(prompt)
+        response = _invoke_chain(REFLECTION_PROMPT, {
+            "task_plan": json.dumps(state.task_plan, ensure_ascii=False),
+            "task_results": json.dumps(state.task_results, ensure_ascii=False),
+            "user_preferences": json.dumps(state.user_preferences, ensure_ascii=False),
+        })
         reflection = json.loads(response)
         
         should_replan = reflection.get("should_replan", False)
@@ -706,7 +663,7 @@ JSON 응답:
                 "step": state.step + 1,
             }
     except Exception as e:
-        logger.error(f"Reflection failed: {e}")
+        logger.error(f"Reflection failed: {e}, raw_response={response!r}")
         return {
             "reflection_summary": f"자기 점검 실패: {e}",
             "next_node_override": "finalize_supervisor_answer",
@@ -718,15 +675,12 @@ def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
     task_results = state.task_results or {}
     reflection = state.reflection_summary or ""
     
-    # diagnosis 결과를 diagnosis_result로 변환 (http_router.py 호환)
     diagnosis_data = task_results.get("diagnosis", {})
     onboarding_data = task_results.get("onboarding", {})
     
-    # onboard intent: 이미 LLM으로 플랜이 생성됨 → 직접 마크다운 생성
     if state.global_intent == "onboard" and onboarding_data:
         report_lines = []
         
-        # 진단 결과
         if diagnosis_data:
             health = diagnosis_data.get("health_score", "N/A")
             onboard_score = diagnosis_data.get("onboarding_score", "N/A")
@@ -737,14 +691,11 @@ def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
                 report_lines.append(f"\n{diagnosis_data['summary']}")
             report_lines.append("")
         
-        # 온보딩 결과
         report_lines.append("## 온보딩 가이드")
         
-        # 온보딩 플랜
         onboarding_plan = onboarding_data.get("onboarding_plan", [])
         if onboarding_plan:
             weeks_count = len(onboarding_plan)
-            # 간단한 안내 메시지만 반환 (상세 내용은 프론트엔드 Report에서 표시)
             final_answer = f"{state.owner}/{state.repo} 저장소에 대한 **{weeks_count}주 온보딩 가이드**가 생성되었습니다!\n\n오른쪽 Report 영역에서 상세 플랜을 확인하세요."
         else:
             final_answer = "온보딩 가이드 생성 중 문제가 발생했습니다."
@@ -771,26 +722,12 @@ def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
             "step": state.step + 1,
         }
     
-    # 그 외 intent: LLM으로 보고서 생성
-    prompt = f"""GitHub 저장소 분석 보고서 작성.
-
-분석 결과:
-{json.dumps(task_results, indent=2, ensure_ascii=False)}
-
-자기 점검:
-{reflection}
-
-사용자에게 다음 포함하여 보고:
-1. 진단 요약
-2. 보안 분석 (있는 경우)
-3. 추천 사항
-4. 플랜 설명
-
-한국어 마크다운으로 작성.
-"""
-    
+    # 그 외 intent: LLM으로 보고서 생성 (ChatPromptTemplate 사용 - LangSmith 추적 가능)
     try:
-        final_answer = _predict(prompt)
+        final_answer = _invoke_chain(FINALIZE_REPORT_PROMPT, {
+            "task_results": json.dumps(task_results, indent=2, ensure_ascii=False),
+            "reflection_summary": reflection,
+        })
         logger.info("Final answer generated via LLM")
         
         return {

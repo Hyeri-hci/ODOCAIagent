@@ -5,7 +5,12 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
 from backend.agents.supervisor.models import SupervisorState
+from backend.agents.supervisor.prompts import SELF_REFLECTION_PROMPT
+from backend.common.config import LLM_MODEL_NAME, LLM_API_BASE, LLM_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -18,34 +23,6 @@ class ReflectionResult:
     suggestions: List[str]
     confidence: float  # 0.0 ~ 1.0
     reasoning: str
-
-
-REFLECTION_SYSTEM_PROMPT = """당신은 ODOC(Open-source Doctor) AI의 품질 검증 전문가입니다.
-
-주어진 오픈소스 프로젝트 진단 결과를 검토하고 논리적 일관성을 평가하세요.
-
-[ODOC 평가 기준]
-- 건강 점수 = 문서 25% + 활동성 65% + 구조 10%
-- 온보딩 점수 = 문서 55% + 활동성 35% + 구조 10%
-- 80점 이상: Excellent, 60-79: Good, 40-59: Fair, 40 미만: Poor
-
-[검토 항목]
-1. 점수 일관성: 개별 점수와 종합 점수가 계산 공식과 일치하는가?
-2. 레벨 일관성: 점수와 레벨(good/fair/warning/bad)이 맞는가?
-3. 논리적 모순: 상충되는 결과가 있는가?
-   - 예: 문서 점수 높은데 docs_issues가 많음
-   - 예: 활동성 높은데 health_score가 낮음 (가중치 65%인데)
-4. 이상치 탐지: 비정상적인 값이 있는가?
-
-반드시 다음 JSON 형식으로만 응답하세요:
-{
-    "is_consistent": true/false,
-    "issues": ["발견된 문제 1", "발견된 문제 2"],
-    "suggestions": ["개선 제안 1", "개선 제안 2"],
-    "confidence": 0.0-1.0,
-    "reasoning": "판단 근거 설명"
-}
-"""
 
 
 def build_reflection_prompt(diagnosis: Dict[str, Any]) -> str:
@@ -219,27 +196,20 @@ def self_reflection_node(state: SupervisorState) -> Dict[str, Any]:
             "step": state.step + 1,
         }
     
-    # LLM 기반 성찰 시도
+    # LLM 기반 성찰 시도 (ChatPromptTemplate 사용 - LangSmith 추적 가능)
     reflection: Optional[ReflectionResult] = None
     
     try:
-        from backend.llm.factory import fetch_llm_client
-        from backend.llm.base import ChatRequest, ChatMessage
-        from backend.common.config import LLM_MODEL_NAME
-        
-        client = fetch_llm_client()
         user_prompt = build_reflection_prompt(diagnosis)
         
-        request = ChatRequest(
-            messages=[
-                ChatMessage(role="system", content=REFLECTION_SYSTEM_PROMPT),
-                ChatMessage(role="user", content=user_prompt),
-            ],
+        llm = ChatOpenAI(
             model=LLM_MODEL_NAME,
-            temperature=0.1,  # 낮은 temperature로 일관된 분석
+            api_key=LLM_API_KEY,
+            base_url=LLM_API_BASE,
+            temperature=0.1
         )
-        
-        response = client.chat(request, timeout=30)
+        chain = SELF_REFLECTION_PROMPT | llm
+        response = chain.invoke({"reflection_prompt": user_prompt})
         reflection = parse_reflection_response(response.content)
         logger.info(f"LLM reflection completed: is_consistent={reflection.is_consistent}, issues={len(reflection.issues)}")
         
