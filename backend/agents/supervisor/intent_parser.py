@@ -1,14 +1,16 @@
-"""Global Intent Parser - LLM 기반 의도/엔터티 추출.
-
-사용자 자연어 입력을 구조화된 ParsedChatIntent로 변환하고,
-repo_hint를 기반으로 캐시에서 실제 레포를 매칭합니다.
-"""
+"""Global Intent Parser - LLM 기반 의도/엔터티 추출."""
 from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Tuple
+
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate
+
+from backend.common.config import LLM_MODEL_NAME, LLM_API_BASE, LLM_API_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -310,3 +312,220 @@ def get_analyzed_repos() -> List[str]:
     except Exception as e:
         logger.warning(f"Failed to get analyzed repos: {e}")
         return []
+
+# IntentParser용 프롬프트 템플릿
+INTENT_PARSER_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """당신은 ODOC 시스템의 Intent 파서입니다.
+사용자 메시지를 분석하여 JSON 형식으로만 응답하세요.
+
+[가능한 intent 값]
+- diagnose: 저장소 분석/진단 요청
+- compare: 여러 저장소 비교 요청
+- explain: 분석 결과 설명 요청
+- onboard: 기여/온보딩 방법 문의
+- chat: 일반 대화
+- help: 도움말 요청
+- full_audit: 전체 분석 요청
+
+[가능한 target_metric 값]
+- health: 건강 점수
+- onboarding: 온보딩 점수
+- docs: 문서 품질
+- activity: 활동성
+- structure: 구조 점수
+- all: 전체 분석
+- null: 특정 메트릭 없음
+
+[분석 완료된 저장소 목록]
+{analyzed_repos}
+
+[이전 대화 컨텍스트]
+{context_info}
+
+[응답 형식 - 반드시 이 JSON만 출력]
+{{
+  "intent": "diagnose|compare|explain|onboard|chat|help|security|full_audit",
+  "repo_hint": "사용자가 언급한 저장소 이름 또는 null",
+  "target_metric": "health|onboarding|docs|activity|structure|security|all|null",
+  "options": {{}},
+  "follow_up": true/false,
+  "confidence": 0.0-1.0,
+  "user_preferences": {{"focus": [], "ignore": []}}
+}}
+
+주의사항:
+- JSON 외 다른 텍스트 절대 출력 금지
+- repo_hint는 사용자가 말한 그대로 추출
+- follow_up은 이전 대화 결과에 대한 후속 질문인지 여부
+- confidence는 의도 분류 확신도"""),
+    ("user", "{user_message}")
+])
+
+
+class IntentParser:
+    """
+    Security Agent 패턴을 적용한 의도 파서 클래스.
+    
+    LangChain ChatPromptTemplate과 체인 파이프라인을 사용하여
+    LangSmith 추적이 가능한 구조화된 의도 파싱을 제공합니다.
+    """
+    
+    def __init__(
+        self,
+        llm_base_url: str = None,
+        llm_api_key: str = None,
+        llm_model: str = None,
+        llm_temperature: float = 0.1,
+    ):
+        """IntentParser 초기화."""
+        self.llm = ChatOpenAI(
+            model=llm_model or LLM_MODEL_NAME,
+            api_key=llm_api_key or LLM_API_KEY,
+            base_url=llm_base_url or LLM_API_BASE,
+            temperature=llm_temperature
+        )
+        self.intent_prompt = INTENT_PARSER_PROMPT
+        
+    def parse_intent(
+        self,
+        message: str,
+        analyzed_repos: List[str] = None,
+        last_context: Optional[Dict[str, Any]] = None,
+    ) -> Optional[ParsedChatIntent]:
+        """
+        사용자 메시지를 분석하여 ParsedChatIntent 반환.
+        
+        Args:
+            message: 사용자 입력 메시지
+            analyzed_repos: 분석 완료된 레포 목록
+            last_context: 이전 대화 컨텍스트
+            
+        Returns:
+            ParsedChatIntent 또는 파싱 실패 시 None
+        """
+        if not message or len(message.strip()) < 2:
+            return None
+            
+        # 간단한 명령어 먼저 확인
+        if is_simple_command(message):
+            return handle_simple_command(message)
+        
+        analyzed_repos = analyzed_repos or []
+        repos_str = ", ".join(analyzed_repos[:10]) if analyzed_repos else "없음"
+        
+        context_info = "없음"
+        if last_context:
+            last_repo = last_context.get("repo_id") or last_context.get("repo_url", "")
+            if last_repo:
+                context_info = f"마지막 분석 저장소: {last_repo}"
+        
+        response = None
+        try:
+            chain = self.intent_prompt | self.llm
+            response = chain.invoke({
+                "user_message": message,
+                "analyzed_repos": repos_str,
+                "context_info": context_info,
+            })
+            raw_content = response.content.strip()
+            
+            # JSON 추출
+            if "```json" in raw_content:
+                raw_content = raw_content.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw_content:
+                raw_content = raw_content.split("```")[1].split("```")[0].strip()
+            
+            parsed = json.loads(raw_content)
+            
+            # 필드 검증
+            intent = parsed.get("intent", "chat")
+            valid_intents = ["diagnose", "compare", "explain", "onboard", "chat", "help", "security", "full_audit"]
+            if intent not in valid_intents:
+                intent = "chat"
+            
+            return ParsedChatIntent(
+                intent=intent,
+                repo_hint=parsed.get("repo_hint"),
+                target_metric=parsed.get("target_metric"),
+                options=parsed.get("options", {}),
+                follow_up=parsed.get("follow_up", False),
+                confidence=float(parsed.get("confidence", 0.7)),
+            )
+            
+        except json.JSONDecodeError as e:
+            logger.warning(f"IntentParser JSON decode error: {e}, raw_response={response}")
+            return None
+        except Exception as e:
+            logger.warning(f"IntentParser failed: {e}, raw_response={response}")
+            return None
+    
+    def extract_preferences(self, parsed: ParsedChatIntent, message: str) -> Dict[str, Any]:
+        """
+        파싱된 의도에서 사용자 선호 추출.
+        
+        Args:
+            parsed: 파싱된 의도
+            message: 원본 메시지
+            
+        Returns:
+            사용자 선호 딕셔너리 {"focus": [], "ignore": [], ...}
+        """
+        preferences = {"focus": [], "ignore": []}
+        
+        msg_lower = message.lower()
+        
+        # 포커스 추출
+        if "보안" in msg_lower or "security" in msg_lower:
+            preferences["focus"].append("security")
+        if "건강" in msg_lower or "health" in msg_lower:
+            preferences["focus"].append("health")
+        if "온보딩" in msg_lower or "onboard" in msg_lower:
+            preferences["focus"].append("onboarding")
+        if "문서" in msg_lower or "docs" in msg_lower:
+            preferences["focus"].append("docs")
+            
+        # 무시 추출
+        if "보안은 필요없" in msg_lower or "보안 안" in msg_lower:
+            preferences["ignore"].append("security")
+        if "점수는 필요없" in msg_lower:
+            preferences["ignore"].append("scores")
+            
+        # 옵션에서 추가 선호 가져오기
+        if parsed.options:
+            preferences.update(parsed.options)
+            
+        return preferences
+    
+    def assess_complexity(self, message: str, parsed: ParsedChatIntent) -> str:
+        """
+        요청 복잡도 평가.
+        
+        Returns:
+            "simple", "moderate", "complex" 중 하나
+        """
+        # 복잡도 기준
+        complexity_indicators = {
+            "complex": ["전체", "자세히", "상세", "모든", "full", "comprehensive"],
+            "simple": ["빠르게", "간단히", "요약", "quick", "fast", "brief"],
+        }
+        
+        msg_lower = message.lower()
+        
+        for keyword in complexity_indicators["complex"]:
+            if keyword in msg_lower:
+                return "complex"
+                
+        for keyword in complexity_indicators["simple"]:
+            if keyword in msg_lower:
+                return "simple"
+        
+        # 비교 분석은 복잡도 높음
+        if parsed.intent == "compare":
+            return "complex"
+            
+        # 보안/전체 감사는 복잡도 높음
+        if parsed.intent in ["security", "full_audit"]:
+            return "complex"
+            
+        return "moderate"
+
