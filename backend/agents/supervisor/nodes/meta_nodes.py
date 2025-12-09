@@ -15,7 +15,7 @@ from backend.agents.supervisor.nodes.routing_nodes import INTENT_TO_TASK_TYPE, I
 logger = logging.getLogger(__name__)
 
 
-def _predict(prompt: str, timeout: int = 15) -> str:
+def _predict(prompt: str, timeout: int = 60) -> str:
     """LLM 예측 헬퍼. 타임아웃 시 빠르게 실패."""
     try:
         client = fetch_llm_client()
@@ -458,11 +458,64 @@ def _extract_diagnosis_summary(result: Dict[str, Any]) -> Dict[str, Any]:
 def _extract_security_summary(result: Dict[str, Any]) -> Dict[str, Any]:
     """Security 요약 추출."""
     return {
-        "risk_level": "low",
-        "vuln_count": result.get("total_dependencies", 0),
-        "summary": "보안 분석 완료",
+        "risk_level": result.get("risk_level", "unknown"),
+        "vuln_count": result.get("vulnerabilities", {}).get("total_count")
+                      or result.get("total_vulnerabilities")
+                      or result.get("total_dependencies", 0),
+        "security_score": result.get("security_score"),
+        "grade": result.get("security_grade"),
+        "summary": result.get("summary", "보안 분석 완료"),
         "flags": ["security_present"],
     }
+
+
+def _generate_security_report(
+    state: SupervisorState,
+    diagnosis_data: Dict[str, Any],
+    security_data: Dict[str, Any]
+) -> str:
+    """Security 분석 결과를 마크다운 보고서로 생성."""
+    lines = [f"# {state.owner}/{state.repo} 보안 분석 보고서\n"]
+    
+    # 진단 요약
+    if diagnosis_data:
+        lines.append("## 저장소 진단 요약")
+        lines.append(f"- **Health Score**: {diagnosis_data.get('health_score', 'N/A')}")
+        lines.append(f"- **Onboarding Score**: {diagnosis_data.get('onboarding_score', 'N/A')}")
+        if diagnosis_data.get("summary"):
+            lines.append(f"\n{diagnosis_data['summary']}")
+        lines.append("")
+    
+    # 보안 분석 결과
+    lines.append("## 보안 분석 결과")
+    
+    risk_level = security_data.get("risk_level", "unknown")
+    vuln_count = security_data.get("vuln_count", 0)
+    security_score = security_data.get("security_score")
+    grade = security_data.get("grade")
+    
+    lines.append(f"- **Risk Level**: {risk_level}")
+    lines.append(f"- **발견된 취약점**: {vuln_count}개")
+    
+    if security_score is not None:
+        lines.append(f"- **Security Score**: {security_score}/100")
+    if grade:
+        lines.append(f"- **Security Grade**: {grade}")
+    
+    lines.append("")
+    
+    # 요약
+    summary = security_data.get("summary", "")
+    if summary:
+        lines.append("## 분석 요약")
+        lines.append(summary)
+        lines.append("")
+    
+    # 안내 메시지
+    lines.append("---")
+    lines.append("*상세 분석 결과는 오른쪽 Report 영역에서 확인하세요.*")
+    
+    return "\n".join(lines)
 
 
 def _extract_recommend_summary(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -604,6 +657,19 @@ def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
             "step": state.step + 1,
         }
     
+    # security intent: LLM 호출 없이 직접 마크다운 보고서 생성
+    security_data = task_results.get("security", {})
+    if state.global_intent == "security" and security_data:
+        report = _generate_security_report(state, diagnosis_data, security_data)
+        logger.info("Final answer generated (security intent, direct markdown)")
+        
+        return {
+            "chat_response": report,
+            "last_answer_kind": "report",
+            "diagnosis_result": diagnosis_data,
+            "step": state.step + 1,
+        }
+    
     # 그 외 intent: LLM으로 보고서 생성
     prompt = f"""GitHub 저장소 분석 보고서 작성.
 
@@ -634,13 +700,26 @@ def finalize_supervisor_answer(state: SupervisorState) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Final answer failed: {e}")
-        
         fallback = "분석 완료.\n\n"
+
         if diagnosis_data:
-            fallback += f"**진단**\n- Health: {diagnosis_data.get('health_score', 'N/A')}\n\n"
-        if "security" in task_results:
-            fallback += f"**보안**\n- Risk: {task_results['security'].get('risk_level', 'N/A')}\n\n"
-        
+            fallback += (
+                "**진단 요약**\n"
+                f"- Health Score: {diagnosis_data.get('health_score', 'N/A')}\n"
+                f"- Onboarding Score: {diagnosis_data.get('onboarding_score', 'N/A')}\n\n"
+            )
+
+        security_data = task_results.get("security")
+        if security_data:
+            fallback += "**보안 요약**\n"
+            fallback += f"- Risk Level: {security_data.get('risk_level', 'N/A')}\n"
+            fallback += f"- Vulnerabilities: {security_data.get('vuln_count', 'N/A')}개\n"
+            score = security_data.get("security_score")
+            grade = security_data.get("grade")
+            if score is not None or grade is not None:
+                fallback += f"- Security Score: {score} (Grade: {grade})\n"
+            fallback += "\n"
+
         return {
             "chat_response": fallback,
             "last_answer_kind": "report",

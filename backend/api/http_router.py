@@ -730,7 +730,7 @@ async def analyze_repository_stream(request: StreamingAnalyzeRequest):
                         await asyncio.sleep(1.5)
                 
                 # 결과 대기
-                result = future.result(timeout=300)
+                result = future.result(timeout=900)
             
             # 결과 처리
             if result is None:
@@ -942,7 +942,7 @@ async def analyze_repository_stream_get(
                         yield send_event(step, pct, msg)
                         await asyncio.sleep(1.2)
                 
-                result = future.result(timeout=300)
+                result = future.result(timeout=900)
             
             # 품질 검사
             yield send_event("quality", 90, "AI가 결과 품질 검사 중...")
