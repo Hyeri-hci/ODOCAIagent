@@ -934,7 +934,7 @@ async def analyze_repository_stream_get(
                 user_context["analysis_depth"] = analysis_depth
             
             inp = SupervisorInput(
-                task_type="general_inquiry",
+                task_type="diagnose_repo",
                 owner=owner,
                 repo=repo,
                 user_context=user_context,
