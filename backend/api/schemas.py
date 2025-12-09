@@ -53,6 +53,12 @@ class DiagnosisSummaryDTO:
     # Agentic 플로우 결과
     warnings: List[str] = field(default_factory=list)
     flow_adjustments: List[str] = field(default_factory=list)
+    
+    # 메타 에이전트 결과
+    task_plan: Optional[List[Dict[str, Any]]] = None
+    task_results: Optional[Dict[str, Any]] = None
+    chat_response: Optional[str] = None
+    onboarding_plan: Optional[List[Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -234,4 +240,12 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
         has_build_config=has_build_config,
         warnings=warnings,
         flow_adjustments=flow_adjustments,
+        # 메타 에이전트 결과
+        task_plan=res.get("task_plan") if isinstance(res, dict) else None,
+        task_results=res.get("task_results") if isinstance(res, dict) else None,
+        chat_response=res.get("chat_response") if isinstance(res, dict) else None,
+        onboarding_plan=(
+            res.get("task_results", {}).get("onboarding", {}).get("onboarding_plan") or
+            res.get("onboarding_plan")
+        ) if isinstance(res, dict) else None,
     )

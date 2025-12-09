@@ -41,6 +41,7 @@ class AnalyzeResponse(BaseModel):
     task_results: Optional[Dict[str, Any]] = None
     chat_response: Optional[str] = None
     onboarding_plan: Optional[List[Dict[str, Any]]] = None  # 온보딩 플랜
+    security: Optional[Dict[str, Any]] = None  # 보안 분석 결과
 
 
 def parse_github_url(url: str) -> tuple[str, str, str]:
@@ -199,6 +200,8 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
             data.get("task_results", {}).get("onboarding", {}).get("onboarding_plan") or
             data.get("onboarding_plan")
         ),
+        # 보안 분석 결과
+        security=_extract_security_response(data.get("task_results", {}).get("security")),
     )
     
     # user_message 없는 경우만 캐시에 저장
@@ -370,6 +373,25 @@ def _generate_actions_from_issues(
     
     return actions
 
+
+def _extract_security_response(security_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Security 분석 결과를 프론트엔드 형식으로 변환."""
+    if not security_data:
+        return None
+    
+    return {
+        "score": security_data.get("security_score"),
+        "grade": security_data.get("grade"),
+        "risk_level": security_data.get("risk_level", "unknown"),
+        "vulnerability_count": security_data.get("vuln_count", 0),
+        "critical": security_data.get("critical_count", 0),
+        "high": security_data.get("high_count", 0),
+        "medium": security_data.get("medium_count", 0),
+        "low": security_data.get("low_count", 0),
+        "summary": security_data.get("summary", ""),
+        # 취약점 상세 목록 (CVE ID, 패키지명, 심각도, 설명 등)
+        "vulnerability_details": security_data.get("vulnerability_details", []),
+    }
 
 
 # Agent Task API (신규 통합 API)
@@ -942,7 +964,7 @@ async def analyze_repository_stream_get(
                         yield send_event(step, pct, msg)
                         await asyncio.sleep(1.2)
                 
-                result = future.result(timeout=900)
+                result = future.result(timeout=1800)  # 30분 (대규모 프로젝트 NVD 조회 시간 감안)
             
             # 품질 검사
             yield send_event("quality", 90, "AI가 결과 품질 검사 중...")
@@ -995,21 +1017,20 @@ async def analyze_repository_stream_get(
                     "stars": data.get("stars", 0),
                     "forks": data.get("forks", 0),
                     "dependency_complexity_score": data.get("dependency_complexity_score", 0),
-                    # 백엔드에서 생성한 AI 응답 (온보딩 가이드 등)
                     "chat_response": result.get("chat_response"),
                 },
                 "risks": _generate_risks_from_issues(docs_issues, activity_issues, data),
                 "actions": _generate_actions_from_issues(docs_issues, activity_issues, data, recommended_issues),
                 "recommended_issues": recommended_issues,
                 "readme_summary": data.get("summary_for_user"),
-                # 최상위 레벨에도 chat_response 추가 (프론트엔드 호환)
                 "chat_response": result.get("chat_response"),
-                # 온보딩 플랜 (여러 경로에서 추출 시도)
                 "onboarding_plan": (
                     result.get("task_results", {}).get("onboarding", {}).get("onboarding_plan") or
                     result.get("onboarding_plan") or
                     data.get("onboarding_plan")
                 ),
+                # Security 분석 결과
+                "security": _extract_security_response(result.get("task_results", {}).get("security")),
             }
             
             # 캐시에 저장

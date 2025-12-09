@@ -34,10 +34,13 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
       return { url: urlMatch[0], isFullUrl: true };
     }
 
-    // 2. Short Pattern (owner/repo) - 전체 텍스트가 정확히 일치할 때만
-    const shortPattern = /^[\w-]+\/[\w.-]+$/;
-    if (shortPattern.test(text.trim())) {
-      return { url: `https://github.com/${text.trim()}`, isFullUrl: false };
+    // 2. Short Pattern (owner/repo) - 문장 중간에 있어도 찾음
+    const shortPattern = /(^|[\s,])([A-Za-z0-9][\w-]*\/[\w.-]+)/;
+    const shortMatch = text.match(shortPattern);
+
+    if (shortMatch) {
+      const repoPath = shortMatch[2].trim();
+      return { url: `https://github.com/${repoPath}`, isFullUrl: false };
     }
 
     return null;
@@ -119,10 +122,9 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
             className={`
               relative flex items-center bg-white rounded-2xl shadow-[0_8px_30px_rgb(0,0,0,0.08)] 
               border-2 transition-all duration-300 cursor-text
-              ${
-                isLoading
-                  ? "border-gray-100 bg-gray-50"
-                  : "border-transparent hover:border-gray-200 focus-within:border-black focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.12)]"
+              ${isLoading
+                ? "border-gray-100 bg-gray-50"
+                : "border-transparent hover:border-gray-200 focus-within:border-black focus-within:shadow-[0_8px_40px_rgb(0,0,0,0.12)]"
               }
             `}
             onClick={() => inputRef.current?.focus()}

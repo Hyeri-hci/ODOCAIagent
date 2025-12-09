@@ -246,8 +246,8 @@ def create_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
         if "security" not in user_prefs.get("ignore", []):
             plan.append({
                 "step": 2, "agent": "security", "mode": "FAST",
-                "condition": "if diagnosis.health_score < 50",
-                "description": "조건부 보안 분석"
+                "condition": "always",
+                "description": "보안 취약점 분석"
             })
         # [Future] 추천 예시 (현재 실행하지 않음)
         # plan.append({
@@ -421,6 +421,24 @@ def _run_security_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
             fut = asyncio.run_coroutine_threadsafe(_run_async(), loop)
             result = fut.result(timeout=300)
 
+        # 반환 결과 로깅 (디버깅용)
+        logger.info(f"Security Agent result keys: {list(result.keys()) if result else 'None'}")
+        
+        # 상세 구조 로깅
+        if result:
+            results = result.get("results", {})
+            logger.info(f"Security Agent result.results keys: {list(results.keys()) if results else 'None'}")
+            if results:
+                logger.info(f"Security Agent result.results.security_score: {results.get('security_score')}")
+                logger.info(f"Security Agent result.results.security_grade: {results.get('security_grade')}")
+                vulns = results.get("vulnerabilities", {})
+                logger.info(f"Security Agent result.results.vulnerabilities: total={vulns.get('total')}, critical={vulns.get('critical')}")
+            else:
+                logger.warning(f"Security Agent result has no 'results' key. Full result: {list(result.keys())}")
+        
+        if result and result.get("error"):
+            logger.warning(f"Security Agent returned error: {result.get('error')}")
+        
         return result
 
     except Exception as e:
@@ -456,15 +474,85 @@ def _extract_diagnosis_summary(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _extract_security_summary(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Security 요약 추출."""
+    """Security 요약 추출. Security Agent V2 출력 형식에 맞춤."""
+    # 1. 성공 응답: result.results 구조
+    results = result.get("results", {})
+    vulnerabilities = results.get("vulnerabilities", {})
+    
+    # 2. 에러 응답: partial_results 구조
+    if not results or not vulnerabilities:
+        partial = result.get("partial_results", {})
+        if partial:
+            vulnerabilities = partial.get("vulnerabilities", [])
+            # partial_results.vulnerabilities가 리스트인 경우 개수 계산
+            if isinstance(vulnerabilities, list):
+                vuln_list = vulnerabilities
+                vulnerabilities = {
+                    "total": len(vuln_list),
+                    "critical": sum(1 for v in vuln_list if v.get("severity") == "CRITICAL"),
+                    "high": sum(1 for v in vuln_list if v.get("severity") == "HIGH"),
+                    "medium": sum(1 for v in vuln_list if v.get("severity") == "MEDIUM"),
+                    "low": sum(1 for v in vuln_list if v.get("severity") == "LOW"),
+                }
+    
+    # 3. final_result가 중첩된 경우 (fallback)
+    if not results:
+        final_result = result.get("final_result", {})
+        results = final_result.get("results", {})
+        if not vulnerabilities:
+            vulnerabilities = results.get("vulnerabilities", {})
+    
+    # 여러 경로에서 값 추출 시도
+    vuln_count = (
+        vulnerabilities.get("total") or
+        result.get("vulnerability_count") or
+        result.get("total_vulnerabilities") or
+        0
+    )
+    
+    # score/grade 추출 - 여러 경로 시도
+    security_score = (
+        results.get("security_score") or 
+        result.get("security_score") or
+        result.get("partial_results", {}).get("security_score")
+    )
+    security_grade = (
+        results.get("security_grade") or 
+        result.get("security_grade") or
+        result.get("partial_results", {}).get("security_grade")
+    )
+    risk_level = (
+        results.get("risk_level") or 
+        result.get("risk_level") or
+        result.get("partial_results", {}).get("risk_level") or
+        "unknown"
+    )
+    
+    # critical/high/medium/low 개수 - 여러 경로 시도
+    critical = vulnerabilities.get("critical") or result.get("critical_count", 0)
+    high = vulnerabilities.get("high") or result.get("high_count", 0)
+    medium = vulnerabilities.get("medium") or result.get("medium_count", 0)
+    low = vulnerabilities.get("low") or result.get("low_count", 0)
+    
+    # 취약점 상세 정보 추출
+    vuln_details = vulnerabilities.get("details", [])
+    if not vuln_details:
+        vuln_details = result.get("partial_results", {}).get("vulnerabilities", [])
+    
+    logger.info(f"Extracted security summary: score={security_score}, grade={security_grade}, vuln_count={vuln_count}, critical={critical}, high={high}")
+    
     return {
-        "risk_level": result.get("risk_level", "unknown"),
-        "vuln_count": result.get("vulnerabilities", {}).get("total_count")
-                      or result.get("total_vulnerabilities")
-                      or result.get("total_dependencies", 0),
-        "security_score": result.get("security_score"),
-        "grade": result.get("security_grade"),
-        "summary": result.get("summary", "보안 분석 완료"),
+        "risk_level": risk_level,
+        "vuln_count": vuln_count,
+        "security_score": security_score,
+        "grade": security_grade,
+        "critical_count": critical,
+        "high_count": high,
+        "medium_count": medium,
+        "low_count": low,
+        # 취약점 상세 정보 (CVE ID, 설명, 심각도 등)
+        "vulnerability_details": vuln_details,
+        "summary": result.get("report") or "보안 분석 완료",
         "flags": ["security_present"],
     }
 
@@ -494,13 +582,26 @@ def _generate_security_report(
     security_score = security_data.get("security_score")
     grade = security_data.get("grade")
     
-    lines.append(f"- **Risk Level**: {risk_level}")
-    lines.append(f"- **발견된 취약점**: {vuln_count}개")
-    
     if security_score is not None:
         lines.append(f"- **Security Score**: {security_score}/100")
     if grade:
         lines.append(f"- **Security Grade**: {grade}")
+    lines.append(f"- **Risk Level**: {risk_level}")
+    lines.append(f"- **총 발견된 취약점**: {vuln_count}개")
+    
+    # 취약점 상세 (Critical/High/Medium/Low)
+    critical = security_data.get("critical_count", 0)
+    high = security_data.get("high_count", 0)
+    medium = security_data.get("medium_count", 0)
+    low = security_data.get("low_count", 0)
+    
+    if any([critical, high, medium, low]):
+        lines.append("")
+        lines.append("### 취약점 상세")
+        lines.append(f"- **Critical**: {critical}개")
+        lines.append(f"- **High**: {high}개")
+        lines.append(f"- **Medium**: {medium}개")
+        lines.append(f"- **Low**: {low}개")
     
     lines.append("")
     

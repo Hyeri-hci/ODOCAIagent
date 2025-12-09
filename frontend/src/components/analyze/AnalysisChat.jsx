@@ -400,6 +400,10 @@ const AnalysisChat = ({
       // 온보딩 플랜 (API 응답에서 가져오기)
       onboardingPlan:
         apiResponse.onboarding_plan || analysis.onboarding_plan || null,
+      // 백엔드에서 생성한 AI 응답 (온보딩 가이드 등)
+      chatResponse: apiResponse.chat_response || analysis.chat_response || null,
+      // 보안 분석 결과
+      security: apiResponse.security || null,
     };
   };
 

@@ -145,6 +145,8 @@ const AnalyzePage = () => {
       flowAdjustments: analysis.flow_adjustments || [],
       // 백엔드에서 생성한 AI 응답 (온보딩 가이드 등)
       chatResponse: apiResponse.chat_response || analysis.chat_response || null,
+      // 보안 분석 결과
+      security: apiResponse.security || null,
     };
   };
 

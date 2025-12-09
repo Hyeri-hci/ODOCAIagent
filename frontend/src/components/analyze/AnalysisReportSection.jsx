@@ -16,6 +16,7 @@ import {
   ArrowRight,
   Info,
   BookOpen,
+  Shield,
 } from "lucide-react";
 import { formatNumber } from "../../utils/formatNumber";
 import OnboardingPlanSection from "./OnboardingPlanSection";
@@ -39,7 +40,7 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
     onboarding: true,  // 온보딩 가이드
     overview: true,
     projectSummary: true,
-    risks: true,
+    security: true,  // 보안 분석
     contributions: true,
     relatedProjects: false,
   });
@@ -298,26 +299,26 @@ const AnalysisReportSection = ({ analysisResult, isLoading = false }) => {
         </div>
       </CollapsibleCard>
 
-      {/* 발견된 위험 요소 */}
+      {/* 보안 분석 */}
       <CollapsibleCard
-        title="발견된 위험 요소"
-        icon={<AlertTriangle className="w-5 h-5 text-orange-500" />}
-        subtitle={`${analysisResult.risks?.length || 0}개 발견`}
-        isExpanded={expandedSections.risks}
-        onToggle={() => toggleSection("risks")}
-        headerBg="bg-gradient-to-r from-yellow-50 to-orange-50"
+        title="보안 분석"
+        icon={<Shield className="w-5 h-5 text-red-500" />}
+        subtitle={
+          analysisResult.security
+            ? `취약점 ${analysisResult.security.vulnerability_count || 0}개 발견`
+            : "분석 대기 중"
+        }
+        isExpanded={expandedSections.security}
+        onToggle={() => toggleSection("security")}
+        headerBg="bg-gradient-to-r from-red-50 to-orange-50"
       >
-        <div className="space-y-3">
-          {analysisResult.risks && analysisResult.risks.length > 0 ? (
-            analysisResult.risks.map((risk, index) => (
-              <RiskItem key={index} risk={risk} />
-            ))
-          ) : (
-            <p className="text-center text-gray-500 py-4">
-              위험 요소가 발견되지 않았습니다
-            </p>
-          )}
-        </div>
+        {analysisResult.security ? (
+          <SecurityAnalysisSection security={analysisResult.security} />
+        ) : (
+          <p className="text-center text-gray-500 py-4">
+            보안 분석이 수행되지 않았습니다. "보안 분석" 요청을 보내주세요.
+          </p>
+        )}
       </CollapsibleCard>
 
       {/* 추천 기여 작업 */}
@@ -428,6 +429,154 @@ const MetricBar = ({ icon: Icon, label, value, color }) => {
           style={{ width: `${value}%` }}
         ></div>
       </div>
+    </div>
+  );
+};
+
+// 보안 분석 섹션 컴포넌트
+const SecurityAnalysisSection = ({ security }) => {
+  const getGradeConfig = (grade) => {
+    const configs = {
+      A: { color: "text-green-600", bg: "bg-green-100", label: "우수" },
+      B: { color: "text-blue-600", bg: "bg-blue-100", label: "양호" },
+      C: { color: "text-yellow-600", bg: "bg-yellow-100", label: "보통" },
+      D: { color: "text-orange-600", bg: "bg-orange-100", label: "주의" },
+      F: { color: "text-red-600", bg: "bg-red-100", label: "위험" },
+    };
+    return configs[grade] || configs.C;
+  };
+
+  const getRiskLevelConfig = (level) => {
+    const configs = {
+      Low: { color: "text-green-600", bg: "bg-green-50", border: "border-green-200" },
+      Medium: { color: "text-yellow-600", bg: "bg-yellow-50", border: "border-yellow-200" },
+      High: { color: "text-orange-600", bg: "bg-orange-50", border: "border-orange-200" },
+      Critical: { color: "text-red-600", bg: "bg-red-50", border: "border-red-200" },
+    };
+    return configs[level] || configs.Medium;
+  };
+
+  const gradeConfig = getGradeConfig(security.grade);
+  const riskConfig = getRiskLevelConfig(security.risk_level);
+
+  return (
+    <div className="space-y-4">
+      {/* 보안 점수 및 등급 */}
+      <div className="grid grid-cols-3 gap-4">
+        {/* Security Score */}
+        <div className="bg-gradient-to-br from-slate-50 to-gray-100 rounded-xl p-4 text-center border border-gray-200">
+          <div className="text-3xl font-black text-gray-900">
+            {security.score ?? "N/A"}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">Security Score</div>
+        </div>
+
+        {/* Grade */}
+        <div className={`rounded-xl p-4 text-center ${gradeConfig.bg}`}>
+          <div className={`text-3xl font-black ${gradeConfig.color}`}>
+            {security.grade || "N/A"}
+          </div>
+          <div className="text-xs text-gray-600 mt-1">{gradeConfig.label}</div>
+        </div>
+
+        {/* Risk Level */}
+        <div className={`rounded-xl p-4 text-center ${riskConfig.bg} border ${riskConfig.border}`}>
+          <div className={`text-xl font-bold ${riskConfig.color}`}>
+            {security.risk_level || "Unknown"}
+          </div>
+          <div className="text-xs text-gray-500 mt-1">Risk Level</div>
+        </div>
+      </div>
+
+      {/* 취약점 요약 */}
+      <div className="bg-white rounded-xl p-4 border border-gray-200">
+        <h4 className="font-bold text-gray-900 mb-3">취약점 요약</h4>
+        <div className="grid grid-cols-4 gap-3">
+          <div className="text-center p-3 bg-red-50 rounded-lg border border-red-200">
+            <div className="text-2xl font-bold text-red-600">{security.critical || 0}</div>
+            <div className="text-xs text-red-700 font-medium">Critical</div>
+          </div>
+          <div className="text-center p-3 bg-orange-50 rounded-lg border border-orange-200">
+            <div className="text-2xl font-bold text-orange-600">{security.high || 0}</div>
+            <div className="text-xs text-orange-700 font-medium">High</div>
+          </div>
+          <div className="text-center p-3 bg-yellow-50 rounded-lg border border-yellow-200">
+            <div className="text-2xl font-bold text-yellow-600">{security.medium || 0}</div>
+            <div className="text-xs text-yellow-700 font-medium">Medium</div>
+          </div>
+          <div className="text-center p-3 bg-blue-50 rounded-lg border border-blue-200">
+            <div className="text-2xl font-bold text-blue-600">{security.low || 0}</div>
+            <div className="text-xs text-blue-700 font-medium">Low</div>
+          </div>
+        </div>
+      </div>
+
+      {/* 총 취약점 */}
+      <div className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-lg">
+        <span className="text-sm font-medium text-gray-600">총 발견된 취약점</span>
+        <span className="text-lg font-bold text-gray-900">
+          {security.vulnerability_count || 0}개
+        </span>
+      </div>
+
+      {/* 요약 메시지 */}
+      {security.summary && (
+        <div className="text-sm text-gray-600 p-3 bg-blue-50 rounded-lg border border-blue-100">
+          {security.summary}
+        </div>
+      )}
+
+      {/* 취약점 상세 목록 */}
+      {security.vulnerability_details && security.vulnerability_details.length > 0 && (
+        <div className="bg-white rounded-xl p-4 border border-gray-200">
+          <h4 className="font-bold text-gray-900 mb-3">발견된 취약점 목록</h4>
+          <div className="space-y-3 max-h-80 overflow-y-auto">
+            {security.vulnerability_details.map((vuln, idx) => {
+              const severityColors = {
+                CRITICAL: { bg: "bg-red-50", border: "border-red-300", badge: "bg-red-600 text-white" },
+                HIGH: { bg: "bg-orange-50", border: "border-orange-300", badge: "bg-orange-600 text-white" },
+                MEDIUM: { bg: "bg-yellow-50", border: "border-yellow-300", badge: "bg-yellow-600 text-white" },
+                LOW: { bg: "bg-blue-50", border: "border-blue-300", badge: "bg-blue-600 text-white" },
+              };
+              const colors = severityColors[vuln.severity?.toUpperCase()] || severityColors.MEDIUM;
+
+              return (
+                <div key={idx} className={`p-3 rounded-lg border-l-4 ${colors.bg} ${colors.border}`}>
+                  <div className="flex items-start justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-xs px-2 py-0.5 rounded font-bold ${colors.badge}`}>
+                        {vuln.severity || "UNKNOWN"}
+                      </span>
+                      {vuln.cve_id && (
+                        <a
+                          href={`https://nvd.nist.gov/vuln/detail/${vuln.cve_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs font-mono text-blue-600 hover:underline"
+                        >
+                          {vuln.cve_id}
+                        </a>
+                      )}
+                    </div>
+                    {vuln.cvss_score && (
+                      <span className="text-xs font-bold text-gray-600">
+                        CVSS: {vuln.cvss_score}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-sm font-medium text-gray-900 mb-1">
+                    {vuln.package_name || vuln.dependency_name || "패키지 정보 없음"}
+                    {vuln.version && <span className="text-gray-500 ml-1">({vuln.version})</span>}
+                  </div>
+                  {vuln.description && (
+                    <p className="text-xs text-gray-600 line-clamp-2">{vuln.description}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
