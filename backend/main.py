@@ -10,7 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.http_router import router as api_router
 from backend.api.sse_analyze import router as sse_router
 from backend.api.cache_router import router as cache_router
-from backend.api.chat_stream import router as chat_stream_router
+# from backend.api.chat_stream import router as chat_stream_router  # V2로 대체됨
+from backend.api.chat_router import router as chat_router
 
 app = FastAPI(
     title="ODOCAIagent API",
@@ -38,7 +39,8 @@ app.add_middleware(
 app.include_router(api_router)
 app.include_router(sse_router)
 app.include_router(cache_router)
-app.include_router(chat_stream_router)
+# app.include_router(chat_stream_router)  # V2로 대체됨
+app.include_router(chat_router)  # 세션 기반 채팅 API (V2)
 
 
 @app.get("/")
