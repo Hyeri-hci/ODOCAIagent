@@ -6,7 +6,7 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.output_parsers import StrOutputParser
-from config.setting import settings
+from backend.agents.recommend.config.setting import settings
 
 class ContentSummarizer:
     """
