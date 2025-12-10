@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from dataclasses import asdict
 from backend.agents.recommend.agent.state import RecommendState
 from backend.core.github_core import RepoSnapshot
@@ -211,6 +211,74 @@ async def generate_search_query_node(state: RecommendState) -> Dict[str, Any]:
         return {
             "error": str(e),
             "failed_step": "generate_search_query_node",
+            "step": state.step + 1
+        }
+    
+def vector_search_node(state: RecommendState) -> Dict[str, Any]:
+    """생성된 쿼리로 Qdrant 검색 수행"""
+    
+    # 앞 단계에서 쿼리 생성에 실패했다면 실행 불가
+    if not state.search_query:
+        logger.warning("No search query found. Skipping vector search.")
+        return {"step": state.step + 1}
+    
+    from backend.agents.recommend.agent.state import CandidateRepo
+    from backend.agents.recommend.core.search.vector_search import vector_search_engine
+
+    start_time = time.time()
+    logger.info(f"🔎 Executing Vector Search for: '{state.search_query}'")
+
+    try:
+        # 1. DB 검색 실행
+        result = vector_search_engine.search(
+            query=state.search_query,
+            filters=state.search_filters,
+            target_k=10
+        )
+        
+        raw_recommendations = result.get("final_recommendations", [])
+        
+        # 2. [핵심] Raw Dict -> CandidateRepo 객체로 변환 (Mapping)
+        structured_results: List[CandidateRepo] = []
+        
+        for item in raw_recommendations:
+            # Qdrant/FlashRank 결과에서 필드를 매핑하여 객체 생성
+            repo_obj = CandidateRepo(
+                id=item.get("project_id"),
+                name=item.get("name"),
+                owner=item.get("owner"),
+                description=item.get("description"),
+                stars=int(item.get("stars", 0)),
+                forks=int(item.get("forks", 0)),
+                main_language=item.get("main_language", "UNKNOWN"),
+                language=item.get("languages") or [],
+                topics=item.get("topics") or [],
+                html_url=item.get("repo_url") or f"https://github.com/{item.get('owner')}/{item.get('name')}",
+                
+                # 검색 엔진이 계산한 점수와 스니펫
+                score=item.get("rerank_score", 0.0),
+                match_snippet=item.get("match_snippet", ""),
+            )
+            structured_results.append(repo_obj)
+        
+        elapsed = round(time.time() - start_time, 3)
+        timings = dict(state.timings)
+        timings["vector_search"] = elapsed
+        
+        logger.info(f"✅ Found {len(structured_results)} recommendations in {elapsed}s")
+
+        return {
+            "search_results": structured_results,
+            "timings": timings,
+            "step": state.step + 1,
+            "error": None
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Vector search failed: {e}")
+        return {
+            "error": str(e), 
+            "failed_step": "vector_search_node", 
             "step": state.step + 1
         }
     
