@@ -14,6 +14,7 @@ class RecommendState(BaseModel):
     repo_url: str
     owner: Optional[str] = None
     repo: Optional[str] = None
+    user_request: str = ""
     ref: str = "main"
 
     # GitHub 스냅샷 (첫 단계에서 수집)
@@ -22,6 +23,10 @@ class RecommendState(BaseModel):
     # readme 요약
     readme_summary: Optional[Dict[str, Any]] = None
 
+    # RAG 검색용 결과 저장소
+    search_query: str = ""
+    search_keywords: List[str] = []
+    search_filters: Dict[str, Any] = {}
     
     # 에러 및 복구
     error: Optional[str] = None

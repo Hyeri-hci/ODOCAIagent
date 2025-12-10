@@ -149,6 +149,72 @@ async def analyze_readme_summary_node(state: RecommendState) -> Dict[str, Any]:
             "step": state.step + 1,
         }
     
+
+async def generate_search_query_node(state: RecommendState) -> Dict[str, Any]:
+    """
+    RAG 검색 쿼리 및 필터 생성 노드.
+    
+    상황에 따라 두 가지 모드로 동작합니다:
+    1. URL 분석 데이터(repo_snapshot)가 있음 -> 'url_analysis' 모드 (유사도 검색 + Fallback 로직 적용)
+    2. URL 분석 데이터가 없음 -> 'semantic_search' 모드 (일반 검색)
+    """
+
+    from backend.agents.recommend.core.search.rag_query_generator import generate_rag_query_and_filters
+    
+    start_time = time.time()
+    logger.info("🚀 Starting RAG Query Generation Node")
+
+    # 1. 모드 결정 및 분석 데이터 준비
+    # readme_summary가 없더라도, repo_snapshot(기본 정보)만 있으면 분석 모드로 진입합니다.
+    if state.repo_snapshot:
+        mode = "url_analysis"
+        
+        # Core 함수에 넘겨줄 데이터 패키징
+        # state.readme_summary가 None일 경우 빈 dict로 처리하여 에러 방지
+        analyzed_data = {
+            "repo_snapshot": state.repo_snapshot,
+            "readme_summary": state.readme_summary if state.readme_summary else {}
+        }
+    else:
+        # 스냅샷조차 없으면 일반 검색 모드
+        mode = "semantic_search"
+        analyzed_data = None
+
+    # 2. 사용자 요청 텍스트 (없으면 기본값 설정)
+    user_input = state.user_request if state.user_request.strip() else "Find similar projects."
+
+    try:
+        # 3. Core 로직 호출 (LLM 수행)
+        result = await generate_rag_query_and_filters(
+            user_request=user_input,
+            category=mode,
+            analyzed_data=analyzed_data
+        )
+
+        elapsed = round(time.time() - start_time, 3)
+        timings = dict(state.timings)
+        timings["generate_query"] = elapsed
+
+        logger.info(f"✅ Query Generated ({mode}): {result['query']} (Time: {elapsed}s)")
+
+        return {
+            "search_query": result.get("query", ""),
+            "search_keywords": result.get("keywords", []),
+            "search_filters": result.get("filters", {}),
+            "timings": timings,
+            "step": state.step + 1,
+            "error": None
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Failed to generate search query: {e}")
+        return {
+            "error": str(e),
+            "failed_step": "generate_search_query_node",
+            "step": state.step + 1
+        }
+    
+    
 def check_ingest_error_node(state: RecommendState) -> Dict[str, Any]:
     """
     에러 체크 및 복구 노드.

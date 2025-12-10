@@ -3,7 +3,7 @@ import logging
 from typing import Dict, Any, Literal
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from config.setting import settings
+from backend.agents.recommend.config.setting import settings
 
 logger = logging.getLogger(__name__)
 
@@ -16,58 +16,78 @@ try:
     )
 except Exception as e:
     logger.error(f"RAG Query Gen LLM Initialization Failed: {e}")
-    # 초기화 실패 시 함수가 호출되는 것을 방지하기 위해 재발생시킵니다.
     raise e
 
-router_prompt= ChatPromptTemplate.from_messages([
-        ("system", """
-        당신은 GitHub RAG 시스템을 위한 엄격한 검색 쿼리 분석가입니다.
-        사용자의 요청을 분석하여 `query`(검색어), `keywords`(핵심 키워드), `filters`(메타데이터 필터)를 추출하십시오.
+# ==========================================
+# 1. 일반 검색용 프롬프트 (URL 없음)
+# ==========================================
+basic_search_prompt = ChatPromptTemplate.from_messages([
+    ("system", """
+    당신은 GitHub RAG 시스템을 위한 검색 쿼리 분석가입니다.
+    사용자의 요청을 분석하여 DB 조회를 위한 `query`, `keywords`, `filters`를 추출하십시오.
 
-        ### 입력 데이터
-        - 요청: {user_request}
-        
-        ### 규칙 (엄격히 준수)
+    ### 입력 데이터
+    - 요청: {user_request}
 
-        1. **Query (의미 기반 검색용)**: 
-           - 사용자의 의도를 **간결하고 명확한 영어 명사구(Phrase)**로 변환하십시오.
-           - "I am looking for...", "Can you recommend..." 같은 **대화체 서술어를 제거**하십시오.
-           - **찾고자 하는 프로젝트의 README 제목이나 한 줄 설명**과 유사한 형태로 만드십시오.
-           - 예시: "PyTorch 같은 딥러닝 라이브러리" -> **"Deep learning framework with GPU acceleration similar to PyTorch"**
+    ### 규칙
+    1. **Query**: 대화체를 제거하고, README 제목이나 설명에 나올법한 명확한 영어 구문으로 변환. (예: "Deep learning framework")
+    2. **Keywords**: 도메인 핵심 명사 1~3개.
+    3. **Filters**: 사용자가 **명시적**으로 언어, 스타 수, 토픽을 언급한 경우에만 포함. (추측 금지)
 
-        2. **Keywords (키워드 매칭용)**:
-           - 도메인이나 특정 작업을 정의하는 **1~3개의 핵심 명사**를 추출하십시오.
-           - **포함 대상**: "deep learning", "neural network", "autograd", "tensor" 등.
-           - **제외 대상**: "project", "open source", "oss"
-           - **주의**: 사용자가 '대안(Alternative)'을 찾을 때, 기준이 되는 기술명(예: PyTorch)은 키워드에서 **제외하거나 신중히 포함**하십시오. (다른 라이브러리 설명에 PyTorch가 없을 수도 있음)
+    ### 출력 형식 (JSON Only)
+    {{
+        "query": "string",
+        "keywords": ["str", "str"],
+        "filters": {{ "language": "str", "topics": ["str"] }}
+    }}
+    """),
+    ("user", "{user_request}")
+])
 
-        3. **Filters (메타데이터 제약조건) - 환각 금지(NO HALLUCINATION)**:
-           - **매우 중요**: 사용자가 **명시적으로 언급한 경우에만** 필터를 추가하십시오.
-           - 사용자가 특정 **프레임워크, 라이브러리, 기술 스택**을 언급했다면 `topics` 리스트에 추가하십시오.
-           
-           #### 🚨 [중요] 대안/유사 검색 시 예외 규칙:
-           - 사용자가 "**~같은 것**", "**~대안**", "**~와 비슷한**" (Alternative/Similar to)을 요청한 경우, **기준이 되는 그 기술명을 `topics` 필터에 절대 넣지 마십시오.**
-           - 이유: 필터에 넣으면 그 기술이 태그된 프로젝트만 검색되어, 정작 경쟁 프로젝트(대안)는 검색되지 않습니다.
-           
-           #### 필터 추출 로직 예시:
-           - **User**: "PyTorch 프로젝트 찾아줘" -> **Filters: {{ "topics": ["pytorch"] }}** (PyTorch를 사용하는 프로젝트를 원함 -> 필터 추가 O)
-           - **User**: "**PyTorch 같은** 다른 라이브러리 있어?" -> **Filters: {{ "topics": [] }}** (PyTorch가 아닌 다른걸 원함 -> 필터 추가 X)
-           - **User**: "React 대안 프레임워크" -> **Filters: {{ "topics": [] }}** (React 필터 X, Query로 검색)
+# ==========================================
+# 2. 유사도/맥락 기반 검색용 프롬프트 (URL 분석 데이터 포함)
+# ==========================================
+# [수정됨] 추론(Inference) 관련 지침 추가
+similarity_search_prompt = ChatPromptTemplate.from_messages([
+    ("system", """
+    당신은 'GitHub 프로젝트 추천 시스템'의 AI 에이전트입니다.
+    사용자가 제공한 **[기준 리포지토리 분석 결과]**와 **[사용자 요구사항]**을 결합하여,
+    **DB에서 유사한 프로젝트를 찾기 위한 검색 쿼리**를 생성해야 합니다.
 
-        ### 출력 형식 (JSON Only)
-        반드시 아래 JSON 형식으로만 응답하십시오.
-        {{
-            "query": "...",
-            "keywords": ["...", "..."], 
-            "filters": {{
-                "language": "...",
-                "min_stars": 0,
-                "topics": ["...", "..."]
-            }}
-        }}
-        """),
-        ("user", "User Request: {user_request}")
-    ])
+    ### 입력 데이터
+    1. **기준 리포지토리 정보 (Context)**:
+       {repo_context}
+    
+    2. **사용자 요구사항 (Instruction)**:
+       - {user_request}
+
+    ### 작업 목표 및 데이터 처리 전략
+    1. **Context가 충분할 경우 (상세 요약 존재)**: 제공된 기능을 바탕으로 정확한 기술적 쿼리를 생성하십시오.
+    2. **Context가 부족할 경우 (설명/토픽만 존재)**: 프로젝트 이름과 토픽(Topic)을 보고 이 프로젝트가 수행할 기능을 **논리적으로 추론(Infer)**하여 쿼리를 생성하십시오.
+
+    ### 규칙 (Strict)
+    1. **Query (검색어)**:
+       - 기준 리포지토리의 이름(예: LangChain) 자체를 검색어로 쓰지 마십시오. (그 프로젝트를 찾는 게 아니라 '비슷한 것'을 찾는 것이므로)
+       - 대신 **그 프로젝트가 무엇인지 정의하는 기술적 명사구**를 만드십시오.
+       - 예시 상황:
+         - Context: LangChain (LLM framework)
+         - User: "이거랑 비슷한데 Java로 된 거"
+         - **Result Query**: "LLM orchestration framework for Java applications" (LangChain이라는 단어 대신 기능을 서술)
+
+    2. **Filters (필터)**:
+       - **매우 중요**: 사용자가 "Java로 된 거"라고 했다면 `filters: {{ "language": "Java" }}`를 반드시 추가하십시오.
+       - 기준 리포지토리의 언어가 Python이어도, 사용자가 Java를 원하면 Java로 필터링해야 합니다.
+
+    ### 출력 형식 (JSON Only)
+    {{
+        "query": "string (기술적 서술)",
+        "keywords": ["핵심기술1", "핵심기술2"],
+        "filters": {{ "language": "...", "topics": [...] }}
+    }}
+    """),
+    ("user", "Analyze the context and instruction above, and generate the JSON query.")
+])
+
 
 async def generate_rag_query_and_filters(
     user_request: str,
@@ -75,35 +95,93 @@ async def generate_rag_query_and_filters(
     analyzed_data: Dict[str, Any] = None
 ) -> Dict[str, Any]:
     """
-    [핵심 로직] 사용자 요청을 분석하여 RAG 검색에 필요한 쿼리, 키워드, 필터를 추출합니다.
+    [핵심 로직] 
+    1. URL 분석 데이터가 있으면 -> '유사도/맥락 기반 검색' 모드로 동작 (similarity_prompt)
+    2. 없으면 -> '일반 검색' 모드로 동작 (basic_search_prompt)
     """
-    query = user_request # 로그 출력을 위한 변수
-    print(f"⚙️ [RAG Query Gen] Analyzing request for vector search: '{query}'")
     
-    chain = router_prompt | llm
-    
-    try:
-        # 💡 [수정] ainvoke 사용 (비동기 환경) 및 입력 변수를 {user_request}만 전달
-        response = await chain.ainvoke({
-            "user_request": user_request,
-            # 'category', 'summary'는 prompt에 변수로 정의되어 있지 않으므로 제거합니다.
-        })
+    # --- 1. 모드 결정 및 프롬프트 선택 ---
+    if category == "url_analysis" and analyzed_data:
+        print(f"⚙️ [RAG Query Gen] Context-Aware Mode (URL Data Found)")
         
+        # 데이터 추출
+        repo_snapshot = analyzed_data.get("repo_snapshot", {})
+        readme_summary = analyzed_data.get("readme_summary", {})
+        
+        # [수정됨] Fallback Logic을 위한 변수 준비
+        name = repo_snapshot.get('full_name', 'Unknown')
+        description = repo_snapshot.get('description', '') or "" # None 방지
+        topics = repo_snapshot.get('topics', [])
+        primary_lang = repo_snapshot.get('primary_language', 'Unknown')
+        
+        # 요약 데이터 유효성 검사 (너무 짧거나 에러 메시지만 있는 경우 제외)
+        raw_summary = readme_summary.get('final_summary', '')
+        has_valid_summary = raw_summary and "No summary generated" not in raw_summary and len(raw_summary) > 50
+
+        # === [Fallback Logic 구현] ===
+        if has_valid_summary:
+            # 1순위: README 요약이 충실한 경우 -> 가장 정확함
+            source_info = "[Source: README Summary - High Reliability]"
+            content_body = raw_summary
+            
+        elif description.strip():
+            # 2순위: 요약은 없지만 Description은 있는 경우 -> 설명 기반
+            source_info = "[Source: Repository Description - Medium Reliability]"
+            content_body = description
+            
+        else:
+            # 3순위: 둘 다 없음 -> 이름과 토픽으로 추론 필요
+            # 토픽 리스트를 문자열로 변환
+            topic_str = ", ".join(topics) if topics else "No topics provided"
+            
+            source_info = "[Source: Project Name & Topics - Inference Required]"
+            content_body = f"""
+            Project Name: {name}
+            Topics/Tags: {topic_str}
+            (No description available. Please infer functionality from the name and topics.)
+            """
+
+        # LLM에게 던져줄 최종 Context 구성
+        repo_context_str = f"""
+        {source_info}
+        - Project Name: {name}
+        - Main Language: {primary_lang}
+        - Context Content:
+        {content_body}
+        """
+        
+        # 체인 설정
+        chain = similarity_search_prompt | llm
+        input_vars = {
+            "repo_context": repo_context_str,
+            "user_request": user_request if user_request else "Find similar projects based on this architecture."
+        }
+        
+    else:
+        print(f"⚙️ [RAG Query Gen] Basic Search Mode (No URL Data)")
+        
+        # 체인 설정
+        chain = basic_search_prompt | llm
+        input_vars = {
+            "user_request": user_request
+        }
+
+    # --- 2. LLM 실행 ---
+    try:
+        response = await chain.ainvoke(input_vars)
         content = response.content
         
-        # 💡 [로그 추가] LLM의 원본 응답을 디버깅용으로 출력
-        print("\n--- 🤖 LLM Raw Response Log (RAG Query Gen) ---")
+        # 💡 [로그]
+        print(f"\n--- 🤖 LLM Generated Query ({category}) ---")
         print(content)
-        print("--------------------------------------------------\n")
+        print("------------------------------------------\n")
         
-        # JSON 파싱 (마크다운 코드 블록 제거)
+        # JSON 파싱
         content = content.strip()
         if content.startswith("```json"):
             content = content.replace("```json", "").replace("```", "").strip()
             
         result_data = json.loads(content)
-        
-        logger.info(f"[RAGQueryGen] Extracted Query: {result_data.get('query')}")
         
         return {
             "query": result_data.get("query", user_request),
@@ -112,6 +190,6 @@ async def generate_rag_query_and_filters(
         }
         
     except Exception as e:
-        logger.error(f"[RAGQueryGen] Critical Error during LLM call or parsing: {e}")
-        # 실패 시 Fallback 쿼리 반환 (원본 쿼리 사용)
+        logger.error(f"[RAGQueryGen] Error: {e}")
+        # 실패 시 기본값 반환
         return {"query": user_request, "keywords": [], "filters": {}}
