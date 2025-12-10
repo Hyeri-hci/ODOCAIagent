@@ -8,7 +8,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 from backend.agents.recommend.config.setting import settings
 from backend.core.models import RepoSnapshot
-from backend.agents.recommend.agent.state import RAGCandidateRepo
+from backend.agents.recommend.agent.state import CandidateRepo
 
 logger = logging.getLogger("RepoScorer")
 
@@ -134,12 +134,12 @@ class RepoScorer:
 """
     async def _evaluate_single_repo(
         self, 
-        repo: RAGCandidateRepo, 
+        repo: CandidateRepo, 
         user_request: str, 
         intent: str, 
         source_repo: Optional[RepoSnapshot],
         readme_summary: str
-    ) -> RAGCandidateRepo:
+    ) -> CandidateRepo:
         """
         [내부 함수] 리포지토리 1개를 개별적으로 평가 (비동기 단위 작업)
         """
@@ -195,12 +195,12 @@ class RepoScorer:
 
     async def evaluate_candidates(
         self, 
-        candidates: List[RAGCandidateRepo], 
+        candidates: List[CandidateRepo], 
         user_request: str, 
         intent: str, 
         source_repo: Optional[RepoSnapshot] = None,
         readme_summary: str = ""
-    ) -> List[RAGCandidateRepo]:
+    ) -> List[CandidateRepo]:
         
         if not candidates:
             return []

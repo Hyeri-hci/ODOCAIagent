@@ -4,6 +4,7 @@ import asyncio
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
 from langgraph.graph import StateGraph, END
+from pydantic import BaseModel, ValidationError
 
 # [Import] State 및 Core 로직
 from backend.agents.recommend.agent.state import RecommendState
@@ -12,6 +13,12 @@ from backend.core.models import RepoSnapshot
 # [Import] 검색 엔진 (방금 만든 코드)
 from backend.agents.recommend.core.search.vector_search import vector_search_engine
 from backend.agents.recommend.core.analysis.match_score import RepoScorer
+from backend.agents.recommend.core.intent_parsing import extract_initial_metadata
+from backend.agents.recommend.core.trend.get_trend import trend_service, ParsedTrendingRepo
+from backend.agents.recommend.agent.state import CandidateRepo
+
+from langchain_openai import ChatOpenAI
+from backend.agents.recommend.config.setting import settings
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(name)s | %(message)s')
@@ -21,6 +28,13 @@ logger = logging.getLogger("TestRealAgent")
 # 1. Global Instances
 # ------------------------------------------------------------------
 try:
+    globals()['llm'] = ChatOpenAI(
+        base_url=settings.llm.api_base,
+        api_key=settings.llm.api_key,
+        model=settings.llm.model_name,
+        temperature=0
+    )
+
     summarizer_instance = ContentSummarizer()
     scorer_instance = RepoScorer() # Scorer 인스턴스 생성 (비용 절약을 위해 재사용)
     logger.info("✅ Global instances initialized.")
@@ -31,6 +45,51 @@ except Exception as e:
 # ------------------------------------------------------------------
 # 2. Nodes Definition
 # ------------------------------------------------------------------
+
+async def parse_initial_request_node(state: RecommendState) -> Dict[str, Any]:
+    """
+    [첫 실행 노드] 사용자 요청을 분석하여 의도와 정량적 필터 조건만 추출하고 상태를 업데이트합니다.
+    (핵심 로직은 core/intent_parsing.py의 extract_initial_metadata를 호출)
+    """
+    
+    user_request = state.user_request
+    repo_url = state.repo_url
+    
+    try:
+        llm_client = globals()['llm'] 
+    except KeyError:
+        logger.error("❌ LLM client ('llm') not initialized in global scope.")
+        return {"user_intent": "semantic_search", "quantitative_filters": []}
+
+    if not user_request and not repo_url:
+        logger.warning("Request is empty. Defaulting to semantic_search.")
+        return {"user_intent": "semantic_search", "quantitative_filters": []}
+
+    try:
+        # 2. 핵심 로직 호출 (Core Logic 실행)
+        result = await extract_initial_metadata(
+            llm_client=llm_client, 
+            user_request=user_request,
+            repo_url=repo_url
+        )
+        
+        logger.info(f"✅ Initial Parsing Result: Intent={result.user_intent}, Filters={len(result.quantitative_filters)}")
+        
+        # 3. LangGraph 상태 업데이트용 맵 반환
+        # 반환된 딕셔너리의 키(user_intent, quantitative_filters)가 RecommendState의 필드를 업데이트합니다.
+        return {
+            "user_intent": result.user_intent,
+            "quantitative_filters": result.quantitative_filters
+        }
+    
+    except Exception as e:
+        logger.error(f"❌ Node Execution Failed (parse_initial_request_node): {e}")
+        # 오류 발생 시 폴백 처리
+        return {
+            "user_intent": "semantic_search",
+            "error": f"Initial parsing failed: {e.__class__.__name__}",
+            "failed_step": "parse_initial_request_node"
+        }
 
 def fetch_snapshot_node(state: RecommendState) -> Dict[str, Any]:
     """GitHub 저장소 스냅샷 수집"""
@@ -104,6 +163,7 @@ async def analyze_readme_summary_node(state: RecommendState) -> Dict[str, Any]:
 
 async def generate_search_query_node(state: RecommendState) -> Dict[str, Any]:
     """RAG 쿼리 생성 (Fallback 로직 포함)"""
+
     from backend.agents.recommend.core.search.rag_query_generator import generate_rag_query_and_filters
     
     start_time = time.time()
@@ -156,7 +216,7 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         logger.warning("No search query found. Skipping vector search.")
         return {"step": state.step + 1}
     
-    from backend.agents.recommend.agent.state import RAGCandidateRepo
+    from backend.agents.recommend.agent.state import CandidateRepo
 
     start_time = time.time()
     logger.info(f"🔎 Executing Vector Search for: '{state.search_query}'")
@@ -171,12 +231,12 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         
         raw_recommendations = result.get("final_recommendations", [])
         
-        # 2. [핵심] Raw Dict -> RAGCandidateRepo 객체로 변환 (Mapping)
-        structured_results: List[RAGCandidateRepo] = []
+        # 2. [핵심] Raw Dict -> CandidateRepo 객체로 변환 (Mapping)
+        structured_results: List[CandidateRepo] = []
         
         for item in raw_recommendations:
             # Qdrant/FlashRank 결과에서 필드를 매핑하여 객체 생성
-            repo_obj = RAGCandidateRepo(
+            repo_obj = CandidateRepo(
                 id=item.get("project_id"),
                 name=item.get("name"),
                 owner=item.get("owner"),
@@ -201,7 +261,7 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         logger.info(f"✅ Found {len(structured_results)} recommendations in {elapsed}s")
 
         return {
-            "search_results": structured_results, # ⭐️ 이제 객체 리스트가 저장됨
+            "search_results": structured_results,
             "timings": timings,
             "step": state.step + 1,
             "error": None
@@ -266,17 +326,110 @@ async def score_candidates_node(state: RecommendState) -> Dict[str, Any]:
         logger.error(f"❌ Scoring failed: {e}")
         # 에러가 나도 프로세스는 계속 진행 (평가만 실패)
         return {"error": str(e), "failed_step": "score_candidates_node", "step": state.step + 1}
+    
+async def trend_search_node(state: RecommendState) -> Dict[str, Any]:
+    """
+    [트렌드 검색 노드] 상태의 정량적 필터(TREND_LANGUAGE, TREND_SINCE)를 기반으로 트렌드 검색을 실행합니다.
+    """
+    start_time = time.time()
+    logger.info("🔎 Executing Trend Search via TrendService...")
+
+    try:
+        # 1. TrendService 호출 (state에서 quantitative_filters 전달)
+        raw_search_results = await trend_service.search_trending_repos(
+            filters=state.quantitative_filters
+        )
+        
+        # 2. 결과 매핑 및 변환 (ParsedTrendingRepo -> CandidateRepo)
+        structured_results: List[CandidateRepo] = []
+        for item in raw_search_results:
+            # item은 ParsedTrendingRepo 객체이거나 Dict 형태입니다.
+            # CandidateRepo가 rank, stars_since 필드를 포함하도록 확장되었으므로 직접 변환 가능합니다.
+            try:
+                # 필드가 일치한다고 가정하고 변환 (stars=total_stars, score=stars_since를 임시로 사용)
+                repo_obj = CandidateRepo(
+                    id=0,
+                    name=item.name,
+                    owner=item.owner,
+                    html_url=item.url,
+                    description=item.description,
+                    main_language=item.language,
+                    stars=item.total_stars,
+                    # 트렌드 필드 매핑
+                    rank=item.rank,
+                    stars_since=item.stars_since,
+                    
+                    # RAG 필드는 0 또는 빈 값
+                    score=0.0,
+                    match_snippet=f"Trending Rank: {item.rank}, Stars this period: {item.stars_since}"
+                )
+                structured_results.append(repo_obj)
+            except (KeyError, ValidationError, AttributeError) as ve:
+                 logger.warning(f"⚠️ Failed to map Trend result to CandidateRepo: {ve}")
+
+
+        elapsed = round(time.time() - start_time, 3)
+        timings = dict(state.timings)
+        timings["trend_search"] = elapsed
+        
+        logger.info(f"✅ Trend Search Found {len(structured_results)} candidates in {elapsed}s")
+
+        # 3. 상태 업데이트
+        return {
+            "search_results": structured_results, # 확장된 CandidateRepo 객체 리스트 저장
+            "timings": timings,
+            "search_query": f"Trending repositories based on filters.",
+            "step": state.step + 1,
+            "error": None
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Trend search failed: {e}")
+        return {
+            "error": str(e), 
+            "failed_step": "trend_search_node", 
+            "step": state.step + 1
+        }
 
 
 def check_ingest_error_node(state: RecommendState) -> Dict[str, Any]:
+    # ... (check_ingest_error_node 구현 유지) ...
     if not state.error: return {"step": state.step + 1}
     if state.retry_count < state.max_retry:
         return {"error": None, "failed_step": state.failed_step, "retry_count": state.retry_count + 1, "step": state.step + 1}
     return {"step": state.step + 1}
 
 # ------------------------------------------------------------------
-# 3. Routing Logic
+# 3. Routing Logic (라우팅 로직)
 # ------------------------------------------------------------------
+
+# ⭐️ 새로운 라우터: parse_initial_request_node 이후
+def route_after_parsing(state: RecommendState) -> str:
+    """초기 의도 파악 후 다음 단계를 결정합니다."""
+    if state.error:
+        return "check_ingest_error_node"
+        
+    intent = state.user_intent
+    
+    if intent == "url_analysis":
+        # URL 분석 모드: 스냅샷 수집이 필요함
+        logger.info("🚦 Intent: url_analysis. Routing to fetch_snapshot_node.")
+        return "fetch_snapshot_node" 
+    
+    elif intent == "trend_analysis":
+        # ⭐️ 수정: 트렌드 분석은 전용 노드로 분기
+        logger.info("🚦 Intent: trend_analysis. Routing to trend_search_node.")
+        return "trend_search_node" # ⭐️ 이 노드로 이동!
+    
+    elif intent in ["semantic_search", "search_criteria"]:
+        # 일반 검색/조건 분석 모드: 쿼리 생성으로 이동
+        logger.info(f"🚦 Intent: {intent}. Routing directly to generate_search_query_node.")
+        return "generate_search_query_node"
+    
+    else:
+        logger.warning(f"🚦 Unknown intent ({intent}). Routing to default search.")
+        return "generate_search_query_node"
+        return "generate_search_query_node"
 
 def route_after_fetch(state: RecommendState) -> str:
     if state.error: return "check_ingest_error_node"
@@ -292,17 +445,16 @@ def route_after_query_gen(state: RecommendState) -> str:
 
 def route_after_vector_search(state: RecommendState) -> str:
     if state.error: return "check_ingest_error_node"
-    # ✅ 검색 후 -> 평가(Scoring) 노드로 이동
     return "score_candidates_node"
 
 def route_after_scoring(state: RecommendState) -> str:
     if state.error: return "check_ingest_error_node"
-    # ✅ 평가 및 정렬 완료 -> 종료
     return END
 
 def route_after_error_check(state: RecommendState) -> str:
     if state.error: return END 
     step_map = {
+        "parse_initial_request_node": "parse_initial_request_node", # 재시도는 의미 없음
         "fetch_snapshot_node": "fetch_snapshot_node",
         "analyze_readme_summary_node": "analyze_readme_summary_node",
         "generate_search_query_node": "generate_search_query_node",
@@ -310,6 +462,12 @@ def route_after_error_check(state: RecommendState) -> str:
         "score_candidates_node": "score_candidates_node"
     }
     return step_map.get(state.failed_step, END)
+
+def route_after_trend_search(state: RecommendState) -> str:
+    """트렌드 검색 후 다음 단계를 결정합니다."""
+    if state.error: 
+        return "check_ingest_error_node"
+    return END
 
 # ------------------------------------------------------------------
 # 4. Graph Construction & Execution
@@ -319,70 +477,89 @@ def build_graph():
     workflow = StateGraph(RecommendState)
     
     # 노드 등록
+    workflow.add_node("parse_initial_request_node", parse_initial_request_node)
     workflow.add_node("fetch_snapshot_node", fetch_snapshot_node)
     workflow.add_node("analyze_readme_summary_node", analyze_readme_summary_node)
     workflow.add_node("generate_search_query_node", generate_search_query_node)
     workflow.add_node("vector_search_node", vector_search_node)
-    workflow.add_node("score_candidates_node", score_candidates_node) # ⭐️ 추가됨
+    workflow.add_node("score_candidates_node", score_candidates_node)
     workflow.add_node("check_ingest_error_node", check_ingest_error_node)
+    workflow.add_node("trend_search_node", trend_search_node) # ⭐️ 트렌드 노드 등록
     
-    # 진입점
-    workflow.set_entry_point("fetch_snapshot_node")
+    # 진입점 설정
+    workflow.set_entry_point("parse_initial_request_node")
     
     # 엣지 연결
+    workflow.add_conditional_edges("parse_initial_request_node", route_after_parsing)
     workflow.add_conditional_edges("fetch_snapshot_node", route_after_fetch)
     workflow.add_conditional_edges("analyze_readme_summary_node", route_after_analysis)
     workflow.add_conditional_edges("generate_search_query_node", route_after_query_gen)
     workflow.add_conditional_edges("vector_search_node", route_after_vector_search)
-    workflow.add_conditional_edges("score_candidates_node", route_after_scoring) # ⭐️ 추가됨
+    workflow.add_conditional_edges("score_candidates_node", route_after_scoring) 
     workflow.add_conditional_edges("check_ingest_error_node", route_after_error_check)
+    
+    # ⭐️ 트렌드 엣지 연결: 트렌드 검색 후 평가 노드로 이동
+    workflow.add_conditional_edges("trend_search_node", route_after_trend_search)
     
     return workflow.compile()
 
 async def main():
-    target_owner = "Hyeri-hci"
-    target_repo = "OSSDoctor" 
+    #target_owner = "Hyeri-hci"
+    #target_repo = "OSSDoctor" 
     
-    user_request_scenario = "이 프로젝트랑 기능은 비슷한데, 언어는 Python으로 된 프로젝트 찾아줘."
+    # 테스트 시나리오: URL이 있고, 유사 프로젝트를 요청했으므로 'url_analysis'로 분류되어야 합니다.
+    #user_request_scenario = "이 프로젝트랑 기능은 비슷한데, 언어는 Python으로 된 프로젝트 찾아줘."
+    user_request_scenario = "2025년에 있기있었던 파이썬 프로젝트 알려줘"
 
-    print(f"\n======== 🧪 TESTING REAL AGENT : {target_owner}/{target_repo} ========")
+    #(f"\n======== 🧪 TESTING REAL AGENT : {target_owner}/{target_repo} ========")
     print(f"📝 User Request: {user_request_scenario}\n")
     
     graph = build_graph()
+    
+    # user_intent는 이제 parse_initial_request_node가 결정하므로 초기값은 비워둡니다.
     initial_state = RecommendState(
-        repo_url=f"https://github.com/{target_owner}/{target_repo}",
-        owner=target_owner,
-        repo=target_repo,
+        #repo_url=f"https://github.com/{target_owner}/{target_repo}",
+        #owner=target_owner,
+        #repo=target_repo,
         user_request=user_request_scenario,
-        user_intent="url_analysis" # 의도 명시
+        user_intent="", # parse_initial_request_node가 채울 필드
     )
     
-    final_state = {} 
+    final_state = initial_state.model_dump() # 시작 상태를 딕셔너리로 변환
     
-    async for event in graph.astream(initial_state):
+    start_time_total = time.time()
+    
+    # astream을 통해 그래프 실행
+    async for event in graph.astream(final_state):
         for key, value in event.items():
-            print(f" -> Node Completed: {key}")
-            final_state.update(value) 
+            if key != END:
+                print(f" -> Node Completed: {key}")
+                # LangGraph의 출력(Dict)으로 final_state를 업데이트합니다.
+                final_state.update(value) 
+
+    elapsed_total = round(time.time() - start_time_total, 3)
 
     print("\n======== 📊 FINAL RESULT ========")
     if final_state:
+        # Pydantic 모델로 최종 상태를 복원하여 접근합니다.
+        final_state_obj = RecommendState(**final_state)
+        
         # 1. 쿼리 및 타이밍 정보
         print(f"\n🔎 [Metadata]")
-        print(f"   - Query: {final_state.get('search_query')}")
-        print(f"🔹 Timings: {final_state.get('timings')}")
+        print(f"   - Intent: {final_state_obj.user_intent}")
+        print(f"   - Query: {final_state_obj.search_query}")
+        print(f"   - Filters: {final_state_obj.quantitative_filters}")
+        print(f"🔹 Total Time: {elapsed_total}s | Timings: {final_state_obj.timings}")
         
         # 2. 추천 결과 (AI 점수 포함)
-        results = final_state.get("search_results", [])
+        results = final_state_obj.search_results
         print(f"\n🏆 [Recommended Projects] Found: {len(results)}")
         
         for idx, item in enumerate(results, 1):
             print(f"   {idx}. {item.name} (⭐ {item.stars})")
-            print(f"      - ID: {item.id} | Lang: {item.languages}")
-            
-            # [NEW] AI 점수 및 사유 출력
+            print(f"      - ID: {item.id} | Lang: {item.main_language}")
             print(f"      - 🤖 AI Score: {item.ai_score} / 100")
             print(f"      - 📝 Reason: {item.ai_reason}")
-            
             snippet = item.match_snippet
             clean_snippet = snippet.replace("\n", " ") if snippet else "No snippet"
             print(f"      - Match: {clean_snippet[:80]}..." if len(clean_snippet) > 80 else f"      - Match: {clean_snippet}")

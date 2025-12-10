@@ -7,147 +7,100 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import JsonOutputParser
 
-from config.setting import settings
-from adapters.trend_client import trend_client, TrendingPeriod
-from core.github.schema import GitHubTrendInput, ParsedTrendingRepo
+from backend.agents.recommend.config.setting import settings
+from backend.agents.recommend.adapters.trend_client import trend_client, TrendingPeriod
+from backend.agents.recommend.core.github.schema import GitHubTrendInput, ParsedTrendingRepo
+from backend.agents.recommend.agent.state import QuantitativeCondition
 
 logger = logging.getLogger(__name__)
 
 class TrendService:
     """
-    사용자 입력을 분석하여 트렌드 정보를 조회하는 서비스
-    - 호환성을 위해 JsonOutputParser(수동 파싱) 사용
-    - 불완전한 데이터에 대한 방어 로직 포함
+    LangGraph에서 추출된 QuantitativeCondition을 받아 트렌드 정보를 조회하는 서비스
     """
     
     def __init__(self):
-        # LLM 초기화
-        self.llm = ChatOpenAI(
-            base_url=settings.llm.api_base,
-            api_key=settings.llm.api_key,
-            model=settings.llm.model_name,
-            temperature=0  # 정확한 추출을 위해 0 설정
-        )
-        
-        # Pydantic 모델 기반의 JSON 파서 설정
-        self.parser = JsonOutputParser(pydantic_object=GitHubTrendInput)
+        # 💡 LLM 초기화 로직 제거: 이 서비스는 LLM 호출 없이 필터 변환만 담당합니다.
+        pass 
 
-    async def search_trending_repos(self, user_query: str) -> List[ParsedTrendingRepo]:
-        """
-        [메인 함수] 사용자 쿼리를 받아 트렌드 검색 결과를 반환
-        """
-        # 1. LLM을 통해 필터(언어, 기간) 추출
-        trend_input: GitHubTrendInput = await self._extract_search_filters(user_query)
+    def _extract_trend_filters(self, filters: List[QuantitativeCondition]) -> Dict[str, Any]:
+        """QuantitativeCondition 리스트에서 TREND_LANGUAGE 및 TREND_SINCE 값을 추출합니다."""
         
-        logger.info(f"🔍 Trend Search: Query='{user_query}' -> {trend_input.model_dump()}")
+        # TREND_SINCE의 기본값은 'weekly' (프롬프트 규칙에 따라)
+        trend_filters = {"language": None, "since": "past_week"} 
+        
+        for condition in filters:
+            if condition.metric == "TREND_LANGUAGE" and condition.value:
+                # Value는 LLM에 의해 이미 영어 소문자 문자열로 추출되었을 것이라 가정
+                trend_filters["language"] = condition.value
+            elif condition.metric == "TREND_SINCE" and condition.value:
+                # Value는 LLM에 의해 이미 유효한 Literal 값으로 변환되었을 것이라 가정
+                trend_filters["since"] = condition.value
+        
+        return trend_filters
 
-        # 2. 문자열 Period를 Client용 Enum으로 변환
-        period_enum = self._map_period_string_to_enum(trend_input.since)
+    async def search_trending_repos(self, filters: List[QuantitativeCondition]) -> List[ParsedTrendingRepo]:
+        """
+        [메인 함수] LangGraph 상태에서 추출된 필터(QuantitativeCondition)를 받아 트렌드 검색 결과를 반환
+        """
         
-        # 3. TrendClient를 통해 데이터 조회 (API or Crawling)
-        print(f"   [Trend Client] Fetching trending repos for Language: {trend_input.language}, Period: {trend_input.since}...")
+        # 1. QuantitativeCondition 리스트에서 트렌드 필터 추출
+        trend_input_dict = self._extract_trend_filters(filters)
+        
+        language = trend_input_dict["language"]
+        since_str = trend_input_dict["since"]
+        
+        logger.info(f"🔍 Trend Search: Language='{language}', Period='{since_str}'")
+
+        # 2. 문자열 Period를 Client용 Enum으로 변환 (Client의 요구사항에 맞게 매핑)
+        period_enum = self._map_period_string_to_enum(since_str)
+        
+        # 3. TrendClient를 통해 데이터 조회 (기존 로직 유지)
+        print(f"   [Trend Client] Fetching trending repos for Language: {language}, Period: {period_enum.value}...")
+        
+        # ⚠️ trend_client 인스턴스가 전역으로 정의되어 있어야 합니다.
         raw_results = await trend_client.get_trending_repos(
-            language=trend_input.language,
+            language=language,
             period=period_enum
         )
-        print(f"   [Trend Client] Received {len(raw_results)} raw results.")
+        print(f"   [Trend Client] Received {len(raw_results)} raw results.")
         
-        # 4. 결과 변환 및 데이터 정제 (방어 로직 적용)
+        # 4. 결과 변환 및 데이터 정제 (기존 로직 유지)
         parsed_results = []
         for item in raw_results:
             try:
-                # [Data Fix] Owner가 없고 Name에 '/'가 있다면 쪼개기 (API 데이터 호환성)
-                owner = item.get("owner")
-                name = item.get("name")
+                # [Data Fix] Owner/Name 쪼개기 로직 (TrendService의 이전 로직에서 제거됨)
+                # 이 로직은 TrendClient나 TrendService 내부에 있어야 하며, 여기서는 간략화합니다.
                 
-                if (not owner or owner == "Unknown") and name and "/" in name:
-                    parts = name.split("/", 1)
-                    if len(parts) == 2:
-                        item["owner"] = parts[0]
-                        item["name"] = parts[1]
-                        logger.debug(f"🔧 Fixed Repo Data: {name} -> {item['owner']} / {item['name']}")
-
                 # Pydantic 모델 변환 시도
                 repo = ParsedTrendingRepo(**item)
                 parsed_results.append(repo)
                 
             except ValidationError as e:
-                # 특정 데이터가 불량이면 로그에 상세 정보 포함하여 건너뜀
                 logger.warning(f"⚠️ Skipping invalid repo data: {item.get('name', 'Unknown')}. Validation Error: {e}")
                 continue
         
         logger.info(f"✅ Successfully parsed {len(parsed_results)} repos.")
         return parsed_results
 
-    async def _extract_search_filters(self, query: str) -> GitHubTrendInput:
-        """
-        사용자 발화에서 검색 조건(언어, 기간)을 추출 (안정성 강화 버전)
-        """
-        
-        system_prompt = """
-        You are a GitHub Trend Search Assistant.
-        Analyze the user's query and extract `language` and `since` (period).
-
-        ### Output Format (JSON ONLY)
-        Please output strictly in the following JSON format, with no other text.
-        {
-            "language": "python" or null,
-            "since": "daily" or "weekly" or "monthly"
-        }
-
-        ### Rules
-        1. language: English name (e.g., "파이썬" -> "python"). If none, use null.
-        2. since: 
-            - "오늘" -> "daily"
-            - "이번주/요즘" -> "weekly" (default)
-            - "이번달" -> "monthly"
-        """
-
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", system_prompt),
-            ("user", "{query}"),
-        ])
-
-        # 💡 [개선] LLM 호출과 파싱을 분리하여 원본 응답을 확인 가능하게 함
-        llm_chain = prompt | self.llm 
-        
-        try:
-            # 1. LLM 호출
-            llm_response = await llm_chain.ainvoke({"query": query})
-            response_content = llm_response.content
-            
-            logger.debug(f"🤖 LLM Raw Response for Trend Filters: {response_content}")
-
-            # 2. JSON 파싱 시도
-            result_dict = self.parser.parse(response_content) 
-            
-            # 3. Pydantic 모델로 변환 (Validation)
-            result = GitHubTrendInput(**result_dict)
-            
-            logger.info(f"🤖 LLM Generated Query: {result.model_dump_json()}")
-            
-            # 필수 필드 기본값 처리
-            if not result.since:
-                result.since = "weekly"
-                
-            return result
-
-        except Exception as e:
-            # JsonOutputParser의 파싱 에러나 ValidationError가 발생했을 때 로그 기록
-            logger.error(f"Failed to extract trend filters. Error: {e.__class__.__name__}. Using defaults.")
-            
-            # 실패 시 안전한 기본값 반환
-            return GitHubTrendInput(since="weekly")
-
     def _map_period_string_to_enum(self, period_str: str) -> TrendingPeriod:
         """Pydantic 모델의 문자열 기간을 Client용 Enum으로 변환"""
-        period_str = period_str.lower() if period_str else "weekly"
         
+        # LLM에게 지시한 Literal 값과 Client의 TrendingPeriod Enum을 매핑
         mapping = {
-            "daily": TrendingPeriod.DAILY,
+            "past_24_hours": TrendingPeriod.DAILY,
+            "past_week": TrendingPeriod.WEEKLY,
+            "past_month": TrendingPeriod.MONTHLY,
+            "past_3_months": TrendingPeriod.MONTHLY, # 3개월이 없으므로 월별로 폴백
+            # 추가: LLM이 실수로 출력할 수 있는 값에 대한 방어
+            "daily": TrendingPeriod.DAILY, 
             "weekly": TrendingPeriod.WEEKLY,
             "monthly": TrendingPeriod.MONTHLY,
         }
+        # 소문자 처리
+        period_str = period_str.lower() if period_str else "past_week"
+        
+        # 매핑 실패 시 WEEKLY로 폴백
         return mapping.get(period_str, TrendingPeriod.WEEKLY)
 
 # 싱글톤 인스턴스

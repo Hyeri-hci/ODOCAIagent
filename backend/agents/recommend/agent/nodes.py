@@ -225,7 +225,7 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         logger.warning("No search query found. Skipping vector search.")
         return {"step": state.step + 1}
     
-    from backend.agents.recommend.agent.state import RAGCandidateRepo
+    from backend.agents.recommend.agent.state import CandidateRepo
     from backend.agents.recommend.core.search.vector_search import vector_search_engine
 
     start_time = time.time()
@@ -241,12 +241,12 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         
         raw_recommendations = result.get("final_recommendations", [])
         
-        # 2. [핵심] Raw Dict -> RAGCandidateRepo 객체로 변환 (Mapping)
-        structured_results: List[RAGCandidateRepo] = []
+        # 2. [핵심] Raw Dict -> CandidateRepo 객체로 변환 (Mapping)
+        structured_results: List[CandidateRepo] = []
         
         for item in raw_recommendations:
             # Qdrant/FlashRank 결과에서 필드를 매핑하여 객체 생성
-            repo_obj = RAGCandidateRepo(
+            repo_obj = CandidateRepo(
                 id=item.get("project_id"),
                 name=item.get("name"),
                 owner=item.get("owner"),

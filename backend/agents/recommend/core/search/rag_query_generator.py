@@ -77,6 +77,7 @@ similarity_search_prompt = ChatPromptTemplate.from_messages([
     2. **Filters (필터)**:
        - **매우 중요**: 사용자가 "Java로 된 거"라고 했다면 `filters: {{ "language": "Java" }}`를 반드시 추가하십시오.
        - 기준 리포지토리의 언어가 Python이어도, 사용자가 Java를 원하면 Java로 필터링해야 합니다.
+       - topic, license, language가 직접 언급된 경우가 아니라면 지나치세요.
 
     ### 출력 형식 (JSON Only)
     {{

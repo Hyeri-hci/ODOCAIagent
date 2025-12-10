@@ -26,7 +26,8 @@ class GitHubTrendClient:
     async def get_trending_repos(
         self, 
         language: Optional[str] = None, 
-        period: TrendingPeriod = TrendingPeriod.WEEKLY
+        period: TrendingPeriod = TrendingPeriod.WEEKLY,
+        limit: int = 25
     ) -> List[Dict[str, Any]]:
         """
         메인 메서드: API 우선 시도 -> 실패 시 크롤링
@@ -34,16 +35,18 @@ class GitHubTrendClient:
         # 1. API 시도
         try:
             logger.info(f"📡 1차 시도: OSS Insight API 요청 (URL: {self.API_URL})")
-            results = await self._fetch_from_api(language, period)
+            results = await self._fetch_from_api(language, period, limit)
             if results:
-                return results
+                return results[:limit]
         except Exception as e:
             logger.warning(f"⚠️ API 호출 실패 ({e}). 크롤링으로 전환합니다.")
 
         # 2. 크롤링 시도 (Fallback)
         try:
+            results = await self._fetch_from_crawling(language, period)
             logger.info(f"🕷️ 2차 시도: GitHub 페이지 크롤링")
-            return await self._fetch_from_crawling(language, period)
+
+            return results[:limit]
         except Exception as e:
             logger.error(f"❌ 크롤링마저 실패했습니다: {e}")
             return []
@@ -51,7 +54,7 @@ class GitHubTrendClient:
     # =================================================================
     # [Logic 1] API 호출 (OSS Insight)
     # =================================================================
-    async def _fetch_from_api(self, language: str, period: TrendingPeriod) -> List[Dict[str, Any]]:
+    async def _fetch_from_api(self, language: str, period: TrendingPeriod, limit: int) -> List[Dict[str, Any]]:
         period_map = {
             TrendingPeriod.DAILY: "past_24_hours",
             TrendingPeriod.WEEKLY: "past_week",
@@ -59,7 +62,10 @@ class GitHubTrendClient:
         }
         
         # 쿼리 파라미터 설정
-        params = {"period": period_map.get(period, "past_week")}
+        params = {
+            "period": period_map.get(period, "past_week"),
+            "limit": limit  # 💡 API 요청에 limit 파라미터 추가
+        }
         
         if language and language.lower() != "all":
             # 🛠️ [Fix] API가 소문자(python)를 에러 처리하는 경우가 있어 대문자(Python)로 변환
