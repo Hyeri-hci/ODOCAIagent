@@ -1,24 +1,33 @@
-from typing import TypedDict, Optional, List, Dict, Any, Literal
+# models/recommend_state.py
 
-class AgentState(TypedDict, total=False):
-    """LangGraph의 상태 객체 정의: 그래프를 통해 전달되는 데이터 바구니"""
-    user_query: str
+from typing import Any, Dict, Optional, List
+from pydantic import BaseModel
+
+class RecommendState(BaseModel):
+    """추천 LangGraph 상태 모델."""
+
+    # 진행 상태
+    step: int = 0
+    max_step: int = 4
+
+    # 입력값
+    repo_url: str
+    owner: Optional[str] = None
+    repo: Optional[str] = None
+    ref: str = "main"
+
+    # GitHub 스냅샷 (첫 단계에서 수집)
+    repo_snapshot: Optional[Dict[str, Any]] = None
+
+    # readme 요약
+    readme_summary: Optional[Dict[str, Any]] = None
+
     
-    # 라우팅 결과
-    category: Literal["search", "rag", "url", "trend"]
+    # 에러 및 복구
+    error: Optional[str] = None
+    failed_step: Optional[str] = None
+    retry_count: int = 0
+    max_retry: int = 2
     
-    # 중간 데이터들
-    search_queries: List[Dict]       # API 쿼리 파라미터 (search_gen)
-    rag_queries: List[Dict]          # 벡터 검색 쿼리/필터 (rag_gen)
-    analyzed_data: Dict              # URL 분석 결과 (url_exec)
-    
-    # 검색 후보군
-    raw_candidates: List[Dict]
-    filtered_candidates: List[Dict] 
-    
-    # 💡 [핵심 추가] 필터링 필요 여부
-    needs_filter: bool               # search_exec 노드에서 'other' 조건 유무에 따라 True/False 설정
-    
-    # 상태 추적 및 최종 결과
-    last_status: Optional[Literal["success", "empty", "fail"]]
-    final_result: Any
+    # 타이밍 정보
+    timings: Dict[str, float] = {}

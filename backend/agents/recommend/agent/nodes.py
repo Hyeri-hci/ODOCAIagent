@@ -1,269 +1,224 @@
-import json
-import re
-import ast
-import asyncio
+# backend/agents/recommend/agent/nodes.py
+
+from __future__ import annotations
+
 import logging
-from typing import Dict, Any, List
-from .state import AgentState 
+import time
+import asyncio
+from typing import Any, Dict, Optional
+from dataclasses import asdict
+from backend.agents.recommend.agent.state import RecommendState
+from backend.core.github_core import RepoSnapshot
+from backend.agents.recommend.core.ingest.summarizer import ContentSummarizer
 
-# [핵심] 툴 임포트 (경로는 프로젝트 구조에 맞게 조정 필요)
-# 주의: 실제 환경에 맞게 툴의 경로를 수정해야 합니다.
-from tools.search_query_generator_tool import github_search_query_generator as github_search_query_generator
-from tools.github_search_tool import github_search_tool
-from tools.github_filter_tool import github_filter_tool
-from tools.rag_query_generator_tool import generate_rag_query_and_filters as rag_query_generator
-from tools.qdrant_search_executor import qdrant_search_executor
-from tools.github_ingest_tool import github_ingest_tool
-from tools.github_trend_search_tool import github_trend_search_tool
-from tools.final_answer_generator_tool import final_answer_generator_tool
-
+summarizer_instance = ContentSummarizer()
 
 logger = logging.getLogger(__name__)
 
-# --- 헬퍼 함수 (툴 실행 담당) ---
-async def _execute_tool(tool_func, inputs: Dict[str, Any], tool_name: str) -> Dict[str, Any]:
-    """비동기/동기 툴 실행 및 JSON 파싱을 처리하는 헬퍼 (최종 방어 로직)"""
-    try:
-        result_obj = None
-        
-        # 1. LangChain Tool Wrapper 호출
-        if hasattr(tool_func, "ainvoke"):
-            result_obj = await tool_func.ainvoke(inputs)
-        else:
-            # 2. Custom Tool Functions 호출
-            if asyncio.iscoroutinefunction(tool_func):
-                result_obj = await tool_func(**inputs) 
-            else:
-                result_obj = tool_func(**inputs)
-                
-        # 3. [최종 방어] 반환된 객체가 await 되지 않은 코루틴인 경우, 여기서 await 합니다.
-        if asyncio.iscoroutine(result_obj):
-             result_str = await result_obj
-        else:
-             result_str = result_obj
-             
-        if not isinstance(result_str, str):
-            result_str = str(result_str)
+def fetch_snapshot_node(state: RecommendState) -> Dict[str, Any]:
+    """
+    GitHub 저장소 스냅샷 수집 노드.
+    """
+    
+    # 1. 재사용 체크
+    if state.repo_snapshot:
+        logger.info("Reusing existing repo snapshot")
+        return {"step": state.step + 1} 
+    
+    # 2. 필수 입력값 검증
+    owner = state.owner
+    repo = state.repo
+    ref = getattr(state, 'ref', 'main') # ref 필드가 있을 경우 사용
 
-        # 4. JSON 파싱
-        try:
-            result_data = json.loads(result_str)
-        except (json.JSONDecodeError, TypeError):
-            result_data = result_str
-            
-        return {"result": result_data, "success": True}
+    # owner, repo가 State에 없는 경우 에러 처리
+    if not owner or not repo:
+        error_msg = "Owner or repository name is missing in state. (Pre-analysis failure)"
+        logger.error(f"Failed to fetch details: {error_msg}")
+        return {
+            "error": error_msg,
+            "failed_step": "fetch_snapshot_node",
+            "step": state.step + 1,
+        }
+    
+    from backend.core.github_core import fetch_repo_snapshot
+
+    start_time = time.time()
+    
+    try:
+        
+        snapshot = fetch_repo_snapshot(state.owner, state.repo, state.ref)
+        
+        snapshot_dict = snapshot.model_dump() if hasattr(snapshot, "model_dump") else asdict(snapshot)
+
+        elapsed = round(time.time() - start_time, 3)
+        timings = dict(state.timings)
+        timings["fetch_snapshot"] = elapsed
+        
+        logger.info(f"Fetched snapshot for {state.owner}/{state.repo} in {elapsed}s")
+        
+        return {
+            "repo_snapshot": snapshot_dict,
+            "timings": timings,
+            "step": state.step + 1,
+        }
+        
+    except Exception as e:
+        logger.error(f"Failed to fetch snapshot: {e}")
+        return { 
+            "error": str(e),
+            "failed_step": "fetch_snapshot_node",
+            "step": state.step + 1,
+        }
+    
+async def analyze_readme_summary_node(state: RecommendState) -> Dict[str, Any]:
+    """
+    README 분석 및 LLM 요약 노드.
+    
+    repo_snapshot의 내용을 기반으로 구조화된 LLM 요약을 생성하고 DocsCoreResult를 저장합니다.
+    """
+    
+    # 1. 재사용 체크 및 필수 선행 조건 체크
+    if state.readme_summary:
+        logger.info("Reusing existing ingest analysis result")
+        return {"step": state.step + 1} 
+    
+    if not state.repo_snapshot:
+        error_msg = "No repo_snapshot available for README analysis."
+        logger.error(f"Failed to analyze README: {error_msg}")
+        return {
+            "error": error_msg,
+            "failed_step": "analyze_readme_summary_node",
+            "step": state.step + 1,
+        }
+    
+    from backend.core.docs_core import analyze_docs, extract_and_structure_summary_input
+    
+    start_time = time.time()
+    
+    try:
+        # 2. State에서 스냅샷 추출
+        snapshot_dict = state.repo_snapshot
+        readme_content = snapshot_dict.get("readme_content", "")
+
+        # Dict → RepoSnapshot 변환
+        snapshot_obj = RepoSnapshot(**snapshot_dict)
+
+        # 3. 문서 분석 (DocsCoreResult dataclass)
+        docs_result = analyze_docs(snapshot_obj)
+
+        # dataclass → dict 변환
+        docs_result_dict = asdict(docs_result)
+
+        # 4. LLM 입력 구성
+        llm_input_text = extract_and_structure_summary_input(readme_content)
+
+        # 5. LLM 요약 실행 (비동기)
+        final_summary = "No summary generated."
+        if llm_input_text:
+            final_summary = await summarizer_instance.summarize(llm_input_text)
+            logger.info("LLM summary generated successfully.")
+        else:
+            logger.warning("Skipping LLM summary: No structured input generated.")
+
+        # 6. 결과 통합
+        ingest_result = {
+            "final_summary": final_summary,
+            "docs_analysis": docs_result_dict,
+            "readme_word_count": len(readme_content.split()),
+            "documentation_quality": docs_result_dict.get("total_score", 0)
+        }
+
+        # 7. 상태 업데이트 반환
+        elapsed = round(time.time() - start_time, 3)
+        timings = dict(state.timings)
+        timings["analyze_readme_summary"] = elapsed
+
+        return {
+            "readme_summary": ingest_result,
+            "timings": timings,
+            "step": state.step + 1,
+            "failed_step": None,
+            "error": None,
+        }
 
     except Exception as e:
-        logger.error(f"❌ Tool Execution Failed ({tool_name}): {e}")
-        return {"result": {"error": str(e)}, "success": False}
+        logger.error(f"Failed to analyze and summarize README: {e}")
+        return {
+            "error": str(e),
+            "failed_step": "analyze_readme_summary_node",
+            "step": state.step + 1,
+        }
     
-# =================================================================
-# 1. API Search Path Nodes
-# =================================================================
-
-async def search_gen_node(state: AgentState) -> Dict[str, Any]:
-    """Node: (1/3) 자연어 질문을 API 파라미터로 변환"""
-    print("   [Node] 1. API Query Generation...")
-    result = await _execute_tool(
-        github_search_query_generator, 
-        {"user_input": state['user_query']}, "github_search_query_generator"
-    )
+def check_ingest_error_node(state: RecommendState) -> Dict[str, Any]:
+    """
+    에러 체크 및 복구 노드.
     
-    if result["success"] and isinstance(result["result"], dict):
-         tool_result = result["result"]
-         other_condition = tool_result.get("other")
-         
-         return {
-             "search_queries": [tool_result],
-             # 👈 [유실 방지 1] 최상위 State에 'other' 키 명시적 저장
-             "other": other_condition if other_condition else None
-         }
-    else:
-         return {"search_queries": []}
-
-
-async def search_exec_node(state: AgentState) -> Dict[str, Any]:
-    """Node: (2/3) GitHub API 검색 실행"""
-    print("   [Node] 2. GitHub API Execution...")
-    queries = state.get("search_queries", [])
+    현재 에러 상태를 확인하고 재시도 가능 여부를 결정합니다.
+    """
+    # 1. 에러가 없으면 다음 단계(여기서는 출력)로 이동
+    if not state.error:
+        # 에러가 없는데 이 노드에 도착했다면, 일반적으로는 최종 출력 노드로 이동해야 합니다.
+        # 하지만, 그래프의 끝이 명확하지 않으므로, 일단 step만 증가시킵니다.
+        return {"step": state.step + 1} 
     
-    if not queries: return {"raw_candidates": [], "last_status": "fail"}
-        
-    params = queries[-1] 
-    result = await _execute_tool(
-        github_search_tool, 
-        {"params": params}, "github_search_tool"
-    )
+    failed_step = state.failed_step or "unknown"
+    retry_count = state.retry_count
     
-    recommendations = result["result"] if result["success"] else []
+    logger.warning(f"Error detected in {failed_step}: {state.error}, retry={retry_count}/{state.max_retry}")
     
-    status = "success" if recommendations and len(recommendations) > 0 else "empty"
+    # 2. 최대 재시도 횟수 확인
+    if retry_count >= state.max_retry:
+        logger.error(f"Max retries reached for {failed_step}. Cannot recover.")
+        # 복구 불가 -> Graph 종료 또는 최종 출력으로 라우팅
+        return {"step": state.step + 1} 
     
-    # needs_filter 로직: search_gen이 반환한 쿼리 파라미터 내부의 'other' 값을 사용
-    needs_filter = params.get("other") is not None
+    # 3. 재시도 가능한 단계 결정
+    retryable_steps = ["fetch_snapshot_node", "analyze_readme_summary_node"]
     
-    return {
-        "raw_candidates": recommendations, 
-        "last_status": status,
-        "needs_filter": needs_filter, 
-        # 🌟 [유실 방지 2] 이전 State에서 받은 'other' 값을 유지하여 다음 노드에 전달
-        "other": state.get("other")
-    }
-
-
-async def filter_exec_node(state: AgentState) -> Dict[str, Any]:
-    """Node: (3/3) 검색 결과에 대한 필터링 및 점수 정렬 실행"""
-    print("   [Node] 3. Filtering & Scoring Execution...")
+    if failed_step in retryable_steps:
+        logger.info(f"Scheduling retry for {failed_step}")
+        return {
+            "error": None,          # 에러 상태 클리어
+            "failed_step": failed_step, # 재시도 후 이 단계로 돌아가도록 failed_step 유지 (라우팅용)
+            "retry_count": retry_count + 1,
+            "step": state.step + 1, 
+        }
     
-    # filter_tool은 State를 통째로 받아 'raw_candidates'와 'other'를 사용해야 합니다.
-    result = await _execute_tool(
-        github_filter_tool, 
-        {"state": state}, "github_filter_tool"
-    )
+    # 재시도 목록에 없는 에러
+    return {"step": state.step + 1}
+
+def route_after_fetch(state: RecommendState) -> str:
+    """스냅샷 수집 후 라우팅."""
+    if state.error:
+        return "check_ingest_error_node"
+    # 성공 시: 다음 핵심 단계인 README 분석으로 이동
+    return "analyze_readme_summary_node"
+
+
+def route_after_analysis(state: RecommendState) -> str:
+    """README 분석 및 요약 후 라우팅."""
+    if state.error:
+        return "check_ingest_error_node"
+    return "__end__" 
+
+
+def route_after_error_check(state: RecommendState) -> str:
+    """에러 체크 후 라우팅."""
     
-    if result["success"] and isinstance(result["result"], dict):
-        # 🌟 [핵심] 여기서 반환하는 'filtered_candidates'에는 
-        # 'github_filter_tool' 내부에서 계산된 'recent_commits' 같은 활동성 지표가 
-        # 반드시 통합(Merge)되어 있어야 합니다.
-        filtered_list = result["result"].get("filtered_candidates", [])
-        print(f"   [Filter Node] 최종 필터링된 후보 개수: {len(filtered_list)}")
-        return {"filtered_candidates": filtered_list}
-    else:
-        print("   [Filter Node] 필터링 도구 실행 실패 또는 결과 형식 오류.")
-        return {"filtered_candidates": []}
-
-
-# =================================================================
-# 2. RAG Path Nodes
-# =================================================================
-async def rag_gen_node(state: AgentState) -> Dict[str, Any]:
-    """Node: (1/2) 벡터 검색용 쿼리 및 필터 생성"""
-    print("   [Node] 4. RAG Query Generation...")
+    # 1. 에러가 남아있다면 (최대 재시도 횟수 초과)
+    if state.error:
+        # 복구 불가 -> 그래프 종료
+        return "__end__"
     
-    analyzed_data = state.get("analyzed_data", None)
+    # 2. 에러가 클리어되고 재시도가 필요한 단계가 남아있는 경우
+    failed_step = state.failed_step
     
-    # 툴 실행 (LLM 호출을 통해 쿼리/필터 JSON 생성)
-    result = await _execute_tool(
-        rag_query_generator,
-        {
-            "user_request": state['user_query'],
-            "category": "semantic_search", 
-            "analyzed_data": analyzed_data 
-        }, 
-        "rag_query_generator"
-    )
+    if failed_step == "fetch_snapshot_node":
+        # fetch_snapshot_node 노드로 돌아가 재시도
+        return "fetch_snapshot_node"
+    elif failed_step == "analyze_readme_summary_node":
+        # analyze_readme_summary_node 노드로 돌아가 재시도
+        return "analyze_readme_summary_node"
     
-    parsed_result = None
-    if result["success"]:
-        raw_output = result.get("result")
-        
-        # 🌟 [핵심 수정: 파싱 로직 추가]
-        if isinstance(raw_output, str):
-            try:
-                # LLM이 생성한 문자열을 딕셔너리로 변환 (안전한 ast.literal_eval 사용)
-                parsed_result = ast.literal_eval(raw_output)
-                print(f"   [RAG Query Gen DEBUG] Successfully parsed string to dict.")
-            except Exception as e:
-                print(f"   [RAG Query Gen PARSING ERROR] Failed to parse string: {e}")
-        elif isinstance(raw_output, dict):
-            # 이미 딕셔너리인 경우 (이상적인 경우)
-            parsed_result = raw_output
-
-    # 최종 결과가 유효한 딕셔너리인지 확인하여 State 업데이트
-    if parsed_result and isinstance(parsed_result, dict):
-         return {"rag_queries": [parsed_result]}
-    else:
-         # 파싱 실패 또는 툴 실행 실패 (이 경로를 타면 안 됩니다.)
-         print(f"   [RAG Query Gen] Failed or invalid result format. Success: {result['success']}")
-         return {"rag_queries": []}
-
-
-async def qdrant_exec_node(state: AgentState) -> Dict[str, Any]:
-    """Node: (2/2) Qdrant 벡터 검색 실행 (Fallback 상태 업데이트 포함)"""
-    print("   [Node] 5. Qdrant Search Execution...")
-    
-    rag_queries = state.get("rag_queries", [])
-    
-    if not rag_queries: 
-
-        print(f"================rag_queries:{rag_queries}=====================")
-        return {"raw_candidates": [], "last_status": "fail"}
-        
-    rag_params = rag_queries[-1]
-    result = await _execute_tool(
-        qdrant_search_executor,
-        {
-            "query": rag_params.get("query"),
-            "keywords": rag_params.get("keywords"),
-            "filters": rag_params.get("filters")
-        }, "qdrant_search_executor"
-    )
-    
-    recommendations = result["result"].get("final_recommendations", []) if result["success"] else []
-    
-    status = "success" if recommendations and len(recommendations) > 0 else "empty"
-    
-    return {"raw_candidates": recommendations, "last_status": status}
-
-
-# =================================================================
-# 3. Trend Path Node
-# =================================================================
-
-async def trend_exec_node(state: AgentState) -> Dict[str, Any]:
-    """Node: (1/1) GitHub Trending API 검색 실행"""
-    print("   [Node] 6. Trend Search Execution...")
-    result = await _execute_tool(
-        github_trend_search_tool,
-        {"query": state['user_query']}, "github_trend_search_tool"
-    )
-    return {"final_result": result["result"] if result["success"] else []}
-
-
-# =================================================================
-# 4. URL Path Node
-# =================================================================
-
-async def url_analysis_node(state: AgentState) -> Dict[str, Any]:
-    """Node: (1/1) URL 분석 실행 (Ingest)"""
-    print("   [Node] 7. URL Analysis (Ingest) Start...")
-    
-    url_match = re.search(r'(https?://[^\s]+)', state['user_query'])
-    target_url = url_match.group(1) if url_match else state.get("target_repo_url")
-    
-    if not target_url: return {"analyzed_data": {"error": "URL not found"}}
-
-    result = await _execute_tool(
-        github_ingest_tool,
-        {"repo_url": target_url}, "github_ingest_tool"
-    )
-    return {"analyzed_data": result["result"] if result["success"] else {}}
-
-
-# =================================================================
-# 5. Final Recommendation Node
-# =================================================================
-
-async def final_recommendation_node(state: AgentState) -> Dict[str, Any]:
-    """Node: 8. 최종 후보 목록을 기반으로 추천 이유와 함께 최종 답변을 생성"""
-    print("   [Node] 8. Final Recommendation Generation...")
-
-    # 필터링된 결과(활동성 지표 포함)를 우선 사용하고, 없다면 원본 후보를 사용합니다.
-    candidates = state.get("filtered_candidates", []) or state.get("raw_candidates", [])
-    
-    if not candidates:
-        return {"final_result": "검색 결과가 없거나, 후보를 찾지 못했습니다."}
-    
-    other_conditions = state.get("other") 
-
-    result = await _execute_tool(
-        final_answer_generator_tool,
-        {
-            "user_query": state['user_query'], 
-            "candidates": candidates,
-            "other_conditions": other_conditions
-        },
-        "final_answer_generator_tool"
-    )
-
-    return {"final_result": result["result"] if result["success"] else "최종 답변 생성에 실패했습니다."}
+    # 3. 모든 에러가 복구되었거나 재시도가 불필요한 경우
+    return "__end__"
