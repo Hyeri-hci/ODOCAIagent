@@ -98,3 +98,4 @@ settings.local.json
 .github/copilot-instructions.md
 
 
+model_cache/
