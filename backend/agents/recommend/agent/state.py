@@ -3,7 +3,7 @@
 from typing import Any, Dict, Optional, List
 from pydantic import BaseModel, Field
 
-class CandidateRepo(BaseModel):
+class RAGCandidateRepo(BaseModel):
     """
     RAG 검색 결과로 선정된 후보 리포지토리 스키마.
     State의 'search_results' 리스트에 들어갈 객체입니다.
@@ -18,7 +18,7 @@ class CandidateRepo(BaseModel):
     description: Optional[str] = Field(None, description="Project Description")
 
     main_language: str = Field("Unknown", description="Primary Language (e.g., Python)")
-    language: List[str] = Field("Unknown", description="Languages")
+    languages: List[str] = Field("Unknown", description="Languages")
 
     topics: List[str] = Field(default_factory=list, description="GitHub Topics")
 
@@ -64,7 +64,7 @@ class RecommendState(BaseModel):
     search_keywords: List[str] = []
     search_filters: Dict[str, Any] = {}
 
-    search_results: List[CandidateRepo] = Field(default_factory=list)
+    search_results: List[RAGCandidateRepo] = Field(default_factory=list)
     
     # 에러 및 복구
     error: Optional[str] = None

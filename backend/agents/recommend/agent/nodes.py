@@ -10,10 +10,17 @@ from dataclasses import asdict
 from backend.agents.recommend.agent.state import RecommendState
 from backend.core.github_core import RepoSnapshot
 from backend.agents.recommend.core.ingest.summarizer import ContentSummarizer
-
-summarizer_instance = ContentSummarizer()
+from backend.agents.recommend.core.analysis.match_score import RepoScorer
 
 logger = logging.getLogger(__name__)
+
+try:
+    summarizer_instance = ContentSummarizer()
+    scorer_instance = RepoScorer() # Scorer 인스턴스 생성 (비용 절약을 위해 재사용)
+    logger.info("✅ Global instances initialized.")
+except Exception as e:
+    logger.error(f"❌ Failed to init global instances: {e}")
+    exit(1)
 
 def fetch_snapshot_node(state: RecommendState) -> Dict[str, Any]:
     """
@@ -167,18 +174,14 @@ async def generate_search_query_node(state: RecommendState) -> Dict[str, Any]:
     # 1. 모드 결정 및 분석 데이터 준비
     # readme_summary가 없더라도, repo_snapshot(기본 정보)만 있으면 분석 모드로 진입합니다.
     if state.repo_snapshot:
-        mode = "url_analysis"
-        
-        # Core 함수에 넘겨줄 데이터 패키징
-        # state.readme_summary가 None일 경우 빈 dict로 처리하여 에러 방지
         analyzed_data = {
             "repo_snapshot": state.repo_snapshot,
             "readme_summary": state.readme_summary if state.readme_summary else {}
         }
     else:
-        # 스냅샷조차 없으면 일반 검색 모드
-        mode = "semantic_search"
         analyzed_data = None
+
+    mode = state.user_intent
 
     # 2. 사용자 요청 텍스트 (없으면 기본값 설정)
     user_input = state.user_request if state.user_request.strip() else "Find similar projects."
@@ -222,7 +225,7 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         logger.warning("No search query found. Skipping vector search.")
         return {"step": state.step + 1}
     
-    from backend.agents.recommend.agent.state import CandidateRepo
+    from backend.agents.recommend.agent.state import RAGCandidateRepo
     from backend.agents.recommend.core.search.vector_search import vector_search_engine
 
     start_time = time.time()
@@ -238,12 +241,12 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         
         raw_recommendations = result.get("final_recommendations", [])
         
-        # 2. [핵심] Raw Dict -> CandidateRepo 객체로 변환 (Mapping)
-        structured_results: List[CandidateRepo] = []
+        # 2. [핵심] Raw Dict -> RAGCandidateRepo 객체로 변환 (Mapping)
+        structured_results: List[RAGCandidateRepo] = []
         
         for item in raw_recommendations:
             # Qdrant/FlashRank 결과에서 필드를 매핑하여 객체 생성
-            repo_obj = CandidateRepo(
+            repo_obj = RAGCandidateRepo(
                 id=item.get("project_id"),
                 name=item.get("name"),
                 owner=item.get("owner"),
@@ -251,7 +254,7 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
                 stars=int(item.get("stars", 0)),
                 forks=int(item.get("forks", 0)),
                 main_language=item.get("main_language", "UNKNOWN"),
-                language=item.get("languages") or [],
+                languages=item.get("languages") or [],
                 topics=item.get("topics") or [],
                 html_url=item.get("repo_url") or f"https://github.com/{item.get('owner')}/{item.get('name')}",
                 
@@ -281,6 +284,55 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
             "failed_step": "vector_search_node", 
             "step": state.step + 1
         }
+    
+async def score_candidates_node(state: RecommendState) -> Dict[str, Any]:
+    """LLM을 이용한 후보군 상세 평가"""
+    
+    # 1. 평가할 후보가 없으면 패스
+    if not state.search_results:
+        logger.info("No candidates to score. Skipping.")
+        return {"step": state.step + 1}
+
+    start_time = time.time()
+    logger.info(f"🧠 Scoring {len(state.search_results)} candidates...")
+
+    try:
+        # 2. State에 있는 Dict 형태의 Snapshot을 객체로 복원 (Scorer가 객체를 요구함)
+        source_snapshot = None
+        if state.repo_snapshot:
+            source_snapshot = RepoSnapshot(**state.repo_snapshot)
+        
+        # 3. Readme 요약본 텍스트 추출
+        readme_summary_text = ""
+        if state.readme_summary and isinstance(state.readme_summary, dict):
+            readme_summary_text = state.readme_summary.get("final_summary", "")
+
+        # 4. Scorer 실행
+        scored_results = await scorer_instance.evaluate_candidates(
+            candidates=state.search_results,     # vector_search 결과
+            user_request=state.user_request,
+            intent=state.user_intent,            # "semantic_search" or "url_analysis"
+            source_repo=source_snapshot,         # 원본 객체
+            readme_summary=readme_summary_text   # 요약본 스트링
+        )
+
+        elapsed = round(time.time() - start_time, 3)
+        timings = dict(state.timings)
+        timings["ai_scoring"] = elapsed
+
+        logger.info(f"✅ Scoring complete. Top 1: {scored_results[0].name} (Score: {scored_results[0].ai_score})")
+
+        return {
+            "search_results": scored_results, # 점수가 매겨진 리스트로 업데이트
+            "timings": timings,
+            "step": state.step + 1,
+            "error": None
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Scoring failed: {e}")
+        # 에러가 나도 프로세스는 계속 진행 (평가만 실패)
+        return {"error": str(e), "failed_step": "score_candidates_node", "step": state.step + 1}
     
     
 def check_ingest_error_node(state: RecommendState) -> Dict[str, Any]:
