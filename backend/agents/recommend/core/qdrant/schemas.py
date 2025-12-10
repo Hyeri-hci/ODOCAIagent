@@ -1,6 +1,6 @@
 # core/qdrant/schemas.py
 
-from config.setting import settings 
+from backend.agents.recommend.config.setting import settings 
 
 class RepoSchema:
     """Repository Description 컬렉션 정의"""

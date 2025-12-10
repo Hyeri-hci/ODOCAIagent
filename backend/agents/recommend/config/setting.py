@@ -72,7 +72,7 @@ class GitHubSettings(BaseSettings):
 class QdrantSettings(BaseSettings):
     # 1. Field(alias="...")를 쓰면 해당 환경변수를 자동으로 찾아 매핑합니다.
     # Qdrant는 기본 포트 6333을 사용합니다.
-    host: str = Field(default="localhost", alias="QDRANT_HOST")
+    host: str = os.getenv("QDRANT_HOST")
     
     # 2. 타입이 int로 지정되어 있으므로, 문자열로 들어와도 자동으로 숫자로 변환해줍니다.
     port: int = Field(default=6333, alias="QDRANT_PORT")

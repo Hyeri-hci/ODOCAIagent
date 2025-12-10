@@ -3,7 +3,7 @@
 from typing import List
 from abc import ABC, abstractmethod
 from langchain_upstage import UpstageEmbeddings
-from config.setting import settings
+from backend.agents.recommend.config.setting import settings
 
 class EmbeddingClient(ABC):
     """추상 인터페이스 — 모든 recommend/search 모듈이 이걸 통해 호출."""
