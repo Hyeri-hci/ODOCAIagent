@@ -548,18 +548,19 @@ class DynamicPlanner:
     
     def _create_fallback_plan(self, intent: str, priority: str) -> ExecutionPlan:
         """폴백 계획 생성."""
-        mode = "FAST" if priority == "speed" else "AUTO"
+        # 기본적으로 항상 FULL 모드로 전체 분석 수행
+        mode = "FULL"
         
         if intent == "diagnose":
             steps = [ExecutionStep(step=1, agent="diagnosis", mode=mode, condition="always")]
         elif intent == "security":
             steps = [
-                ExecutionStep(step=1, agent="diagnosis", mode="FAST", condition="always"),
+                ExecutionStep(step=1, agent="diagnosis", mode="FULL", condition="always"),
                 ExecutionStep(step=2, agent="security", mode=mode, condition="always"),
             ]
         elif intent == "onboard":
             steps = [
-                ExecutionStep(step=1, agent="diagnosis", mode="FAST", condition="always"),
+                ExecutionStep(step=1, agent="diagnosis", mode="FULL", condition="always"),
                 ExecutionStep(step=2, agent="onboarding", mode=mode, condition="always"),
             ]
         elif intent == "full_audit":

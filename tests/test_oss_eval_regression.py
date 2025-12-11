@@ -1,10 +1,16 @@
 """
 OSS 평가 회귀 테스트.
 에이전트 스코어 변경을 감지하기 위한 regression 테스트.
+
+실제 GitHub API 호출이 필요하므로 slow 마커 적용.
+--skip-slow 옵션으로 건너뛸 수 있음.
 """
 import json
 import os
 import pytest
+
+# 전체 모듈에 slow 마커 적용 (실제 API 호출 필요)
+pytestmark = pytest.mark.slow
 from typing import Dict, Any, Tuple
 
 from backend.api.agent_service import run_agent_task

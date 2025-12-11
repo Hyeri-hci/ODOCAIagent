@@ -5,7 +5,7 @@ import math
 import logging
 from dataclasses import dataclass, asdict
 from datetime import datetime, date, timezone, timedelta
-from typing import Optional, Dict, List, Any
+from typing import Optional, Any
 
 from backend.common.github_client import (
     fetch_recent_commits,
@@ -20,7 +20,6 @@ logger = logging.getLogger(__name__)
 
 
 # 1. Data Structures (CHAOSS Metrics)
-
 @dataclass
 class CommitActivityMetrics:
     owner: str
@@ -34,7 +33,7 @@ class CommitActivityMetrics:
     first_commit_date: Optional[date]
     last_commit_date: Optional[date]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -50,7 +49,7 @@ class IssueActivityMetrics:
     median_time_to_close_days: Optional[float]
     avg_open_issue_age_days: Optional[float]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -66,7 +65,7 @@ class PullRequestActivityMetrics:
     median_time_to_merge_days: Optional[float]
     avg_open_pr_age_days: Optional[float]
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
@@ -82,7 +81,6 @@ class ActivityScoreBreakdown:
 
 
 # 2. Helper Functions
-
 def _parse_iso8601(dt_str: str) -> Optional[datetime]:
     if not isinstance(dt_str, str) or not dt_str:
         return None
@@ -95,7 +93,7 @@ def _parse_iso8601(dt_str: str) -> Optional[datetime]:
         return None
 
 
-def _parse_commit_date(commit: Dict[str, Any]) -> Optional[date]:
+def _parse_commit_date(commit: dict[str, Any]) -> Optional[date]:
     if not isinstance(commit, dict):
         return None
     commit_block = commit.get("commit") or {}
@@ -108,7 +106,7 @@ def _parse_commit_date(commit: Dict[str, Any]) -> Optional[date]:
     return dt.date() if dt else None
 
 
-def _extract_author_id(commit: Dict[str, Any]) -> Optional[str]:
+def _extract_author_id(commit: dict[str, Any]) -> Optional[str]:
     if not isinstance(commit, dict):
         return None
     author = commit.get("author") or {}
@@ -131,7 +129,7 @@ def _extract_author_id(commit: Dict[str, Any]) -> Optional[str]:
 # 3. Metric Computation Functions
 
 def _compute_commit_metrics(
-    commits: List[Dict[str, Any]],
+    commits: list[dict[str, Any]],
     owner: str,
     repo: str,
     days: int
@@ -139,7 +137,7 @@ def _compute_commit_metrics(
     """Pure function to compute commit metrics from a list of commits."""
     total_commits = len(commits)
     author_ids = set()
-    commit_dates: List[date] = []
+    commit_dates: list[date] = []
 
     for c in commits:
         author_id = _extract_author_id(c)
@@ -184,7 +182,7 @@ def compute_commit_activity(owner: str, repo: str, days: int = 90) -> CommitActi
 
 
 def _compute_issue_metrics(
-    issues: List[Dict[str, Any]],
+    issues: list[dict[str, Any]],
     owner: str,
     repo: str,
     days: int
@@ -196,8 +194,8 @@ def _compute_issue_metrics(
     open_issues = 0
     opened_in_window = 0
     closed_in_window = 0
-    close_times: List[float] = []
-    open_ages: List[float] = []
+    close_times: list[float] = []
+    open_ages: list[float] = []
 
     for issue in issues:
         state = issue.get("state", "").upper()
@@ -254,7 +252,7 @@ def compute_issue_activity(owner: str, repo: str, days: int = 90) -> IssueActivi
 
 
 def _compute_pr_metrics(
-    prs: List[Dict[str, Any]],
+    prs: list[dict[str, Any]],
     owner: str,
     repo: str,
     days: int
@@ -264,8 +262,8 @@ def _compute_pr_metrics(
     prs_in_window = 0
     merged_in_window = 0
     open_prs = 0
-    merge_durations: List[float] = []
-    open_ages: List[float] = []
+    merge_durations: list[float] = []
+    open_ages: list[float] = []
 
     for pr in prs:
         state = (pr.get("state") or "").upper()

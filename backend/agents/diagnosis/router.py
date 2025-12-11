@@ -2,7 +2,6 @@
 Diagnosis Agent - Router
 3가지 실행 경로(Fast/Full/Reinterpret) 라우팅
 """
-
 from typing import Dict, Any, Optional, Literal
 from backend.agents.diagnosis.intent_parser import DiagnosisIntentV2
 import logging
@@ -14,17 +13,6 @@ def route_diagnosis_request(
     intent: DiagnosisIntentV2,
     cached_result: Optional[Dict[str, Any]] = None
 ) -> Literal["fast_path", "full_path", "reinterpret_path"]:
-    """
-    의도에 따라 실행 경로 결정
-    
-    Args:
-        intent: Diagnosis Intent
-        cached_result: 캐시된 진단 결과
-    
-    Returns:
-        "fast_path" | "full_path" | "reinterpret_path"
-    """
-    
     execution_path = intent.execution_path
     
     logger.info(f"Routing diagnosis: path={execution_path}")
@@ -52,17 +40,6 @@ def should_use_cache(
     intent: DiagnosisIntentV2,
     cached_result: Optional[Dict[str, Any]] = None
 ) -> bool:
-    """
-    캐시 사용 여부 결정
-    
-    Args:
-        intent: Diagnosis Intent
-        cached_result: 캐시된 결과
-    
-    Returns:
-        True if cache should be used
-    """
-    
     # force_refresh 명시 시 캐시 무시
     if intent.force_refresh:
         logger.info("Cache disabled: force_refresh=True")
@@ -94,17 +71,6 @@ def determine_cache_strategy(
     repo: str,
     ref: str
 ) -> Dict[str, Any]:
-    """
-    캐시 전략 결정
-    
-    Returns:
-        {
-            "cache_key": "facebook/react@main:diagnosis:standard",
-            "use_cache": True,
-            "ttl_hours": 6
-        }
-    """
-    
     from backend.common.cache_manager import get_cache_manager
     
     cache_manager = get_cache_manager()

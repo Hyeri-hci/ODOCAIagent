@@ -97,5 +97,29 @@ settings.local.json
 # ------------------------------------
 .github/copilot-instructions.md
 
+# ------------------------------------
+# Documentation (로컬 전용, 원격 저장소 제외)
+# ------------------------------------
+# 벤치마크 결과 및 메트릭 데이터
+docs/benchmarks/
+docs/metrics/
+
+
+# 개발 로그 (내부 메모)
+docs/dev-logs/
+
+# 리팩토링 히스토리 (내부용)
+docs/refactoring/
+
+# API 명세 및 아키텍처 (내부용)
+docs/api/
+docs/architecture/
+
+docs/agents
+
+tests/performance/
+
+run_performance_tests.py
+pytest.ini
 
 model_cache/

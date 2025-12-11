@@ -33,7 +33,7 @@ class ProgressEvent(BaseModel):
 async def analyze_with_progress(owner: str, repo: str, ref: str, message: str = None) -> AsyncGenerator[str, None]:
     """분석 진행 상황을 SSE 이벤트로 스트리밍."""
     from concurrent.futures import ThreadPoolExecutor
-    from backend.common.cache import analysis_cache
+    from backend.common.cache_manager import analysis_cache
     
     def send_event(step: str, progress: int, message: str, data: dict = None) -> str:
         event = ProgressEvent(
@@ -47,7 +47,6 @@ async def analyze_with_progress(owner: str, repo: str, ref: str, message: str = 
     try:
         # 캐시 확인
         logger.info(f"Starting SSE generator for {owner}/{repo}")
-        print(f"DEBUG: Starting SSE generator for {owner}/{repo}")
         cached_result = analysis_cache.get_analysis(owner, repo, ref)
         if cached_result:
             logger.info(f"SSE returning cached analysis for {owner}/{repo}@{ref}")
@@ -142,7 +141,6 @@ async def analyze_repository_stream(repo_url: str, message: str = None):
     
     try:
         logger.info(f"SSE Request received: repo_url={repo_url}, message={message}")
-        print(f"DEBUG: SSE Request received: repo_url={repo_url}, message={message}")
         owner, repo, ref = parse_github_url(repo_url)
     except ValueError as e:
         logger.error(f"Invalid URL: {e}")

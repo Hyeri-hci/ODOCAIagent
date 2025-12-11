@@ -10,7 +10,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from backend.common.cache import analysis_cache, cache_invalidation_trigger
+from backend.common.cache_manager import analysis_cache, cache_invalidation_trigger
 
 logger = logging.getLogger(__name__)
 

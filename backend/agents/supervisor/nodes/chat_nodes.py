@@ -56,7 +56,7 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
     from backend.llm.factory import fetch_llm_client
     from backend.llm.base import ChatRequest, ChatMessage
     from backend.common.config import LLM_MODEL_NAME
-    from backend.common.cache import analysis_cache
+    from backend.common.cache_manager import analysis_cache
     import re
 
     intent = state.detected_intent

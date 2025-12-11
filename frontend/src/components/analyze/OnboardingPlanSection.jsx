@@ -28,7 +28,7 @@ const DIFFICULTY_OPTIONS = [
     label: "입문자",
     description: "프로그래밍을 막 시작했거나 이 기술 스택이 처음이에요",
     icon: GraduationCap,
-    color: "from-green-500 to-emerald-500",
+    color: "bg-green-600",
     bgColor: "bg-green-50 border-green-200",
   },
   {
@@ -36,7 +36,7 @@ const DIFFICULTY_OPTIONS = [
     label: "중급자",
     description: "기본 개념은 알고 있고, 실제 프로젝트 경험을 쌓고 싶어요",
     icon: Briefcase,
-    color: "from-blue-500 to-indigo-500",
+    color: "bg-blue-600",
     bgColor: "bg-blue-50 border-blue-200",
   },
   {
@@ -44,7 +44,7 @@ const DIFFICULTY_OPTIONS = [
     label: "숙련자",
     description: "경험이 많고, 핵심 기여나 아키텍처 이해를 원해요",
     icon: Trophy,
-    color: "from-purple-500 to-violet-500",
+    color: "bg-purple-600",
     bgColor: "bg-purple-50 border-purple-200",
   },
 ];
@@ -66,22 +66,24 @@ const DifficultyModal = ({ isOpen, onClose, onSelect, isGenerating }) => {
       />
 
       {/* 모달 콘텐츠 */}
-      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+      <div className="relative bg-white rounded-xl shadow-lg w-full max-w-lg mx-4 overflow-hidden">
         {/* 헤더 */}
-        <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6">
+        <div className="bg-gray-800 p-5">
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            className="absolute top-4 right-4 text-gray-400 hover:text-white transition-colors"
           >
-            <X className="w-6 h-6" />
+            <X className="w-5 h-5" />
           </button>
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-              <Rocket className="w-6 h-6 text-white" />
+            <div className="w-10 h-10 bg-gray-700 rounded-lg flex items-center justify-center">
+              <Rocket className="w-5 h-5 text-gray-300" />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-white">온보딩 플랜 생성</h2>
-              <p className="text-indigo-200 text-sm">
+              <h2 className="text-lg font-semibold text-white">
+                온보딩 플랜 생성
+              </h2>
+              <p className="text-gray-400 text-sm">
                 나에게 맞는 난이도를 선택하세요
               </p>
             </div>
@@ -109,7 +111,7 @@ const DifficultyModal = ({ isOpen, onClose, onSelect, isGenerating }) => {
               >
                 <div className="flex items-start gap-4">
                   <div
-                    className={`w-10 h-10 rounded-lg bg-gradient-to-br ${option.color} flex items-center justify-center flex-shrink-0`}
+                    className={`w-10 h-10 rounded-lg ${option.color} flex items-center justify-center flex-shrink-0`}
                   >
                     <Icon className="w-5 h-5 text-white" />
                   </div>
@@ -152,11 +154,11 @@ const DifficultyModal = ({ isOpen, onClose, onSelect, isGenerating }) => {
             onClick={() => onSelect(selectedDifficulty)}
             disabled={isGenerating}
             className={`
-              flex-1 px-4 py-3 rounded-xl font-medium transition-all duration-200
+              flex-1 px-4 py-3 rounded-lg font-medium transition-colors
               ${
                 isGenerating
                   ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                  : "bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700"
+                  : "bg-gray-800 text-white hover:bg-gray-700"
               }
             `}
           >
@@ -232,19 +234,19 @@ const OnboardingPlanSection = ({
           isGenerating={isGenerating}
         />
 
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-          <div className="bg-gradient-to-r from-indigo-50 to-purple-50 p-8">
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="p-8">
             <div className="text-center max-w-md mx-auto">
-              <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-purple-500 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
-                <Rocket className="w-8 h-8 text-white" />
+              <div className="w-14 h-14 bg-gray-800 rounded-xl flex items-center justify-center mx-auto mb-4">
+                <Rocket className="w-7 h-7 text-gray-300" />
               </div>
-              <h3 className="text-xl font-bold text-gray-800 mb-2">
+              <h3 className="text-lg font-semibold text-gray-800 mb-2">
                 맞춤 온보딩 플랜
               </h3>
-              <p className="text-gray-600 mb-6 text-sm">
+              <p className="text-gray-500 mb-6 text-sm">
                 AI가 이 프로젝트와 당신의 경험 수준에 맞는
                 <br />
-                단계별 학습 계획을 한국어로 생성합니다.
+                단계별 학습 계획을 생성합니다.
               </p>
 
               {generateError && (
@@ -257,12 +259,12 @@ const OnboardingPlanSection = ({
                 onClick={() => setShowDifficultyModal(true)}
                 disabled={isGenerating}
                 className={`
-                  inline-flex items-center gap-2 px-6 py-3 rounded-xl font-medium
-                  transition-all duration-200 shadow-md
+                  inline-flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium
+                  transition-colors
                   ${
                     isGenerating
                       ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                      : "bg-gradient-to-r from-indigo-600 to-purple-600 text-white hover:from-indigo-700 hover:to-purple-700 hover:shadow-lg"
+                      : "bg-gray-800 text-white hover:bg-gray-700"
                   }
                 `}
               >
@@ -383,21 +385,22 @@ const OnboardingPlanSection = ({
         isGenerating={isGenerating}
       />
 
-      <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
         {/* 헤더 */}
         <div
-          className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 cursor-pointer"
+          className="bg-gray-800 p-5 cursor-pointer"
           onClick={() => setIsCollapsed(!isCollapsed)}
         >
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-white/20 rounded-xl flex items-center justify-center">
-                <Rocket className="w-6 h-6 text-white" />
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-gray-700 rounded-lg flex items-center justify-center">
+                <Rocket className="w-5 h-5 text-gray-300" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-white">온보딩 플랜</h2>
-                <p className="text-indigo-200 text-sm">
-                  {userProfile?.experienceLevel || "초보"} 수준을 위한{" "}
+                <h2 className="text-base font-semibold text-white">
+                  온보딩 플랜
+                </h2>
+                <p className="text-gray-400 text-sm">
                   {plan.length}주 학습 계획
                 </p>
               </div>
@@ -408,10 +411,16 @@ const OnboardingPlanSection = ({
               <button
                 onClick={(e) => {
                   e.stopPropagation();
-                  setShowDifficultyModal(true);
+                  // 채팅에 메시지를 자동으로 보내서 새로운 온보딩 플랜 생성
+                  if (onGeneratePlan) {
+                    onGeneratePlan(
+                      userProfile?.experienceLevel || "intermediate"
+                    );
+                  }
                 }}
                 disabled={isGenerating}
-                className="flex items-center gap-2 px-3 py-2 bg-white/20 hover:bg-white/30 rounded-lg text-white text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-white text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                title="새로운 온보딩 플랜을 생성합니다"
               >
                 {isGenerating ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -422,28 +431,28 @@ const OnboardingPlanSection = ({
               </button>
 
               {/* 전체 진행률 */}
-              <div className="text-right mr-4">
-                <div className="text-2xl font-bold text-white">
+              <div className="text-right mr-3">
+                <div className="text-xl font-semibold text-white">
                   {totalProgress}%
                 </div>
-                <div className="text-indigo-200 text-xs">전체 진행률</div>
+                <div className="text-gray-400 text-xs">진행률</div>
               </div>
 
               {/* 확장/축소 버튼 */}
-              <button className="w-10 h-10 bg-white/20 rounded-lg flex items-center justify-center hover:bg-white/30 transition-colors">
+              <button className="w-8 h-8 bg-gray-700 rounded-lg flex items-center justify-center hover:bg-gray-600 transition-colors">
                 {isCollapsed ? (
-                  <ChevronDown className="w-5 h-5 text-white" />
+                  <ChevronDown className="w-4 h-4 text-gray-300" />
                 ) : (
-                  <ChevronUp className="w-5 h-5 text-white" />
+                  <ChevronUp className="w-4 h-4 text-gray-300" />
                 )}
               </button>
             </div>
           </div>
 
           {/* 전체 진행률 바 */}
-          <div className="mt-4 h-2 bg-white/20 rounded-full overflow-hidden">
+          <div className="mt-3 h-1.5 bg-gray-700 rounded-full overflow-hidden">
             <div
-              className="h-full bg-white rounded-full transition-all duration-500"
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
               style={{ width: `${totalProgress}%` }}
             />
           </div>
@@ -466,17 +475,17 @@ const OnboardingPlanSection = ({
                   const isExpanded = expandedWeeks[weekNum];
 
                   return (
-                    <div key={weekNum} className="relative pl-16">
+                    <div key={weekNum} className="relative pl-14">
                       {/* 타임라인 노드 */}
                       <div
-                        className={`absolute left-0 w-12 h-12 rounded-full bg-gradient-to-br ${theme.bg} ${theme.border} border-2 flex items-center justify-center shadow-sm`}
+                        className={`absolute left-0 w-10 h-10 rounded-full bg-gray-100 border-2 border-gray-200 flex items-center justify-center`}
                       >
-                        <WeekIcon className={`w-5 h-5 ${theme.accent}`} />
+                        <WeekIcon className={`w-4 h-4 text-gray-600`} />
                       </div>
 
                       {/* 주차 카드 */}
                       <div
-                        className={`bg-gradient-to-br ${theme.bg} ${theme.border} border rounded-xl overflow-hidden`}
+                        className={`bg-gray-50 border border-gray-200 rounded-lg overflow-hidden`}
                       >
                         {/* 주차 헤더 */}
                         <div

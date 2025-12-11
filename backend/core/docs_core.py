@@ -6,7 +6,7 @@ import logging
 from collections import defaultdict
 from dataclasses import dataclass, asdict
 from enum import Enum
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Optional, Any
 
 from .models import DocsCoreResult, RepoSnapshot
 
@@ -38,7 +38,7 @@ class CategoryInfo:
     present: bool
     coverage_score: float
     summary: str
-    example_snippets: List[str]
+    example_snippets: list[str]
     raw_text: str
 
 
@@ -63,7 +63,7 @@ WEIGHT_BODY = 1.5
 WEIGHT_POSITION_FIRST = 2.0
 WEIGHT_STRUCT_HOW = 2.0
 
-CATEGORY_PRIORITY: List[ReadmeCategory] = [
+CATEGORY_PRIORITY: list[ReadmeCategory] = [
     ReadmeCategory.WHAT,
     ReadmeCategory.HOW,
     ReadmeCategory.WHY,
@@ -74,7 +74,7 @@ CATEGORY_PRIORITY: List[ReadmeCategory] = [
     ReadmeCategory.OTHER,
 ]
 
-HEADING_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
+HEADING_KEYWORDS: dict[ReadmeCategory, list[str]] = {
     ReadmeCategory.WHAT: [
         "overview", "introduction", "about", "project description", "project overview",
         "소개", "개요", "프로젝트 소개", "프로젝트 개요", "프로젝트 설명",
@@ -106,7 +106,7 @@ HEADING_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
     ReadmeCategory.OTHER: [],
 }
 
-BODY_KEYWORDS: Dict[ReadmeCategory, List[str]] = {
+BODY_KEYWORDS: dict[ReadmeCategory, list[str]] = {
     ReadmeCategory.WHAT: [
         "is a library", "is a framework", "provides", "allows you to", "used for",
         "라이브러리입니다", "프레임워크입니다", "제공합니다", "위해 사용됩니다", "도와줍니다",
@@ -149,10 +149,10 @@ MARKETING_KEYWORDS = [
 
 # 3. Helper Functions
 
-def split_readme_into_sections(markdown_text: str) -> List[ReadmeSection]:
+def split_readme_into_sections(markdown_text: str) -> list[ReadmeSection]:
     """마크다운 텍스트를 헤딩 기준으로 섹션 분리"""
     lines = markdown_text.splitlines()
-    sections: List[ReadmeSection] = []
+    sections: list[ReadmeSection] = []
     
     current_heading = None
     current_content = []
@@ -197,7 +197,7 @@ def _classify_section_rule_based(section: ReadmeSection) -> SectionClassificatio
     heading_lower = heading.lower()
     body_lower = body.lower()
 
-    scores: Dict[ReadmeCategory, float] = {cat: 0.0 for cat in ReadmeCategory}
+    scores: dict[ReadmeCategory, float] = {cat: 0.0 for cat in ReadmeCategory}
 
     # 1) 제목 키워드
     for cat, keywords in HEADING_KEYWORDS.items():
@@ -266,7 +266,7 @@ def _apply_last_section_bias(category: ReadmeCategory, section: ReadmeSection) -
 
 def _summarize_category_sections(
     category: ReadmeCategory,
-    sections: List[ReadmeSection],
+    sections: list[ReadmeSection],
     total_chars: int,
 ) -> CategoryInfo:
     """카테고리별 섹션 요약 생성."""
@@ -300,7 +300,7 @@ def _summarize_category_sections(
 
 
 def _compute_documentation_score(
-    grouped: Dict[ReadmeCategory, List[ReadmeSection]],
+    grouped: dict[ReadmeCategory, list[ReadmeSection]],
     total_chars: int,
 ) -> int:
     """문서 품질 점수 (0~100) - 가중치 및 구조 보너스 적용."""
@@ -395,7 +395,7 @@ def _calculate_marketing_ratio(readme_content: str) -> float:
 
 def analyze_documentation(
     readme_content: Optional[str],
-    custom_required_sections: Optional[List[str]] = None
+    custom_required_sections: Optional[list[str]] = None
 ) -> DocsCoreResult:
     """README 기반 문서 품질 분석 (Pure Python)"""
     
@@ -462,7 +462,7 @@ def analyze_documentation(
 
 def analyze_docs(
     snapshot: "RepoSnapshot",
-    custom_required_sections: Optional[List[str]] = None
+    custom_required_sections: Optional[list[str]] = None
 ) -> DocsCoreResult:
     """Wrapper for analyze_documentation using RepoSnapshot"""
     return analyze_documentation(snapshot.readme_content, custom_required_sections)

@@ -1,244 +1,266 @@
-"""Diagnosis LangGraph 정의.
-
-저장소 진단을 위한 독립적인 LangGraph.
-각 분석 단계가 노드로 분리되어 부분 실패 복구가 가능
-
-그래프 구조:
-    fetch_snapshot_node
-           ↓
-    analyze_docs_node
-           ↓
-    analyze_activity_node
-           ↓
-    analyze_structure_node (quick 모드에서는 스킵)
-           ↓
-    parse_deps_node (quick 모드에서는 스킵)
-           ↓
-    compute_scores_node
-           ↓
-    generate_summary_node
-           ↓
-    build_output_node
-           ↓
-        END
 """
-from __future__ import annotations
-
-import logging
-from typing import Any, Dict, Optional
-
+Diagnosis Agent Graph - Hybrid Path
+Fast/Full/Reinterpret 3가지 경로를 통합한 LangGraph
+"""
+from typing import Dict, Any, Optional, TypedDict, Literal
 from langgraph.graph import StateGraph, END
+import logging
 
-from backend.agents.diagnosis.models import DiagnosisState, DiagnosisInput, DiagnosisOutput
-from backend.agents.diagnosis.nodes import (
-    fetch_snapshot_node,
-    analyze_docs_node,
-    analyze_activity_node,
-    analyze_structure_node,
-    parse_deps_node,
-    compute_scores_node,
-    generate_summary_node,
-    build_output_node,
-    check_error_node,
-    route_after_snapshot,
-    route_after_docs,
-    route_after_activity,
-    route_after_structure,
-    route_after_deps,
-    route_after_scores,
-    route_after_summary,
-    route_after_error_check,
-)
+from backend.agents.diagnosis.intent_parser import DiagnosisIntentParser, DiagnosisIntentV2
+from backend.agents.diagnosis.router import route_diagnosis_request, determine_cache_strategy
+from backend.agents.diagnosis.fast_path import execute_fast_path
+from backend.agents.diagnosis.full_path import execute_full_path
+from backend.agents.diagnosis.reinterpret_path import execute_reinterpret_path
+from backend.common.cache_manager import get_cache_manager
 
 logger = logging.getLogger(__name__)
 
-# 싱글톤 그래프 인스턴스
+
+# === State 정의 ===
+class DiagnosisGraphState(TypedDict):
+    """Diagnosis Agent V2 State"""
+    
+    owner: str
+    repo: str
+    ref: str
+    use_cache: bool
+    execution_time_ms: int
+    
+    user_message: Optional[str]
+    supervisor_intent: Optional[Dict[str, Any]]
+    diagnosis_intent: Optional[DiagnosisIntentV2]
+    cache_key: Optional[str]
+    cached_result: Optional[Dict[str, Any]]
+    execution_path: Optional[Literal["fast_path", "full_path", "reinterpret_path"]]
+    result: Optional[Dict[str, Any]]
+    error: Optional[str]
+
+
+async def parse_diagnosis_intent_node(state: DiagnosisGraphState) -> Dict[str, Any]:
+    logger.info("Parsing diagnosis intent")
+    
+    parser = DiagnosisIntentParser()
+    
+    user_msg = state.get("user_message") or ""
+    supervisor_int = state.get("supervisor_intent") or {}
+    
+    intent = await parser.parse(
+        user_message=user_msg,
+        supervisor_intent=supervisor_int,
+        cached_diagnosis=state.get("cached_result")
+    )
+    
+    return {
+        "diagnosis_intent": intent
+    }
+
+async def check_cache_node(state: DiagnosisGraphState) -> Dict[str, Any]:
+    logger.info("Checking cache")
+    
+    intent = state.get("diagnosis_intent")
+    if not intent:
+        return {"error": "Missing diagnosis intent"}
+    
+    cache_manager = get_cache_manager()
+    
+    strategy = determine_cache_strategy(
+        intent=intent,
+        owner=state["owner"],
+        repo=state["repo"],
+        ref=state.get("ref", "main")
+    )
+    
+    cache_key = strategy["cache_key"]
+    use_cache = strategy["use_cache"]
+    
+    cached_result = None
+    if use_cache:
+        cached_result = cache_manager.get(cache_key)
+        if cached_result:
+            logger.info(f"Cache hit: {cache_key}")
+        else:
+            logger.info(f"Cache miss: {cache_key}")
+    
+    return {
+        "cache_key": cache_key,
+        "cached_result": cached_result,
+        "use_cache": use_cache
+    }
+
+def route_execution_node(state: DiagnosisGraphState) -> Literal["fast_path_node", "full_path_node", "reinterpret_path_node"]:
+    intent = state.get("diagnosis_intent")
+    if not intent:
+        return "fast_path_node"  # 기본값
+    
+    cached_result = state.get("cached_result")
+    path = route_diagnosis_request(intent, cached_result)
+    
+    logger.info(f"Routed to: {path}")
+    
+    if path == "fast_path":
+        return "fast_path_node"
+    elif path == "full_path":
+        return "full_path_node"
+    else:
+        return "reinterpret_path_node"
+
+
+async def fast_path_node(state: DiagnosisGraphState) -> Dict[str, Any]:
+    logger.info("Executing fast path")
+    
+    intent = state.get("diagnosis_intent")
+    if not intent:
+        return {"error": "Missing diagnosis intent"}
+    
+    target = intent.quick_query_target or "readme"
+    result = await execute_fast_path(
+        owner=state["owner"],
+        repo=state["repo"],
+        ref=state.get("ref", "main"),
+        target=target,
+        cached_result=state.get("cached_result")
+    )
+    
+    return {
+        "result": result,
+        "execution_path": "fast_path"
+    }
+
+async def full_path_node(state: DiagnosisGraphState) -> Dict[str, Any]:
+    logger.info("Executing full path")
+    
+    intent = state.get("diagnosis_intent")
+    if not intent:
+        return {"error": "Missing diagnosis intent"}
+    
+    analysis_depth = intent.analysis_depth or 2
+    force_refresh = intent.force_refresh or False
+    
+    result = await execute_full_path(
+        owner=state["owner"],
+        repo=state["repo"],
+        ref=state.get("ref", "main"),
+        analysis_depth=analysis_depth,
+        use_llm_summary=True,
+        force_refresh=force_refresh
+    )
+    
+    cache_key = state.get("cache_key")
+    if not result.get("error") and cache_key and intent:
+        cache_manager = get_cache_manager()
+        strategy = determine_cache_strategy(
+            intent=intent,
+            owner=state["owner"],
+            repo=state["repo"],
+            ref=state.get("ref", "main")
+        )
+        cache_manager.set(
+            key=cache_key,
+            data=result,
+            ttl_hours=strategy["ttl_hours"]
+        )
+        logger.info(f"Result cached: {cache_key}")
+    
+    return {
+        "result": result,
+        "execution_path": "full_path"
+    }
+
+async def reinterpret_path_node(state: DiagnosisGraphState) -> Dict[str, Any]:
+    logger.info("Executing reinterpret path")
+    
+    intent = state.get("diagnosis_intent")
+    if not intent:
+        return {"error": "Missing diagnosis intent"}
+    
+    cached_result = state.get("cached_result")
+    if not cached_result:
+        logger.error("Reinterpret path requires cached result")
+        return {
+            "result": {
+                "type": "reinterpret",
+                "error": "No cached result available"
+            },
+            "execution_path": "reinterpret_path",
+            "error": "No cached result"
+        }
+    
+    perspective = intent.reinterpret_perspective or "beginner"
+    detail_level = intent.reinterpret_detail_level or "standard"
+    
+    result = await execute_reinterpret_path(
+        cached_result=cached_result,
+        perspective=perspective,
+        detail_level=detail_level,
+        user_question=state.get("user_message")
+    )
+    
+    return {
+        "result": result,
+        "execution_path": "reinterpret_path"
+    }
+
+def build_diagnosis_graph():
+    graph = StateGraph(DiagnosisGraphState)
+    
+    graph.add_node("parse_intent", parse_diagnosis_intent_node)
+    graph.add_node("check_cache", check_cache_node)
+    graph.add_node("fast_path_node", fast_path_node)
+    graph.add_node("full_path_node", full_path_node)
+    graph.add_node("reinterpret_path_node", reinterpret_path_node)
+    
+    graph.set_entry_point("parse_intent")
+    graph.add_edge("parse_intent", "check_cache")
+    
+    graph.add_conditional_edges(
+        "check_cache",
+        route_execution_node,
+        {
+            "fast_path_node": "fast_path_node",
+            "full_path_node": "full_path_node",
+            "reinterpret_path_node": "reinterpret_path_node"
+        }
+    )
+    graph.add_edge("fast_path_node", END)
+    graph.add_edge("full_path_node", END)
+    graph.add_edge("reinterpret_path_node", END)
+    
+    return graph.compile()
+
 _diagnosis_graph = None
 
-
-def build_diagnosis_graph() -> StateGraph:
-    """Diagnosis LangGraph 빌드."""
-    
-    # 상태 그래프 생성
-    graph = StateGraph(DiagnosisState)
-    
-    # 노드 등록
-    graph.add_node("fetch_snapshot_node", fetch_snapshot_node)
-    graph.add_node("analyze_docs_node", analyze_docs_node)
-    graph.add_node("analyze_activity_node", analyze_activity_node)
-    graph.add_node("analyze_structure_node", analyze_structure_node)
-    graph.add_node("parse_deps_node", parse_deps_node)
-    graph.add_node("compute_scores_node", compute_scores_node)
-    graph.add_node("generate_summary_node", generate_summary_node)
-    graph.add_node("build_output_node", build_output_node)
-    graph.add_node("check_error_node", check_error_node)
-    
-    # 시작점 설정
-    graph.set_entry_point("fetch_snapshot_node")
-    
-    # 조건부 엣지 설정
-    graph.add_conditional_edges(
-        "fetch_snapshot_node",
-        route_after_snapshot,
-        {
-            "check_error_node": "check_error_node",
-            "analyze_docs_node": "analyze_docs_node",
-        }
-    )
-    
-    graph.add_conditional_edges(
-        "analyze_docs_node",
-        route_after_docs,
-        {
-            "check_error_node": "check_error_node",
-            "analyze_activity_node": "analyze_activity_node",
-        }
-    )
-    
-    graph.add_conditional_edges(
-        "analyze_activity_node",
-        route_after_activity,
-        {
-            "check_error_node": "check_error_node",
-            "analyze_structure_node": "analyze_structure_node",
-            "compute_scores_node": "compute_scores_node",  # quick 모드
-        }
-    )
-    
-    graph.add_conditional_edges(
-        "analyze_structure_node",
-        route_after_structure,
-        {
-            "check_error_node": "check_error_node",
-            "parse_deps_node": "parse_deps_node",
-        }
-    )
-    
-    graph.add_conditional_edges(
-        "parse_deps_node",
-        route_after_deps,
-        {
-            "check_error_node": "check_error_node",
-            "compute_scores_node": "compute_scores_node",
-        }
-    )
-    
-    graph.add_conditional_edges(
-        "compute_scores_node",
-        route_after_scores,
-        {
-            "check_error_node": "check_error_node",
-            "generate_summary_node": "generate_summary_node",
-        }
-    )
-    
-    graph.add_conditional_edges(
-        "generate_summary_node",
-        route_after_summary,
-        {
-            "build_output_node": "build_output_node",
-        }
-    )
-    
-    graph.add_conditional_edges(
-        "check_error_node",
-        route_after_error_check,
-        {
-            "fetch_snapshot_node": "fetch_snapshot_node",
-            "analyze_docs_node": "analyze_docs_node",
-            "analyze_activity_node": "analyze_activity_node",
-            "analyze_structure_node": "analyze_structure_node",
-            "build_output_node": "build_output_node",
-        }
-    )
-    
-    # 종료 노드
-    graph.add_edge("build_output_node", END)
-    
-    return graph
-
-
 def get_diagnosis_graph():
-    """컴파일된 Diagnosis 그래프 반환 (싱글톤)."""
     global _diagnosis_graph
-    
     if _diagnosis_graph is None:
-        graph = build_diagnosis_graph()
-        _diagnosis_graph = graph.compile()
-        logger.info("Diagnosis graph compiled")
-    
+        _diagnosis_graph = build_diagnosis_graph()
+        logger.info("Diagnosis Graph initialized")
     return _diagnosis_graph
 
 
-def run_diagnosis_graph(input_data: DiagnosisInput) -> DiagnosisOutput:
-    """
-    Diagnosis 그래프 실행.
-    """
+async def run_diagnosis(
+    owner: str,
+    repo: str,
+    ref: str = "main",
+    user_message: Optional[str] = None,
+    supervisor_intent: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
     graph = get_diagnosis_graph()
-    
-    # 초기 상태 생성
-    initial_state = DiagnosisState(
-        owner=input_data.owner,
-        repo=input_data.repo,
-        ref=input_data.ref,
-        analysis_depth=input_data.analysis_depth,
-        use_llm_summary=input_data.use_llm_summary,
-    )
-    
-    config = {
-        "configurable": {
-            "thread_id": f"diagnosis_{input_data.owner}/{input_data.repo}"
-        }
+    initial_state: DiagnosisGraphState = {
+        "owner": owner,
+        "repo": repo,
+        "ref": ref,
+        "user_message": user_message or f"{owner}/{repo} 저장소를 진단해주세요",
+        "supervisor_intent": supervisor_intent,
+        "use_cache": True,
+        "execution_time_ms": 0,
+        "diagnosis_intent": None,
+        "cache_key": None,
+        "cached_result": None,
+        "execution_path": None,
+        "result": None,
+        "error": None
     }
     
-    logger.info(f"Running diagnosis graph for {input_data.owner}/{input_data.repo} "
-                f"with depth={input_data.analysis_depth}")
+    final_state = await graph.ainvoke(initial_state)
     
-    # 그래프 실행
-    result = graph.invoke(initial_state, config=config)
-    
-    # 결과 추출
-    if hasattr(result, "diagnosis_output"):
-        output_dict = result.diagnosis_output
-    elif isinstance(result, dict):
-        output_dict = result.get("diagnosis_output", {})
-    else:
-        output_dict = {}
-    
-    if not output_dict:
-        # 에러 또는 빈 결과 - 부분 결과로 생성
-        logger.warning("Empty diagnosis output, using partial result")
-        output_dict = {
-            "repo_id": f"{input_data.owner}/{input_data.repo}",
-            "health_score": 50,
-            "health_level": "unknown",
-            "onboarding_score": 50,
-            "onboarding_level": "unknown",
-            "docs": {},
-            "activity": {},
-            "structure": {},
-            "dependency_complexity_score": 0,
-            "dependency_flags": [],
-            "stars": 0,
-            "forks": 0,
-            "summary_for_user": "분석 중 오류가 발생했습니다.",
-            "raw_metrics": {},
-        }
-    
-    # DiagnosisOutput으로 변환
-    return DiagnosisOutput(
-        repo_id=output_dict.get("repo_id", f"{input_data.owner}/{input_data.repo}"),
-        health_score=float(output_dict.get("health_score", 50)),
-        health_level=output_dict.get("health_level", "unknown"),
-        onboarding_score=float(output_dict.get("onboarding_score", 50)),
-        onboarding_level=output_dict.get("onboarding_level", "unknown"),
-        docs=output_dict.get("docs", {}),
-        activity=output_dict.get("activity", {}),
-        structure=output_dict.get("structure", {}),
-        dependency_complexity_score=output_dict.get("dependency_complexity_score", 0),
-        dependency_flags=output_dict.get("dependency_flags", []),
-        stars=output_dict.get("stars", 0),
-        forks=output_dict.get("forks", 0),
-        summary_for_user=output_dict.get("summary_for_user", ""),
-        raw_metrics=output_dict.get("raw_metrics", {}),
-    )
+    return final_state.get("result", {})

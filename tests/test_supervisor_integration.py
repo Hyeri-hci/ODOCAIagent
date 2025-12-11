@@ -1,23 +1,30 @@
-"""메타 에이전트 통합 테스트."""
+"""메타 에이전트 통합 테스트.
+
+실제 LLM/API 호출이 필요한 테스트는 @pytest.mark.slow 마커 사용.
+--skip-slow 옵션으로 건너뛸 수 있음.
+"""
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
 from backend.agents.supervisor.models import SupervisorState
 from backend.agents.supervisor.graph import get_supervisor_graph
+
+# 통합 테스트 마커 (실제 그래프 실행)
+pytestmark = pytest.mark.slow
 from backend.api.agent_service import run_agent_task
 
 
 @pytest.fixture
 def mock_diagnosis_service():
     """Diagnosis 서비스 모킹 - run_diagnosis 함수 모킹."""
-    with patch("backend.agents.supervisor.nodes.meta_nodes._run_diagnosis_agent") as mock:
+    with patch("backend.agents.supervisor.nodes.agent_runners.run_diagnosis_agent") as mock:
         yield mock
 
 
 @pytest.fixture
 def mock_llm_predict():
     """LLM 예측 모킹."""
-    with patch("backend.agents.supervisor.nodes.meta_nodes._invoke_chain") as mock:
+    with patch("backend.agents.supervisor.nodes.intent_parsing._invoke_chain") as mock:
         yield mock
 
 

@@ -2,7 +2,6 @@
 Diagnosis Agent - Full Path
 전체 진단 실행 (기존 파이프라인 + 병렬 처리)
 """
-
 from typing import Dict, Any, Optional
 import asyncio
 import time
@@ -29,50 +28,11 @@ async def execute_full_path(
     use_llm_summary: bool = True,
     force_refresh: bool = False
 ) -> Dict[str, Any]:
-    """
-    전체 진단 실행
-    
-    Args:
-        owner: 저장소 소유자
-        repo: 저장소 이름
-        ref: 브랜치/태그
-        analysis_depth: quick, standard, thorough
-        use_llm_summary: LLM 요약 사용 여부
-        force_refresh: 캐시 무시 여부
-    
-    Returns:
-        {
-            "type": "full_diagnosis",
-            "owner": owner,
-            "repo": repo,
-            "ref": ref,
-            "analysis_depth": analysis_depth,
-            "health_score": 85,
-            "onboarding_score": 78,
-            "docs_score": 90,
-            "activity_score": 82,
-            "structure_score": 75,
-            "documentation": {...},
-            "activity": {...},
-            "structure": {...},
-            "dependencies": {...},
-            "key_findings": [...],
-            "warnings": [...],
-            "recommendations": [...],
-            "llm_summary": "...",
-            "execution_time_ms": 3500,
-            "from_cache": False
-        }
-    """
-    
     start_time = time.time()
     logger.info(f"Full path execution: {owner}/{repo}@{ref} (depth={analysis_depth})")
     
     try:
-        # Step 1: 저장소 데이터 가져오기 (순차)
         snapshot = await _fetch_snapshot_async(owner, repo, ref, analysis_depth)
-        
-        # Step 2: 독립 분석들 병렬 실행
         docs_result, activity_result, structure_result, deps_result = await asyncio.gather(
             _analyze_docs_async(snapshot),
             _analyze_activity_async(snapshot, analysis_depth),
@@ -80,9 +40,6 @@ async def execute_full_path(
             _parse_dependencies_async(snapshot, analysis_depth)
         )
         
-        # Step 3: 점수 계산 (모든 데이터 필요, 순차)
-        # compute_scores(docs, activity, deps, structure)
-        # deps_result가 None이면 기본 DependenciesSnapshot 생성
         if deps_result is None:
             from backend.core.models import DependenciesSnapshot
             deps_result = DependenciesSnapshot(
@@ -99,14 +56,12 @@ async def execute_full_path(
             structure=structure_result
         )
         
-        # Step 4: LLM 요약 (옵션)
         llm_summary = None
         if use_llm_summary:
             llm_summary = await _generate_summary_async(
                 owner, repo, scoring_result, docs_result, activity_result
             )
         
-        # Step 5: 주요 발견사항, 경고, 권장사항 생성
         key_findings = _extract_key_findings(docs_result, activity_result, scoring_result)
         warnings = _extract_warnings(docs_result, activity_result, scoring_result)
         recommendations = _generate_recommendations(scoring_result, docs_result, activity_result)
@@ -128,7 +83,7 @@ async def execute_full_path(
             "onboarding_score": getattr(scoring_result, 'onboarding_score', 0),
             "docs_score": getattr(scoring_result, 'documentation_quality', 0),
             "activity_score": getattr(scoring_result, 'activity_maintainability', 0),
-            "structure_score": 0,  # structure는 scoring_result에 없음
+            "structure_score": structure_result.structure_score if structure_result else 0,
             
             # 상세 분석 (데이터클래스는 asdict 사용)
             "documentation": docs_result.__dict__ if hasattr(docs_result, '__dict__') else docs_result,
@@ -164,7 +119,6 @@ async def execute_full_path(
 
 
 async def _fetch_snapshot_async(owner: str, repo: str, ref: str, analysis_depth: str):
-    """비동기 스냅샷 가져오기"""
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor() as executor:
         snapshot = await loop.run_in_executor(
@@ -176,7 +130,6 @@ async def _fetch_snapshot_async(owner: str, repo: str, ref: str, analysis_depth:
 
 
 async def _analyze_docs_async(snapshot):
-    """비동기 문서 분석 (CPU 바운드)"""
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor() as executor:
         result = await loop.run_in_executor(executor, analyze_docs, snapshot)
@@ -184,7 +137,6 @@ async def _analyze_docs_async(snapshot):
 
 
 async def _analyze_activity_async(snapshot, analysis_depth: str):
-    """비동기 활동 분석"""
     history_days = {
         "quick": 30,
         "standard": 90,
@@ -193,7 +145,6 @@ async def _analyze_activity_async(snapshot, analysis_depth: str):
     
     loop = asyncio.get_event_loop()
     with ThreadPoolExecutor() as executor:
-        # analyze_activity_optimized(snapshot_or_owner, repo, days)
         result = await loop.run_in_executor(
             executor,
             lambda: analyze_activity_optimized(snapshot, None, history_days)
@@ -202,7 +153,6 @@ async def _analyze_activity_async(snapshot, analysis_depth: str):
 
 
 async def _analyze_structure_async(snapshot):
-    """비동기 구조 분석"""
     try:
         loop = asyncio.get_event_loop()
         with ThreadPoolExecutor() as executor:
@@ -214,7 +164,6 @@ async def _analyze_structure_async(snapshot):
 
 
 async def _parse_dependencies_async(snapshot, analysis_depth: str):
-    """비동기 의존성 파싱"""
     if analysis_depth == "quick":
         logger.info("Skipping dependencies in quick mode")
         return None
@@ -339,7 +288,6 @@ def _extract_key_findings(docs_result, activity_result, scoring_result) -> list:
 
 
 def _extract_warnings(docs_result, activity_result, scoring_result) -> list:
-    """경고 추출"""
     warnings = []
     
     if not hasattr(docs_result, 'has_readme') or not docs_result.has_readme:
@@ -355,7 +303,6 @@ def _extract_warnings(docs_result, activity_result, scoring_result) -> list:
 
 
 def _generate_recommendations(scoring_result, docs_result, activity_result) -> list:
-    """권장사항 생성"""
     recommendations = []
     
     docs_score = getattr(scoring_result, 'documentation_quality', 0)

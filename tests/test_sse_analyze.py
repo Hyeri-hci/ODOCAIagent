@@ -9,6 +9,9 @@ import json
 import asyncio
 from unittest.mock import patch, MagicMock
 
+# 통합 테스트 마커 (실제 API 호출)
+pytestmark = pytest.mark.slow
+
 # 테스트 환경 설정
 os.environ.setdefault("GITHUB_TOKEN", "test_token")
 

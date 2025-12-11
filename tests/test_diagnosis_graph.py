@@ -5,17 +5,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import pytest
 from backend.agents.diagnosis.models import DiagnosisState, DiagnosisInput, DiagnosisOutput
-from backend.agents.diagnosis.nodes import (
-    route_after_snapshot,
-    route_after_docs,
-    route_after_activity,
-    route_after_structure,
-    route_after_deps,
-    route_after_scores,
-    route_after_summary,
-    route_after_error_check,
-    _generate_fallback_summary,
-)
 
 
 class TestDiagnosisState:
@@ -52,6 +41,7 @@ class TestDiagnosisState:
         assert partial["failed_step"] == "analyze_structure"
 
 
+@pytest.mark.skip(reason="nodes.py deprecated - routing functions removed")
 class TestDiagnosisRouting:
     """Diagnosis 그래프 라우팅 테스트."""
 
@@ -102,6 +92,7 @@ class TestDiagnosisRouting:
         assert next_node == "build_output_node"
 
 
+@pytest.mark.skip(reason="nodes.py deprecated - _generate_fallback_summary removed")
 class TestFallbackSummary:
     """Fallback 요약 생성 테스트."""
 

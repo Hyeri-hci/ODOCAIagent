@@ -13,7 +13,7 @@ from backend.agents.supervisor.nodes.error_recovery_nodes import (
     ErrorType,
     RecoveryStrategy,
 )
-from backend.agents.supervisor.nodes.reflection_nodes import (
+from backend.agents.supervisor.nodes.self_reflection import (
     rule_based_reflection,
     build_reflection_prompt,
     ReflectionResult,
