@@ -104,6 +104,7 @@ settings.local.json
 docs/benchmarks/
 docs/metrics/
 
+
 # 개발 로그 (내부 메모)
 docs/dev-logs/
 
@@ -120,3 +121,5 @@ tests/performance/
 
 run_performance_tests.py
 pytest.ini
+
+model_cache/
