@@ -17,7 +17,7 @@ def batch_diagnosis_node(state: SupervisorState) -> Dict[str, Any]:
     - compare_results: 각 저장소별 분석 결과
     - warnings: 실패한 저장소에 대한 경고
     """
-    from backend.common.cache import analysis_cache
+    from backend.common.cache_manager import analysis_cache
     from backend.agents.diagnosis.service import run_diagnosis
     from backend.agents.diagnosis.models import DiagnosisInput
     

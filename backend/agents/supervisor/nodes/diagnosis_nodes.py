@@ -1,9 +1,16 @@
 import logging
+import warnings
 from backend.agents.diagnosis.models import DiagnosisInput
 from backend.agents.diagnosis.service import run_diagnosis
 from backend.agents.supervisor.models import SupervisorState
 
 logger = logging.getLogger(__name__)
+
+warnings.warn(
+    "diagnosis_nodes.py deprecated - use Supervisor V2",
+    DeprecationWarning,
+    stacklevel=2
+)
 
 
 def run_diagnosis_node(state: SupervisorState) -> dict:

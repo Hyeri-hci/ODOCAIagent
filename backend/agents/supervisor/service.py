@@ -149,8 +149,21 @@ def run_supervisor_diagnosis(
     # 메타 에이전트 필드 설정
     initial_state.priority = priority
     
-    # 4. 그래프 실행
-    result = graph.invoke(initial_state, config=config)
+    # 4. 그래프 실행 (async 노드 지원을 위해 ainvoke 사용)
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # 이미 실행 중인 루프가 있으면 nest_asyncio 사용 또는 thread로 실행
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, graph.ainvoke(initial_state, config=config))
+                result = future.result()
+        else:
+            result = loop.run_until_complete(graph.ainvoke(initial_state, config=config))
+    except RuntimeError:
+        # 이벤트 루프가 없으면 새로 생성
+        result = asyncio.run(graph.ainvoke(initial_state, config=config))
     
     # 결과를 dict로 변환 (Pydantic 모델일 수 있음)
     if result is None:
@@ -230,8 +243,27 @@ def run_supervisor_diagnosis_with_guidelines(
     
     initial_state = init_state_from_input(inp)
     
-    # 4. 그래프 실행
-    result = graph.invoke(initial_state, config=config)
+    # 4. 그래프 실행 (async 노드 지원을 위해 ainvoke 사용)
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, graph.ainvoke(initial_state, config=config))
+                result = future.result()
+        else:
+            result = loop.run_until_complete(graph.ainvoke(initial_state, config=config))
+    except RuntimeError:
+        result = asyncio.run(graph.ainvoke(initial_state, config=config))
+    
+    # 결과를 dict로 변환
+    if result is None:
+        result = {}
+    elif hasattr(result, "model_dump"):
+        result = result.model_dump()
+    elif not isinstance(result, dict):
+        result = {}
     
     # 5. Trace 수집
     trace = trace_handler.get_trace() if trace_handler else None
@@ -267,7 +299,28 @@ def run_supervisor_onboarding(
     )
     
     initial_state = init_state_from_input(inp)
-    result = graph.invoke(initial_state, config=config)
+    
+    # 그래프 실행 (async 노드 지원을 위해 ainvoke 사용)
+    import asyncio
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, graph.ainvoke(initial_state, config=config))
+                result = future.result()
+        else:
+            result = loop.run_until_complete(graph.ainvoke(initial_state, config=config))
+    except RuntimeError:
+        result = asyncio.run(graph.ainvoke(initial_state, config=config))
+    
+    # 결과를 dict로 변환
+    if result is None:
+        result = {}
+    elif hasattr(result, "model_dump"):
+        result = result.model_dump()
+    elif not isinstance(result, dict):
+        result = {}
     
     # Trace 수집
     trace = trace_handler.get_trace() if trace_handler else None
@@ -302,7 +355,6 @@ async def run_supervisor_diagnosis_async(
     task_type: str = "diagnose_repo",
 ) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
     """비동기 Supervisor 진단 실행."""
-    from backend.agents.supervisor.graph import get_supervisor_graph_async
 
     task_info = f"task={task_type} owner={owner} repo={repo} ref={ref}"
     logger.info(f"[{task_info}] Starting async diagnosis")
@@ -310,8 +362,8 @@ async def run_supervisor_diagnosis_async(
     tracker = get_metrics_tracker()
     metrics = tracker.start_task(task_type, owner, repo)
     
-    # 비동기 그래프 사용
-    graph = get_supervisor_graph_async()
+    # 동일한 그래프 사용 (ainvoke로 비동기 실행)
+    graph = get_supervisor_graph()
     
     config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
     
@@ -376,12 +428,12 @@ async def run_supervisor_onboarding_async(
     debug_trace: bool = False
 ) -> tuple[Optional[dict], Optional[str], Optional[List[Dict[str, Any]]]]:
     """비동기 온보딩 플랜 생성."""
-    from backend.agents.supervisor.graph import get_supervisor_graph_async
     
     task_info = f"task=build_onboarding_plan owner={owner} repo={repo}"
     logger.info(f"[{task_info}] Starting async onboarding plan generation")
     
-    graph = get_supervisor_graph_async()
+    # 동일한 그래프 사용 (ainvoke로 비동기 실행)
+    graph = get_supervisor_graph()
     config = {"configurable": {"thread_id": f"{owner}/{repo}@onboarding"}}
     
     trace_handler = None
@@ -398,6 +450,14 @@ async def run_supervisor_onboarding_async(
     
     initial_state = init_state_from_input(inp)
     result = await graph.ainvoke(initial_state, config=config)
+    
+    # 결과를 dict로 변환
+    if result is None:
+        result = {}
+    elif hasattr(result, "model_dump"):
+        result = result.model_dump()
+    elif not isinstance(result, dict):
+        result = {}
     
     trace = trace_handler.get_trace() if trace_handler else None
     
