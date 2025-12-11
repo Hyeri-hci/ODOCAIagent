@@ -510,21 +510,63 @@ async def run_onboarding_agent_node(state: SupervisorState) -> Dict[str, Any]:
 
 
 async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
-    """보안 Agent 실행"""
-    logger.info("Running Security Agent")
+    """보안 Agent 실행 (SecurityAgentV2 연결)"""
+    import os
+    logger.info("Running Security Agent V2")
     
-    # Security Agent는 별도 모듈에서 구현
-    # 현재는 placeholder 제공
-    result = {
-        "type": "security_scan",
-        "message": "보안 스캔 기능은 security 모듈에서 제공됩니다.",
-        "status": "not_implemented"
-    }
-    
-    return {
-        "agent_result": result,
-        "iteration": state.get("iteration", 0) + 1
-    }
+    try:
+        from backend.agents.security.agent.security_agent_v2 import SecurityAgentV2
+        
+        # SecurityAgentV2 초기화
+        agent = SecurityAgentV2(
+            llm_base_url=os.getenv("LLM_BASE_URL", ""),
+            llm_api_key=os.getenv("LLM_API_KEY", ""),
+            llm_model=os.getenv("LLM_MODEL", "gpt-4"),
+            llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
+            execution_mode="fast"  # supervisor에서는 빠른 모드 사용
+        )
+        
+        # 분석 요청 구성
+        user_message = state.get("user_message", "")
+        owner = state.get("owner", "")
+        repo = state.get("repo", "")
+        
+        # SecurityAgentV2 실행
+        result = await agent.analyze(
+            user_request=user_message if user_message else f"{owner}/{repo} 보안 분석",
+            owner=owner,
+            repository=repo,
+            github_token=os.getenv("GITHUB_TOKEN")
+        )
+        
+        logger.info(f"Security analysis completed: success={result.get('success', False)}")
+        
+        return {
+            "agent_result": result,
+            "security_result": result,  # finalize에서 사용
+            "iteration": state.get("iteration", 0) + 1
+        }
+        
+    except ImportError as e:
+        logger.warning(f"SecurityAgentV2 import failed: {e}")
+        return {
+            "agent_result": {
+                "type": "security_scan",
+                "message": f"보안 에이전트 모듈 로드 실패: {e}",
+                "status": "import_error"
+            },
+            "iteration": state.get("iteration", 0) + 1
+        }
+    except Exception as e:
+        logger.error(f"Security analysis failed: {e}")
+        return {
+            "agent_result": {
+                "type": "security_scan",
+                "message": f"보안 분석 오류: {e}",
+                "status": "error"
+            },
+            "iteration": state.get("iteration", 0) + 1
+        }
 
 
 async def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
