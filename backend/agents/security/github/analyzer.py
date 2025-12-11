@@ -120,14 +120,14 @@ class RepositoryAnalyzer:
 
         return dep_file
 
-    def analyze_repository(self, owner: str, repo: str, max_workers: int = 5) -> Dict[str, Any]:
+    def analyze_repository(self, owner: str, repo: str, max_workers: int = 10) -> Dict[str, Any]:
         """
         레포지토리의 모든 의존성 파일을 분석
 
         Args:
             owner: 레포지토리 소유자
             repo: 레포지토리 이름
-            max_workers: 병렬 처리 워커 수
+            max_workers: 병렬 처리 워커 수 (기본값: 10으로 증가)
 
         Returns:
             Dict[str, Any]: 분석 결과
