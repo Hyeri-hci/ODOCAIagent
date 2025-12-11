@@ -70,6 +70,9 @@ async def execute_full_path(
         
         logger.info(f"Full path completed in {execution_time_ms}ms")
         
+        # activity_result에서 상세 메트릭 추출
+        activity_dict = activity_result.__dict__ if hasattr(activity_result, '__dict__') else (activity_result or {})
+        
         return {
             "type": "full_diagnosis",
             "owner": owner,
@@ -87,9 +90,21 @@ async def execute_full_path(
             "activity_score": getattr(scoring_result, 'activity_maintainability', 0),
             "structure_score": structure_result.structure_score if structure_result else 0,
             
+            # Repository Statistics (snapshot에서)
+            "stars": getattr(snapshot, 'stars', 0),
+            "forks": getattr(snapshot, 'forks', 0),
+            "open_issues_count": getattr(snapshot, 'open_issues', 0),
+            
+            # 상세 메트릭 (activity_result에서)
+            "days_since_last_commit": activity_dict.get("days_since_last_commit"),
+            "total_commits_30d": activity_dict.get("total_commits_in_window", 0),
+            "unique_contributors": activity_dict.get("unique_authors", 0) or activity_dict.get("unique_contributors", 0),
+            "issue_close_rate": activity_dict.get("issue_closure_ratio", 0) or activity_dict.get("issue_close_rate", 0),
+            "median_pr_merge_days": activity_dict.get("median_pr_merge_days"),
+            
             # 상세 분석 (데이터클래스는 asdict 사용)
             "documentation": docs_result.__dict__ if hasattr(docs_result, '__dict__') else docs_result,
-            "activity": activity_result.__dict__ if hasattr(activity_result, '__dict__') else activity_result,
+            "activity": activity_dict,
             "structure": structure_result.__dict__ if structure_result and hasattr(structure_result, '__dict__') else structure_result,
             "dependencies": deps_result.__dict__ if deps_result and hasattr(deps_result, '__dict__') else deps_result,
             

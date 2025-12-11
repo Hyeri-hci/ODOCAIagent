@@ -1009,7 +1009,9 @@ async def analyze_repository_stream_get(
             graph = get_supervisor_graph()
             config = {"configurable": {"thread_id": f"{owner}/{repo}@{ref}"}}
 
-            user_context = {"use_llm_summary": True}
+            # /api/analyze/stream은 분석 페이지 전용이므로 항상 진단 실행
+            # 보안, 온보딩 등 추가 분석은 채팅에서 별도 요청
+            user_context = {"use_llm_summary": True, "force_diagnosis": True}
             user_context["priority"] = priority
 
             if local_user_message:
@@ -1031,25 +1033,28 @@ async def analyze_repository_stream_get(
             # 활동성 분석
             yield send_event("activity", 45, "활동성 분석 중...")
             
-            # 그래프 실행 (블로킹)
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(graph.invoke, initial_state, config=config)
-                
-                # 진행률 업데이트
-                progress_updates = [
-                    ("structure", 55, "구조 분석 중..."),
-                    ("structure", 65, "의존성 분석 중..."),
-                    ("scoring", 75, "분석 결과 종합 중..."),
-                    ("scoring", 82, "AI가 플랜 생성 중..."),
-                ]
-                
-                for step, pct, msg in progress_updates:
-                    if not future.done():
-                        yield send_event(step, pct, msg)
-                        await asyncio.sleep(1.2)
-                
-                result = future.result(timeout=1800)  # 30분 (대규모 프로젝트 NVD 조회 시간 감안)
+            # 그래프 비동기 실행 (ainvoke 사용)
+            graph_task = asyncio.create_task(graph.ainvoke(initial_state, config=config))
+            
+            # 진행률 업데이트
+            progress_updates = [
+                ("structure", 55, "구조 분석 중..."),
+                ("structure", 65, "의존성 분석 중..."),
+                ("scoring", 75, "분석 결과 종합 중..."),
+                ("scoring", 82, "AI가 플랜 생성 중..."),
+            ]
+            
+            for step, pct, msg in progress_updates:
+                if not graph_task.done():
+                    yield send_event(step, pct, msg)
+                    await asyncio.sleep(1.2)
+            
+            # 그래프 실행 완료 대기
+            try:
+                result = await asyncio.wait_for(graph_task, timeout=1800)  # 30분
+            except asyncio.TimeoutError:
+                yield send_event("error", 0, "분석 시간 초과", {"error": "분석이 30분을 초과했습니다."})
+                return
             
             # 품질 검사
             yield send_event("quality", 90, "AI가 결과 품질 검사 중...")
@@ -1069,14 +1074,52 @@ async def analyze_repository_stream_get(
             # LLM 요약
             yield send_event("llm", 95, "AI 요약 생성 중...")
             
+            # 디버깅: 결과 구조 확인
+            logger.info(f"Raw result keys: {result.keys() if result else 'None'}")
+            
+            # 결과 추출 - agent_result 또는 diagnosis_result에서 가져오기
+            # SupervisorState에서 agent_result가 실제 진단 결과
+            agent_result = result.get("agent_result") or {}
+            diagnosis_data = result.get("diagnosis_result") or agent_result
+            data = diagnosis_data if diagnosis_data else result.get("data") or {}
+            
+            logger.info(f"agent_result keys: {agent_result.keys() if agent_result else 'None'}")
+            logger.info(f"Data keys for response: {data.keys() if data else 'None'}")
+            logger.info(f"health_score in data: {data.get('health_score')}")
+            
             # Good First Issues 수집
             try:
                 recommended_issues = fetch_beginner_issues(owner, repo, max_count=5)
             except Exception:
                 recommended_issues = []
             
-            # 최종 응답 생성
-            data = result.get("diagnosis_result") or result.get("data") or {}
+            # full_path.py 필드명과 http_router 필드명 매핑
+            # full_path: docs_score, activity_score
+            # http_router: documentation_quality, activity_maintainability
+            documentation_quality = data.get("documentation_quality") or data.get("docs_score", 0)
+            activity_maintainability = data.get("activity_maintainability") or data.get("activity_score", 0)
+            
+            # activity 데이터에서 추가 정보 추출
+            activity_data = data.get("activity", {}) or {}
+            if isinstance(activity_data, dict):
+                days_since_last_commit = activity_data.get("days_since_last_commit") or data.get("days_since_last_commit")
+                total_commits_30d = activity_data.get("total_commits_30d") or data.get("total_commits_30d", 0)
+                unique_contributors = activity_data.get("unique_contributors") or data.get("unique_contributors", 0)
+                issue_close_rate = activity_data.get("issue_close_rate") or data.get("issue_close_rate", 0)
+                median_pr_merge_days = activity_data.get("median_pr_merge_days") or data.get("median_pr_merge_days")
+                open_issues_count = activity_data.get("open_issues_count") or data.get("open_issues_count", 0)
+                stars = activity_data.get("stars") or data.get("stars", 0)
+                forks = activity_data.get("forks") or data.get("forks", 0)
+            else:
+                days_since_last_commit = data.get("days_since_last_commit")
+                total_commits_30d = data.get("total_commits_30d", 0)
+                unique_contributors = data.get("unique_contributors", 0)
+                issue_close_rate = data.get("issue_close_rate", 0)
+                median_pr_merge_days = data.get("median_pr_merge_days")
+                open_issues_count = data.get("open_issues_count", 0)
+                stars = data.get("stars", 0)
+                forks = data.get("forks", 0)
+            
             docs_issues = data.get("docs_issues", [])
             activity_issues = data.get("activity_issues", [])
             
@@ -1086,28 +1129,28 @@ async def analyze_repository_stream_get(
                 "analysis": {
                     "health_score": data.get("health_score", 0),
                     "health_level": data.get("health_level", "unknown"),
-                    "documentation_quality": data.get("documentation_quality", 0),
-                    "activity_maintainability": data.get("activity_maintainability", 0),
+                    "documentation_quality": documentation_quality,
+                    "activity_maintainability": activity_maintainability,
                     "onboarding_score": data.get("onboarding_score", 0),
                     "onboarding_level": data.get("onboarding_level", "unknown"),
-                    "analysis_depth_used": data.get("analysis_depth_used", "standard"),
+                    "analysis_depth_used": data.get("analysis_depth") or data.get("analysis_depth_used", "standard"),
                     "flow_adjustments": result.get("flow_adjustments", []),
-                    "warnings": result.get("warnings", []),
-                    "days_since_last_commit": data.get("days_since_last_commit"),
-                    "total_commits_30d": data.get("total_commits_30d", 0),
-                    "unique_contributors": data.get("unique_contributors", 0),
-                    "issue_close_rate": data.get("issue_close_rate", 0),
-                    "median_pr_merge_days": data.get("median_pr_merge_days"),
-                    "open_issues_count": data.get("open_issues_count", 0),
-                    "stars": data.get("stars", 0),
-                    "forks": data.get("forks", 0),
-                    "dependency_complexity_score": data.get("dependency_complexity_score", 0),
+                    "warnings": data.get("warnings") or result.get("warnings", []),
+                    "days_since_last_commit": days_since_last_commit,
+                    "total_commits_30d": total_commits_30d,
+                    "unique_contributors": unique_contributors,
+                    "issue_close_rate": issue_close_rate,
+                    "median_pr_merge_days": median_pr_merge_days,
+                    "open_issues_count": open_issues_count,
+                    "stars": stars,
+                    "forks": forks,
+                    "dependency_complexity_score": data.get("dependency_complexity_score") or data.get("structure_score", 0),
                     "chat_response": result.get("chat_response"),
                 },
                 "risks": _generate_risks_from_issues(docs_issues, activity_issues, data),
                 "actions": _generate_actions_from_issues(docs_issues, activity_issues, data, recommended_issues),
                 "recommended_issues": recommended_issues,
-                "readme_summary": data.get("summary_for_user"),
+                "readme_summary": data.get("summary_for_user") or data.get("llm_summary"),
                 "chat_response": result.get("chat_response"),
                 "onboarding_plan": (
                     result.get("task_results", {}).get("onboarding", {}).get("onboarding_plan") or

@@ -133,9 +133,31 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     
     logger.info("Parsing supervisor intent")
     
-    user_message = state["user_message"]
+    user_message = state.get("user_message") or ""
+    user_context = state.get("user_context", {}) or {}
     conversation_history = state.get("conversation_history", [])
     accumulated_context = dict(state.get("accumulated_context", {}))
+    
+    # === 0단계: force_diagnosis 체크 ===
+    # /api/analyze/stream 같은 진단 전용 엔드포인트에서는 의도 파싱 건너뛰기
+    if user_context.get("force_diagnosis"):
+        logger.info("force_diagnosis flag set, skipping intent parsing")
+        return {
+            "supervisor_intent": {
+                "task_type": "diagnosis",
+                "target_agent": "diagnosis",
+                "needs_clarification": False,
+                "confidence": 1.0,
+                "reasoning": "force_diagnosis flag set"
+            },
+            "needs_clarification": False,
+            "clarification_questions": [],
+            "target_agent": "diagnosis",
+            "detected_intent": "diagnose_repo",
+            "intent_confidence": 1.0,
+            "decision_reason": "force_diagnosis flag enabled"
+        }
+    
     msg_lower = user_message.lower()
     
     # === 1단계: 대명사 해결 (맥락 추론) ===

@@ -1097,11 +1097,6 @@ const ContributionsSection = ({ recommendations }) => {
                 >
                   {getDifficultyLabel(rec.difficulty)}
                 </span>
-                {rec.estimatedTime && (
-                  <span className="text-xs text-gray-400">
-                    {rec.estimatedTime}
-                  </span>
-                )}
               </div>
               <h4 className="text-sm font-semibold text-gray-900">
                 {rec.title}

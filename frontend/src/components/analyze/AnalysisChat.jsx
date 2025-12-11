@@ -34,13 +34,28 @@ const AnalysisChat = ({
     // 초기 보고서 생성 메시지 생성
     const initialSections = {};
 
-    // 데이터가 있는 섹션은 complete로 설정
-    if (initialAnalysisResult?.summary) initialSections.overview = "complete";
-    if (initialAnalysisResult?.technicalDetails)
+    // 데이터가 실제로 있는 섹션만 complete로 설정
+    // summary는 score가 0보다 커야 유효
+    if (initialAnalysisResult?.summary?.score > 0)
+      initialSections.overview = "complete";
+    // technicalDetails는 stars나 forks 등 실제 데이터가 있어야 유효
+    if (
+      initialAnalysisResult?.technicalDetails?.stars > 0 ||
+      initialAnalysisResult?.technicalDetails?.forks > 0 ||
+      initialAnalysisResult?.technicalDetails?.documentationQuality > 0
+    )
       initialSections.metrics = "complete";
-    if (initialAnalysisResult?.projectSummary)
+    // projectSummary는 빈 문자열이 아니어야 유효
+    if (
+      initialAnalysisResult?.projectSummary &&
+      initialAnalysisResult.projectSummary.trim()
+    )
       initialSections.projectSummary = "complete";
-    if (initialAnalysisResult?.security) initialSections.security = "complete";
+    if (
+      initialAnalysisResult?.security?.vulnerabilities?.length > 0 ||
+      initialAnalysisResult?.security?.summary
+    )
+      initialSections.security = "complete";
     if (initialAnalysisResult?.risks?.length > 0)
       initialSections.risks = "complete";
     if (initialAnalysisResult?.recommendedIssues?.length > 0)
@@ -49,7 +64,11 @@ const AnalysisChat = ({
       initialSections.recommendations = "complete";
     if (initialAnalysisResult?.similarProjects?.length > 0)
       initialSections.similarProjects = "complete";
-    if (initialAnalysisResult?.onboardingPlan?.length > 0)
+    if (
+      initialAnalysisResult?.onboardingPlan?.weeks?.length > 0 ||
+      (Array.isArray(initialAnalysisResult?.onboardingPlan) &&
+        initialAnalysisResult.onboardingPlan.length > 0)
+    )
       initialSections.onboardingPlan = "complete";
 
     const reportMsgId = `report_${Date.now()}`;
