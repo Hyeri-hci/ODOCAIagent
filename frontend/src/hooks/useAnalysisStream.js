@@ -86,8 +86,7 @@ export const useAnalysisStream = ({
                 );
                 const repoUrl =
                   analysisResult?.repositoryUrl ||
-                  `https://github.com/${owner || resultOwner}/${
-                    repo || resultRepo
+                  `https://github.com/${owner || resultOwner}/${repo || resultRepo
                   }`;
                 const updatedResult = transformApiResponse(
                   { analysis: agent_result },
@@ -107,11 +106,97 @@ export const useAnalysisStream = ({
 
               if (target_agent === "onboarding" && agent_result) {
                 console.log("온보딩 플랜 생성됨 (스트리밍):", agent_result);
+
+                // 온보딩 결과에서 similar_projects도 추출
+                const similarProjects = agent_result.similar_projects || [];
+
                 setAnalysisResult((prev) => ({
                   ...prev,
                   onboardingPlan: agent_result,
+                  // 온보딩 결과에 포함된 유사 프로젝트도 함께 업데이트
+                  ...(similarProjects.length > 0 && { similarProjects }),
                 }));
                 setIsGeneratingPlan(false);
+              }
+
+              // 보안 분석 결과 처리
+              if (target_agent === "security" && agent_result) {
+                console.log("보안 분석 결과 받음 (스트리밍):", agent_result);
+
+                // 보안 결과를 프론트엔드 형식으로 변환
+                const securityResults = agent_result.results || agent_result;
+                const vulnerabilities = securityResults.vulnerabilities || {};
+
+                const securityData = {
+                  score:
+                    securityResults.security_score ??
+                    agent_result.security_score,
+                  grade:
+                    securityResults.security_grade ??
+                    agent_result.security_grade,
+                  risk_level:
+                    securityResults.risk_level ??
+                    agent_result.risk_level ??
+                    "unknown",
+                  vulnerability_count:
+                    vulnerabilities.total ??
+                    agent_result.vulnerability_count ??
+                    0,
+                  critical:
+                    vulnerabilities.critical ??
+                    agent_result.critical_count ??
+                    0,
+                  high: vulnerabilities.high ?? agent_result.high_count ?? 0,
+                  medium:
+                    vulnerabilities.medium ?? agent_result.medium_count ?? 0,
+                  low: vulnerabilities.low ?? agent_result.low_count ?? 0,
+                  summary: agent_result.report || "",
+                  vulnerabilities: vulnerabilities.details || [],
+                  recommendations: agent_result.recommendations || [],
+                };
+
+                console.log("변환된 보안 데이터:", securityData);
+
+                setAnalysisResult((prev) => ({
+                  ...prev,
+                  security: securityData,
+                }));
+              }
+
+              // 기여자 가이드 결과 처리
+              if (target_agent === "contributor" && agent_result) {
+                console.log("기여자 가이드 결과 받음 (스트리밍):", agent_result);
+
+                const features = agent_result.features || {};
+
+                setAnalysisResult((prev) => ({
+                  ...prev,
+                  contributorGuide: agent_result,
+                  firstContributionGuide: features.first_contribution_guide || null,
+                  contributionChecklist: features.contribution_checklist || null,
+                  communityAnalysis: features.community_analysis || null,
+                  issueMatching: features.issue_matching || null,
+                  structureVisualization: features.structure_visualization || null,
+                }));
+              }
+
+              // 추천 에이전트 결과 처리
+              if (target_agent === "recommend" && agent_result) {
+                console.log("추천 결과 받음 (스트리밍):", agent_result);
+                setAnalysisResult((prev) => ({
+                  ...prev,
+                  similarProjects: agent_result.recommendations || [],
+                }));
+              }
+
+              // 비교 분석 결과 처리
+              if (target_agent === "compare" && agent_result) {
+                console.log("비교 분석 결과 받음 (스트리밍):", agent_result);
+                setAnalysisResult((prev) => ({
+                  ...prev,
+                  compareResults: agent_result.compare_results || agent_result,
+                  compareSummary: agent_result.compare_summary || null,
+                }));
               }
 
               if (data.context.agent_result_summary?.similar_projects) {
@@ -136,16 +221,17 @@ export const useAnalysisStream = ({
             setIsStreaming(false);
             setStreamingMessage("");
 
+            const errorMessage =
+              data?.error || data?.message || "알 수 없는 오류가 발생했습니다.";
             const errorResponse = {
               id: `ai_${Date.now()}`,
               role: "assistant",
-              content:
-                "죄송합니다. 응답을 생성하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+              content: `죄송합니다. 응답을 생성하는 중 오류가 발생했습니다: ${errorMessage}`,
               timestamp: new Date(),
             };
             addMessage(errorResponse);
             setIsTyping(false);
-            console.error("Streaming error:", data.error);
+            console.error("Streaming error:", errorMessage);
             break;
           }
 

@@ -135,6 +135,18 @@ export const transformApiResponse = (apiResponse, repositoryUrl) => {
     warnings: analysis.warnings || [],
     flowAdjustments: analysis.flow_adjustments || [],
 
+    // 신규 기여자 가이드 (contributor 에이전트 결과)
+    contributorGuide: rawData.contributor_guide || analysis.contributor_guide || null,
+    firstContributionGuide: rawData.first_contribution_guide || analysis.first_contribution_guide || null,
+    contributionChecklist: rawData.contribution_checklist || analysis.contribution_checklist || null,
+    communityAnalysis: rawData.community_analysis || analysis.community_analysis || null,
+    issueMatching: rawData.issue_matching || analysis.issue_matching || null,
+    structureVisualization: rawData.structure_visualization || analysis.structure_visualization || null,
+
+    // 비교 분석 결과 (compare 에이전트 결과)
+    compareResults: rawData.compare_results || analysis.compare_results || null,
+    compareSummary: rawData.compare_summary || analysis.compare_summary || null,
+
     // 원본 analysis 객체 (필요시 참조용)
     rawAnalysis: analysis,
   };

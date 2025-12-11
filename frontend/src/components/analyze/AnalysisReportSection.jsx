@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { formatNumber } from "../../utils/formatNumber";
 import OnboardingPlanSection from "./OnboardingPlanSection";
+import ContributorGuideSection from "./ContributorGuideSection";
 import { AnalysisReportSkeleton } from "./SkeletonLoader";
 
 // === 섹션별 가이드 정보 ===
@@ -188,10 +189,10 @@ const formatGuideMessage = (guide) => {
         g.color === "green"
           ? "🟢"
           : g.color === "yellow"
-          ? "🟡"
-          : g.color === "orange"
-          ? "🟠"
-          : "🔴";
+            ? "🟡"
+            : g.color === "orange"
+              ? "🟠"
+              : "🔴";
       message += `\n- ${emoji} **${g.label}**: ${g.range}`;
     });
   }
@@ -261,6 +262,7 @@ const SECTION_ORDER = [
   "metrics",
   "projectSummary",
   "security",
+  "contributor",
   "risks",
   "recommendedTasks",
   "contributions",
@@ -326,10 +328,35 @@ const AnalysisReportSection = ({
   const { summary, technicalDetails, rawAnalysis } = analysisResult;
   const statusConfig = getStatusConfig(summary.score);
 
+  // 데이터 유효성 검사 함수
+  const hasValidOverviewData = () => {
+    return (
+      summary?.score > 0 ||
+      technicalDetails?.stars > 0 ||
+      technicalDetails?.forks > 0 ||
+      technicalDetails?.contributors > 0 ||
+      technicalDetails?.documentationQuality > 0 ||
+      technicalDetails?.activityMaintainability > 0
+    );
+  };
+
+  const hasValidMetricsData = () => {
+    return (
+      technicalDetails?.daysSinceLastCommit !== undefined ||
+      technicalDetails?.commits30d > 0 ||
+      technicalDetails?.issueCloseRate > 0 ||
+      technicalDetails?.prMergeSpeed !== undefined ||
+      technicalDetails?.openIssues > 0 ||
+      technicalDetails?.openPRs > 0
+    );
+  };
+
   // 섹션 렌더링 함수
   const renderSection = (sectionId) => {
     switch (sectionId) {
       case "overview":
+        // 유효한 데이터가 없으면 표시하지 않음
+        if (!hasValidOverviewData()) return null;
         return (
           <div key="overview">
             <CollapsibleCard
@@ -401,6 +428,8 @@ const AnalysisReportSection = ({
         );
 
       case "metrics":
+        // 유효한 메트릭 데이터가 없으면 표시하지 않음
+        if (!hasValidMetricsData()) return null;
         return (
           <div key="metrics">
             <CollapsibleCard
@@ -443,9 +472,8 @@ const AnalysisReportSection = ({
             <CollapsibleCard
               title="보안 분석"
               icon={<Shield className="w-5 h-5 text-gray-500" />}
-              subtitle={`취약점 ${
-                analysisResult.security.vulnerability_count || 0
-              }개 발견`}
+              subtitle={`취약점 ${analysisResult.security.vulnerability_count || 0
+                }개 발견`}
               isExpanded={expandedSections.security}
               onToggle={() => toggleSection("security")}
               guideKey="security"
@@ -519,16 +547,14 @@ const AnalysisReportSection = ({
         );
 
       case "similarProjects":
+        // 유사 프로젝트 데이터가 없으면 표시하지 않음
+        if (!analysisResult.similarProjects?.length) return null;
         return (
           <div key="similarProjects">
             <CollapsibleCard
               title="유사 프로젝트 추천"
               icon={<FolderGit2 className="w-5 h-5 text-gray-500" />}
-              subtitle={
-                analysisResult.similarProjects?.length > 0
-                  ? `${analysisResult.similarProjects.length}개 프로젝트 추천`
-                  : "학습에 도움이 될 유사 프로젝트"
-              }
+              subtitle={`${analysisResult.similarProjects.length}개 프로젝트 추천`}
               isExpanded={expandedSections.similarProjects}
               onToggle={() => toggleSection("similarProjects")}
               guideKey="similarProjects"
@@ -561,6 +587,27 @@ const AnalysisReportSection = ({
                 flowAdjustments={analysisResult.flowAdjustments}
               />
             </CollapsibleCard>
+          </div>
+        );
+
+      case "contributor":
+        // 신규 기여자 가이드 데이터가 없으면 표시하지 않음
+        if (
+          !analysisResult.contributorGuide &&
+          !analysisResult.firstContributionGuide &&
+          !analysisResult.contributionChecklist
+        )
+          return null;
+        return (
+          <div key="contributor">
+            <ContributorGuideSection
+              contributorGuide={analysisResult.contributorGuide}
+              firstContributionGuide={analysisResult.firstContributionGuide}
+              contributionChecklist={analysisResult.contributionChecklist}
+              communityAnalysis={analysisResult.communityAnalysis}
+              issueMatching={analysisResult.issueMatching}
+              structureVisualization={analysisResult.structureVisualization}
+            />
           </div>
         );
 
@@ -637,9 +684,8 @@ const ScoreCard = ({ score, statusConfig }) => (
       {/* 프로그레스 바 */}
       <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
         <div
-          className={`h-full ${
-            statusConfig.barColor || "bg-blue-500"
-          } transition-all duration-500`}
+          className={`h-full ${statusConfig.barColor || "bg-blue-500"
+            } transition-all duration-500`}
           style={{ width: `${score}%` }}
         />
       </div>
@@ -661,9 +707,8 @@ const StatCard = (props) => {
   const { icon: Icon, value, label, borderColor, iconColor } = props;
   return (
     <div
-      className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-4 border ${
-        borderColor || "border-gray-200 dark:border-gray-700"
-      } hover:shadow-md transition-shadow`}
+      className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-4 border ${borderColor || "border-gray-200 dark:border-gray-700"
+        } hover:shadow-md transition-shadow`}
     >
       <Icon className={`w-5 h-5 ${iconColor} mb-2`} />
       <div className="text-2xl font-bold text-gray-900 dark:text-white mb-1">
@@ -765,9 +810,8 @@ const DetailedMetrics = ({ technicalDetails }) => {
         return (
           <div
             key={idx}
-            className={`bg-gray-50 rounded-lg p-3 border ${
-              colors.split(" ")[0]
-            } text-center`}
+            className={`bg-gray-50 rounded-lg p-3 border ${colors.split(" ")[0]
+              } text-center`}
           >
             <metric.icon
               className={`w-4 h-4 mx-auto mb-1.5 ${colors.split(" ")[1]}`}
@@ -959,10 +1003,7 @@ const CollapsibleCard = ({
   onOpenGuide,
 }) => (
   <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-    <button
-      onClick={onToggle}
-      className="w-full px-5 py-4 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between"
-    >
+    <div className="w-full px-5 py-4 border-b border-gray-100 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors flex items-center justify-between">
       <div className="flex items-center gap-2">
         {icon}
         <div className="text-left">
@@ -981,12 +1022,18 @@ const CollapsibleCard = ({
           )}
         </div>
       </div>
-      {isExpanded ? (
-        <ChevronUp className="w-5 h-5 text-gray-400" />
-      ) : (
-        <ChevronDown className="w-5 h-5 text-gray-400" />
-      )}
-    </button>
+      <button
+        onClick={onToggle}
+        className="p-1 hover:bg-gray-200 dark:hover:bg-gray-600 rounded transition-colors"
+        aria-label={isExpanded ? "섹션 접기" : "섹션 펼치기"}
+      >
+        {isExpanded ? (
+          <ChevronUp className="w-5 h-5 text-gray-400" />
+        ) : (
+          <ChevronDown className="w-5 h-5 text-gray-400" />
+        )}
+      </button>
+    </div>
     {isExpanded && <div className="p-5">{children}</div>}
   </div>
 );
