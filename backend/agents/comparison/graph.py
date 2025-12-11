@@ -52,7 +52,7 @@ def safe_node(default_updates: Dict[str, Any] = None):
                 # 기본 업데이트 값 설정
                 updates = default_updates.copy() if default_updates else {}
                 updates["error"] = str(e)
-                updates["execution_path"] = state.get("execution_path", "") + f" → {node_name}(ERROR)"
+                updates["execution_path"] = (state.get("execution_path") or "") + f" → {node_name}(ERROR)"
                 
                 return updates
         return wrapper
@@ -384,7 +384,7 @@ async def error_handler_node(state: ComparisonState) -> Dict[str, Any]:
     
     return {
         "result": result.dict(),
-        "execution_path": state.get("execution_path", "") + " → error_handler"
+        "execution_path": (state.get("execution_path") or "") + " → error_handler"
     }
 
 
