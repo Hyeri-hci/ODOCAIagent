@@ -1,7 +1,7 @@
 """점수 계산 Core 레이어 - Health/Onboarding 공식 (Pure Python)."""
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Dict, Any, cast
+from typing import Literal, Optional, Any, cast
 
 from .models import (
     DiagnosisCoreResult,
@@ -72,9 +72,9 @@ def compute_onboarding_level(onboarding_score: int) -> str:
 
 def compute_docs_issues(
     doc_score: int,
-    readme_categories: Optional[Dict[str, Any]] = None,
-) -> List[str]:
-    issues: List[str] = []
+    readme_categories: Optional[dict[str, Any]] = None,
+) -> list[str]:
+    issues: list[str] = []
 
     if doc_score < WEAK_DOCS_THRESHOLD:
         issues.append("weak_documentation")
@@ -100,9 +100,9 @@ def compute_docs_issues(
 
 def compute_activity_issues(
     activity_score: int,
-    activity_breakdown: Optional[Dict[str, float]] = None,
-) -> List[str]:
-    issues: List[str] = []
+    activity_breakdown: Optional[dict[str, float]] = None,
+) -> list[str]:
+    issues: list[str] = []
 
     if activity_score < INACTIVE_ACTIVITY_THRESHOLD:
         issues.append("inactive_project")
@@ -118,7 +118,7 @@ def compute_activity_issues(
     return issues
 
 
-def compute_dependency_complexity(deps: DependenciesSnapshot) -> tuple[int, List[str]]:
+def compute_dependency_complexity(deps: DependenciesSnapshot) -> tuple[int, list[str]]:
     """의존성 복잡도 점수 (0~100). 높을수록 관리 난이도가 높음.
     
     Note: 이것은 보안 취약점(Security Risk) 점수가 아님.
@@ -135,7 +135,7 @@ def compute_dependency_complexity(deps: DependenciesSnapshot) -> tuple[int, List
             
     pinned_ratio = pinned_count / total_deps if total_deps > 0 else 0.0
     
-    flags: List[str] = []
+    flags: list[str] = []
     base_score = 0
     
     # 1. Total Dependencies Count Complexity

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import List, Optional, Tuple
+from typing import Optional
 
 from backend.core.models import RepoSnapshot, StructureCoreResult
 from backend.core.github_core import fetch_repo_tree
@@ -113,7 +113,7 @@ BUILD_PATTERNS = [
 ]
 
 
-def _match_patterns(files: List[str], patterns: List[str]) -> List[str]:
+def _match_patterns(files: list[str], patterns: list[str]) -> list[str]:
     """파일 목록에서 패턴에 매칭되는 파일 반환."""
     matched = []
     compiled = [re.compile(p, re.IGNORECASE) for p in patterns]

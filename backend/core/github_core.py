@@ -6,11 +6,11 @@ from typing import Optional
 
 from backend.common.github_client import (
     check_repo_access,
-    GitHubClientError,
     GITHUB_API_BASE,
     GITHUB_TOKEN,
 )
-from backend.common.cache import cached
+from backend.common.errors import GitHubError, RepoNotFoundError
+from backend.common.cache_manager import cached
 from .models import RepoSnapshot
 
 import requests
@@ -48,7 +48,15 @@ def fetch_repo_snapshot(
     """GitHub 저장소 스냅샷 조회."""
     access = check_repo_access(owner, repo)
     if not access.accessible:
-        raise GitHubClientError(f"Repository not accessible: {owner}/{repo} ({access.reason})")
+        if access.status_code == 404:
+            raise RepoNotFoundError(owner, repo)
+        else:
+            raise GitHubError(
+                f"Repository not accessible: {owner}/{repo} ({access.reason})",
+                owner=owner,
+                repo=repo,
+                status_code=access.status_code,
+            )
 
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}"
     try:
@@ -56,7 +64,7 @@ def fetch_repo_snapshot(
         resp.raise_for_status()
         data = resp.json()
     except requests.RequestException as e:
-        raise GitHubClientError(f"Failed to fetch repo: {e}") from e
+        raise GitHubError(f"Failed to fetch repo: {e}", owner=owner, repo=repo) from e
 
     created_at = _parse_datetime(data.get("created_at"))
     pushed_at = _parse_datetime(data.get("pushed_at"))

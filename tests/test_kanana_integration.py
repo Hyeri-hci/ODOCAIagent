@@ -1,9 +1,13 @@
+"""Kanana LLM 통합 테스트."""
 import pytest
 from unittest.mock import patch, MagicMock
 from backend.agents.supervisor.nodes.onboarding_nodes import plan_onboarding_node, summarize_onboarding_plan_node
 from backend.agents.supervisor.models import SupervisorState, SupervisorInput
 from backend.agents.supervisor.service import init_state_from_input
 from backend.agents.supervisor.graph import get_supervisor_graph
+
+# 통합 테스트 마커
+pytestmark = pytest.mark.slow
 
 @patch("backend.agents.supervisor.nodes.onboarding_nodes.KananaWrapper")
 def test_plan_onboarding_node(mock_wrapper_cls):
@@ -50,9 +54,10 @@ def test_summarize_onboarding_plan_node(mock_wrapper_cls):
     assert result["last_answer_kind"] == "plan"
     mock_instance.summarize_onboarding_plan.assert_called_once()
 
+@pytest.mark.asyncio
 @patch("backend.agents.supervisor.nodes.onboarding_nodes.KananaWrapper")
 @patch("backend.agents.supervisor.nodes.diagnosis_nodes.run_diagnosis")
-def test_build_onboarding_plan_integration(mock_run_diagnosis, mock_wrapper_cls):
+async def test_build_onboarding_plan_integration(mock_run_diagnosis, mock_wrapper_cls):
     """
     Integration test: Run the full graph with mocked KananaWrapper.
     Verifies that the graph correctly routes to onboarding nodes and populates the state.
@@ -80,9 +85,9 @@ def test_build_onboarding_plan_integration(mock_run_diagnosis, mock_wrapper_cls)
     )
     state = init_state_from_input(inp)
     
-    # 4. Run Graph
+    # 4. Run Graph (async)
     graph = get_supervisor_graph()
-    result = graph.invoke(state, config={"configurable": {"thread_id": "test_integration"}})
+    result = await graph.ainvoke(state, config={"configurable": {"thread_id": "test_integration"}})
     
     # 5. Verify
     assert result["task_type"] == "build_onboarding_plan"

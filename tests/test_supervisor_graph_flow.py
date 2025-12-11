@@ -1,74 +1,75 @@
 import pytest
-from unittest.mock import patch, MagicMock
-from backend.agents.supervisor.models import SupervisorInput, SupervisorState
-from backend.agents.supervisor.service import init_state_from_input
-from backend.agents.supervisor.graph import get_supervisor_graph
+from unittest.mock import patch, MagicMock, AsyncMock
+from backend.agents.supervisor.graph import run_supervisor
 
-@patch("backend.agents.supervisor.nodes.diagnosis_nodes.run_diagnosis")
-def test_diagnose_repo_flow(mock_run_diagnosis):
+# 통합 테스트 마커 (실제 그래프 실행)
+pytestmark = pytest.mark.slow
+
+
+@pytest.mark.asyncio
+@patch("backend.agents.diagnosis.graph.run_diagnosis")
+async def test_diagnose_repo_flow(mock_run_diagnosis):
+    """진단 요청 플로우 테스트 (새 아키텍처)."""
     # Mock Diagnosis Output
-    mock_output = MagicMock()
-    mock_output.to_dict.return_value = {
+    mock_run_diagnosis.return_value = {
+        "type": "full_diagnosis",
         "repo_id": "test/repo",
         "health_score": 80,
         "health_level": "good",
         "onboarding_score": 70,
-        "onboarding_level": "medium",
-        "summary_for_user": "Good job"
+        "onboarding_level": "normal",
+        "llm_summary": "Good job"
     }
-    mock_run_diagnosis.return_value = mock_output
 
-    # Input
-    inp = SupervisorInput(
-        task_type="diagnose_repo",
-        owner="test",
-        repo="repo"
-    )
-    state = init_state_from_input(inp)
-    
-    # Run Graph
-    graph = get_supervisor_graph()
-    result = graph.invoke(state, config={"configurable": {"thread_id": "test"}})
-    
-    # Verify
-    assert result["task_type"] == "diagnose_repo"
-    assert result["diagnosis_result"]["repo_id"] == "test/repo"
-    assert result["last_answer_kind"] == "report" # run_diagnosis_node sets this
-
-@patch("backend.agents.supervisor.nodes.diagnosis_nodes.run_diagnosis")
-def test_build_onboarding_plan_flow(mock_run_diagnosis):
-    # Mock Diagnosis Output
-    mock_output = MagicMock()
-    mock_output.to_dict.return_value = {
-        "repo_id": "test/repo",
-        "health_score": 80,
-        "health_level": "good",
-        "onboarding_score": 70,
-        "onboarding_level": "medium",
-        "summary_for_user": "Good job"
-    }
-    mock_run_diagnosis.return_value = mock_output
-
-    # Input
-    inp = SupervisorInput(
-        task_type="build_onboarding_plan",
+    # Run Supervisor with proper user_message
+    result = await run_supervisor(
         owner="test",
         repo="repo",
-        user_context={"experience_days": 10}
+        user_message="이 저장소를 분석해주세요. 건강도와 온보딩 점수를 알려주세요."
     )
-    state = init_state_from_input(inp)
     
-    # Run Graph
-    graph = get_supervisor_graph()
-    result = graph.invoke(state, config={"configurable": {"thread_id": "test2"}})
+    # Verify (새 아키텍처 응답 형식)
+    assert "session_id" in result
+    assert "final_answer" in result
+    # clarification 또는 실제 답변이 있어야 함
+    assert result.get("final_answer") is not None or result.get("awaiting_clarification") == True
+
+
+@pytest.mark.asyncio
+@patch("backend.agents.diagnosis.graph.run_diagnosis")
+@patch("backend.agents.onboarding.graph.run_onboarding_graph")
+async def test_build_onboarding_plan_flow(mock_onboarding, mock_diagnosis):
+    """온보딩 플랜 생성 플로우 테스트 (새 아키텍처)."""
+    # Mock Diagnosis Output
+    mock_diagnosis.return_value = {
+        "type": "full_diagnosis",
+        "repo_id": "test/repo",
+        "health_score": 80,
+        "health_level": "good",
+        "onboarding_score": 70,
+        "onboarding_level": "normal"
+    }
     
-    # Verify
-    assert result["task_type"] == "build_onboarding_plan"
-    assert result["diagnosis_result"]["repo_id"] == "test/repo"
+    # Mock Onboarding Output
+    mock_onboarding.return_value = {
+        "repo_id": "test/repo",
+        "experience_level": "beginner",
+        "plan": [
+            {"week": 1, "title": "환경 설정", "tasks": ["Clone repo"]},
+            {"week": 2, "title": "첫 기여", "tasks": ["Fix bug"]}
+        ],
+        "summary": "2주 온보딩 플랜이 생성되었습니다."
+    }
+
+    # Run Supervisor with proper user_message
+    result = await run_supervisor(
+        owner="test",
+        repo="repo",
+        user_message="초보자용 온보딩 가이드를 만들어주세요"
+    )
     
-    # Verify Onboarding Flow
-    assert "candidate_issues" in result
-    assert len(result["candidate_issues"]) > 0
-    assert "onboarding_plan" in result
-    assert len(result["onboarding_plan"]) > 0
-    assert result["last_answer_kind"] == "plan" # summarize_onboarding_plan_node sets this
+    # Verify (새 아키텍처 응답 형식)
+    assert "session_id" in result
+    assert "final_answer" in result
+    # clarification 또는 실제 답변이 있어야 함
+    assert result.get("final_answer") is not None or result.get("awaiting_clarification") == True

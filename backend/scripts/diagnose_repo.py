@@ -19,7 +19,7 @@ def main():
     print(f"Starting diagnosis for {args.owner}/{args.repo} (ref: {args.ref})...")
     
     try:
-        result, error_message = run_supervisor_diagnosis(args.owner, args.repo, args.ref)
+        result, error_message, trace = run_supervisor_diagnosis(args.owner, args.repo, args.ref)
         
         if result:
             print("\n=== Diagnosis Result ===")

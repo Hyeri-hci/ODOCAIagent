@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import re
 import logging
-from typing import List, Optional, Dict
+from typing import Optional
 
 from .models import DependencyInfo, DependenciesSnapshot, RepoSnapshot
 from .github_core import fetch_repo_tree, fetch_file_content
@@ -28,9 +28,9 @@ def parse_dependencies(repo_snapshot: RepoSnapshot) -> DependenciesSnapshot:
             parse_errors=[f"Failed to fetch tree: {e}"],
         )
 
-    dependencies: List[DependencyInfo] = []
-    analyzed_files: List[str] = []
-    errors: List[str] = []
+    dependencies: list[DependencyInfo] = []
+    analyzed_files: list[str] = []
+    errors: list[str] = []
 
     # 1. requirements.txt (Python)
     req_files = [f for f in file_tree if f.endswith("requirements.txt")]
@@ -76,7 +76,7 @@ def parse_dependencies(repo_snapshot: RepoSnapshot) -> DependenciesSnapshot:
         )
 
 
-def _parse_requirements_txt(content: str, source: str) -> List[DependencyInfo]:
+def _parse_requirements_txt(content: str, source: str) -> list[DependencyInfo]:
     """requirements.txt 파싱."""
     deps = []
     for line in content.splitlines():
@@ -99,7 +99,7 @@ def _parse_requirements_txt(content: str, source: str) -> List[DependencyInfo]:
     return deps
 
 
-def _parse_package_json(content: str, source: str) -> List[DependencyInfo]:
+def _parse_package_json(content: str, source: str) -> list[DependencyInfo]:
     """package.json 파싱."""
     try:
         data = json.loads(content)
@@ -129,7 +129,7 @@ def _parse_package_json(content: str, source: str) -> List[DependencyInfo]:
     return deps
 
 
-def _parse_pyproject_toml(content: str, source: str) -> List[DependencyInfo]:
+def _parse_pyproject_toml(content: str, source: str) -> list[DependencyInfo]:
     """pyproject.toml 파싱 (매우 단순화)."""
     # toml 파서 없이 텍스트 기반으로 [tool.poetry.dependencies] 등 찾기
     deps = []

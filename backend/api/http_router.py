@@ -3,48 +3,92 @@ HTTP API 라우터 - 통합 에이전트 외부 인터페이스.
 
 UI, PlayMCP, 기타 클라이언트를 위한 HTTP 엔드포인트.
 """
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import re
+from typing import Any, Optional
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Any, Dict, List, Optional
 
-from backend.api.agent_service import run_agent_task
+from backend.api.agent_service import run_agent_task, run_agent_task_async
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
 
 
-# Frontend Compatible Schemas (/api/analyze)
+# ============================================================
+# Request/Response Models
+# ============================================================
+
 class AnalyzeRequest(BaseModel):
     """프론트엔드 호환 분석 요청."""
-    repo_url: str = Field(..., description="GitHub 저장소 URL (예: https://github.com/owner/repo)")
+    repo_url: str = Field(..., description="GitHub 저장소 URL", examples=["https://github.com/owner/repo"])
     user_message: Optional[str] = Field(None, description="분석 요청 메시지 (예: 보안 중점으로 깊게 분석해줘)")
-    priority: str = Field("thoroughness", description="분석 우선순위 (speed 또는 thoroughness)")
+    priority: str = Field(default="thoroughness", description="분석 우선순위 (speed 또는 thoroughness)")
 
 
 class AnalyzeResponse(BaseModel):
     """프론트엔드 호환 분석 응답."""
-    job_id: str
-    score: int  # health_score
-    analysis: Dict[str, Any]
-    risks: List[Dict[str, Any]]
-    actions: List[Dict[str, Any]]
-    similar: List[Dict[str, Any]]  # Deprecated in favor of recommended_issues
-    recommended_issues: Optional[List[Dict[str, Any]]] = None
-    readme_summary: Optional[str] = None
-    task_plan: Optional[List[Dict[str, Any]]] = None
-    task_results: Optional[Dict[str, Any]] = None
-    chat_response: Optional[str] = None
-    onboarding_plan: Optional[List[Dict[str, Any]]] = None  # 온보딩 플랜
+    job_id: str = Field(..., description="작업 ID (owner/repo@ref)")
+    score: int = Field(..., ge=0, le=100, description="Health score (0-100)")
+    analysis: dict[str, Any] = Field(..., description="상세 분석 결과")
+    risks: list[dict[str, Any]] = Field(default_factory=list, description="위험 요소 목록")
+    actions: list[dict[str, Any]] = Field(default_factory=list, description="권장 액션 목록")
+    similar: list[dict[str, Any]] = Field(default_factory=list, description="유사 프로젝트 (Deprecated)")
+    recommended_issues: Optional[list[dict[str, Any]]] = Field(None, description="추천 이슈 목록")
+    readme_summary: Optional[str] = Field(None, description="README 요약")
+    task_plan: Optional[list[dict[str, Any]]] = Field(None, description="메타 에이전트 작업 계획")
+    task_results: Optional[dict[str, Any]] = Field(None, description="메타 에이전트 작업 결과")
+    chat_response: Optional[str] = Field(None, description="채팅 응답")
+    onboarding_plan: Optional[list[dict[str, Any]]] = Field(None, description="온보딩 플랜")
+    security: Optional[dict[str, Any]] = Field(None, description="보안 분석 결과")
+
+
+class HealthCheckResponse(BaseModel):
+    """Health check 응답."""
+    status: str = Field(..., description="서비스 상태", examples=["ok"])
+    service: str = Field(..., description="서비스 이름", examples=["ODOCAIagent"])
+
+
+class MetricsResponse(BaseModel):
+    """성능 메트릭 응답."""
+    summary: dict[str, Any] = Field(..., description="메트릭 요약")
+    recent_tasks: list[dict[str, Any]] = Field(default_factory=list, description="최근 작업 목록")
+
+
+class MetricsSummaryResponse(BaseModel):
+    """메트릭 요약 응답."""
+    task_count: int = Field(..., ge=0, description="총 작업 수")
+    avg_duration: float = Field(..., ge=0, description="평균 실행 시간 (초)")
+    success_rate: float = Field(..., ge=0, le=1, description="성공률 (0-1)")
+    agent_stats: dict[str, Any] = Field(default_factory=dict, description="에이전트별 통계")
 
 
 def parse_github_url(url: str) -> tuple[str, str, str]:
-    """GitHub URL에서 owner, repo, ref 추출."""
+    """
+    GitHub URL에서 owner, repo, ref 추출.
+    
+    지원 포맷:
+    - https://github.com/owner/repo
+    - https://github.com/owner/repo/tree/branch
+    - owner/repo
+    - owner/repo@ref
+    
+    Args:
+        url: GitHub URL 또는 owner/repo 형식 문자열
+    
+    Returns:
+        tuple[str, str, str]: (owner, repo, ref)
+    
+    Raises:
+        ValueError: URL 형식이 올바르지 않을 때
+    """
     patterns = [
         r"github\.com/([^/]+)/([^/\s#?]+)(?:/tree/([^/\s#?]+))?",
         r"^([^/]+)/([^/@\s]+)(?:@(.+))?$",  # owner/repo@ref 형식
@@ -62,7 +106,15 @@ def parse_github_url(url: str) -> tuple[str, str, str]:
 
 
 def _get_score_interpretation(score: int) -> str:
-    """점수 해석 문구 반환."""
+    """
+    점수 해석 문구 반환.
+    
+    Args:
+        score: Health score (0-100)
+    
+    Returns:
+        str: 점수 해석 문구
+    """
     if score >= 80:
         return "상위 10% 수준입니다 (OSS 평균: 65점)"
     elif score >= 60:
@@ -74,7 +126,15 @@ def _get_score_interpretation(score: int) -> str:
 
 
 def _get_level_description(level: str) -> str:
-    """건강도 레벨 설명 반환."""
+    """
+    건강도 레벨 설명 반환.
+    
+    Args:
+        level: Health level (good/warning/bad)
+    
+    Returns:
+        str: 레벨 설명
+    """
     if level == "good":
         return "안정적인 프로젝트입니다"
     elif level == "warning":
@@ -97,7 +157,7 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
     캐시: user_message 없는 경우만 24시간 캐시 적용.
     """
     from backend.common.github_client import fetch_beginner_issues
-    from backend.common.cache import analysis_cache
+    from backend.common.cache_manager import analysis_cache
     
     try:
         owner, repo, ref = parse_github_url(request.repo_url)
@@ -111,8 +171,8 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
             logger.info(f"Returning cached analysis for {owner}/{repo}@{ref}")
             return AnalyzeResponse(**cached_response)
     
-    # Supervisor 호출 (메타 에이전트 통합)
-    result = run_agent_task(
+    # Supervisor 호출 (메타 에이전트 통합 - 비동기)
+    result = await run_agent_task_async(
         task_type="diagnose_repo",
         owner=owner,
         repo=repo,
@@ -199,6 +259,8 @@ async def analyze_repository(request: AnalyzeRequest) -> AnalyzeResponse:
             data.get("task_results", {}).get("onboarding", {}).get("onboarding_plan") or
             data.get("onboarding_plan")
         ),
+        # 보안 분석 결과
+        security=_extract_security_response(data.get("task_results", {}).get("security")),
     )
     
     # user_message 없는 경우만 캐시에 저장
@@ -371,6 +433,25 @@ def _generate_actions_from_issues(
     return actions
 
 
+def _extract_security_response(security_data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Security 분석 결과를 프론트엔드 형식으로 변환."""
+    if not security_data:
+        return None
+    
+    return {
+        "score": security_data.get("security_score"),
+        "grade": security_data.get("grade"),
+        "risk_level": security_data.get("risk_level", "unknown"),
+        "vulnerability_count": security_data.get("vuln_count", 0),
+        "critical": security_data.get("critical_count", 0),
+        "high": security_data.get("high_count", 0),
+        "medium": security_data.get("medium_count", 0),
+        "low": security_data.get("low_count", 0),
+        "summary": security_data.get("summary", ""),
+        # 취약점 상세 목록 (CVE ID, 패키지명, 심각도, 설명 등)
+        "vulnerability_details": security_data.get("vulnerability_details", []),
+    }
+
 
 # Agent Task API (신규 통합 API)
 
@@ -404,7 +485,7 @@ async def execute_agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
     - build_onboarding_plan: 온보딩 플랜 생성 (LLM 필요)
     """
     try:
-        result = run_agent_task(
+        result = await run_agent_task_async(
             task_type=request.task_type,
             owner=request.owner,
             repo=request.repo,
@@ -430,10 +511,15 @@ async def execute_agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
         )
 
 
-@router.get("/health")
-async def health_check():
-    """API 상태 확인."""
-    return {"status": "ok", "service": "ODOCAIagent"}
+@router.get("/health", response_model=HealthCheckResponse)
+async def health_check() -> HealthCheckResponse:
+    """
+    API 상태 확인.
+    
+    Returns:
+        HealthCheckResponse: 서비스 상태 정보
+    """
+    return HealthCheckResponse(status="ok", service="ODOCAIagent")
 
 
 # === Chat API ===
@@ -596,23 +682,44 @@ async def compare_repositories(request: CompareRequest) -> CompareResponse:
 
 
 # Performance Metrics API
-@router.get("/admin/metrics")
-async def get_performance_metrics(limit: int = 50):
+@router.get("/admin/metrics", response_model=MetricsResponse)
+async def get_performance_metrics(limit: int = 50) -> MetricsResponse:
+    """
+    성능 메트릭 조회.
+    
+    Args:
+        limit: 조회할 최근 작업 수 (기본값: 50)
+    
+    Returns:
+        MetricsResponse: 메트릭 요약 및 최근 작업 목록
+    """
     from backend.common.metrics import get_metrics_tracker
     
     tracker = get_metrics_tracker()
-    return {
-        "summary": tracker.get_summary(),
-        "recent_tasks": tracker.get_recent_metrics(limit=limit),
-    }
+    return MetricsResponse(
+        summary=tracker.get_summary(),
+        recent_tasks=tracker.get_recent_metrics(limit=limit),
+    )
 
 
-@router.get("/admin/metrics/summary")
-async def get_metrics_summary():
+@router.get("/admin/metrics/summary", response_model=MetricsSummaryResponse)
+async def get_metrics_summary() -> MetricsSummaryResponse:
+    """
+    메트릭 요약 조회.
+    
+    Returns:
+        MetricsSummaryResponse: 집계된 메트릭 정보
+    """
     from backend.common.metrics import get_metrics_tracker
     
     tracker = get_metrics_tracker()
-    return tracker.get_summary()
+    summary = tracker.get_summary()
+    return MetricsSummaryResponse(
+        task_count=summary.get("task_count", 0),
+        avg_duration=summary.get("avg_duration", 0.0),
+        success_rate=summary.get("success_rate", 0.0),
+        agent_stats=summary.get("agent_stats", {}),
+    )
 
 
 # === Streaming Analysis API ===
@@ -636,7 +743,7 @@ async def analyze_repository_stream(request: StreamingAnalyzeRequest):
     from backend.agents.supervisor.models import SupervisorInput
     from backend.agents.supervisor.service import init_state_from_input
     from backend.common.github_client import fetch_beginner_issues
-    from backend.common.cache import analysis_cache
+    from backend.common.cache_manager import analysis_cache
     
     try:
         owner, repo, ref = parse_github_url(request.repo_url)
@@ -730,7 +837,7 @@ async def analyze_repository_stream(request: StreamingAnalyzeRequest):
                         await asyncio.sleep(1.5)
                 
                 # 결과 대기
-                result = future.result(timeout=300)
+                result = future.result(timeout=900)
             
             # 결과 처리
             if result is None:
@@ -846,7 +953,7 @@ async def analyze_repository_stream_get(
     from backend.agents.supervisor.models import SupervisorInput
     from backend.agents.supervisor.service import init_state_from_input
     from backend.common.github_client import fetch_beginner_issues
-    from backend.common.cache import analysis_cache
+    from backend.common.cache_manager import analysis_cache
     
     try:
         owner, repo, ref = parse_github_url(repo_url)
@@ -912,7 +1019,7 @@ async def analyze_repository_stream_get(
                 user_context["analysis_depth"] = analysis_depth
             
             inp = SupervisorInput(
-                task_type="general_inquiry",
+                task_type="diagnose_repo",
                 owner=owner,
                 repo=repo,
                 user_context=user_context,
@@ -942,7 +1049,7 @@ async def analyze_repository_stream_get(
                         yield send_event(step, pct, msg)
                         await asyncio.sleep(1.2)
                 
-                result = future.result(timeout=300)
+                result = future.result(timeout=1800)  # 30분 (대규모 프로젝트 NVD 조회 시간 감안)
             
             # 품질 검사
             yield send_event("quality", 90, "AI가 결과 품질 검사 중...")
@@ -995,21 +1102,20 @@ async def analyze_repository_stream_get(
                     "stars": data.get("stars", 0),
                     "forks": data.get("forks", 0),
                     "dependency_complexity_score": data.get("dependency_complexity_score", 0),
-                    # 백엔드에서 생성한 AI 응답 (온보딩 가이드 등)
                     "chat_response": result.get("chat_response"),
                 },
                 "risks": _generate_risks_from_issues(docs_issues, activity_issues, data),
                 "actions": _generate_actions_from_issues(docs_issues, activity_issues, data, recommended_issues),
                 "recommended_issues": recommended_issues,
                 "readme_summary": data.get("summary_for_user"),
-                # 최상위 레벨에도 chat_response 추가 (프론트엔드 호환)
                 "chat_response": result.get("chat_response"),
-                # 온보딩 플랜 (여러 경로에서 추출 시도)
                 "onboarding_plan": (
                     result.get("task_results", {}).get("onboarding", {}).get("onboarding_plan") or
                     result.get("onboarding_plan") or
                     data.get("onboarding_plan")
                 ),
+                # Security 분석 결과
+                "security": _extract_security_response(result.get("task_results", {}).get("security")),
             }
             
             # 캐시에 저장

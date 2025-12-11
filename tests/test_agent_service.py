@@ -19,7 +19,8 @@ def test_run_agent_task_diagnose_repo(mock_run_diagnosis):
     
     mock_run_diagnosis.return_value = (
         mock_result, # result
-        None # error
+        None, # error
+        None # trace
     )
     
     response = run_agent_task(
@@ -38,7 +39,8 @@ def test_run_agent_task_onboarding_plan(mock_run_onboarding):
     # Mock Success
     mock_run_onboarding.return_value = (
         {"onboarding_plan": []}, # result
-        None # error
+        None, # error
+        None # trace
     )
     
     response = run_agent_task(
@@ -66,7 +68,7 @@ def test_run_agent_task_invalid_type():
 @patch("backend.api.agent_service.run_supervisor_diagnosis")
 def test_run_agent_task_diagnosis_failure(mock_run_diagnosis):
     # Mock Failure
-    mock_run_diagnosis.return_value = (None, "Diagnosis failed")
+    mock_run_diagnosis.return_value = (None, "Diagnosis failed", None)
     
     response = run_agent_task(
         task_type="diagnose_repo",

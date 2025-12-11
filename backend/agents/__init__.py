@@ -3,7 +3,9 @@
 __all__ = [
     "diagnosis",
     "supervisor", 
-    "recommend",
+    "onboarding",
+    "comparison",
     "security",
     "shared",
+    "chat",
 ]

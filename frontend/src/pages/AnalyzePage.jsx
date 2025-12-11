@@ -3,15 +3,74 @@ import UserProfileForm from "../components/analyze/UserProfileForm";
 import AnalysisChat from "../components/analyze/AnalysisChat";
 import AnalysisLoading from "../components/analyze/AnalysisLoading";
 import { analyzeRepository, setCachedAnalysis } from "../lib/api";
+import { transformApiResponse } from "../utils/apiResponseTransformer";
+import {
+  mockAnalysisResult,
+  mockEmptyAnalysisResult,
+} from "../utils/mockAnalysisData";
+import { ChevronLeft, ChevronRight, Database, DatabaseZap } from "lucide-react";
 
 // SSE 스트리밍 사용 여부 (true: SSE, false: 기존 REST API)
 const USE_STREAM_MODE = true;
 
+// Mock 데이터 사용 여부 (UI 테스트용) - true로 설정하면 바로 결과 화면으로 이동
+const USE_MOCK_DATA = true;
+
+// Mock 데이터 시나리오 목록
+const MOCK_SCENARIOS = [
+  {
+    id: "full",
+    label: "전체 데이터",
+    description: "모든 섹션에 데이터가 있는 경우",
+    data: mockAnalysisResult,
+    icon: DatabaseZap,
+  },
+  {
+    id: "empty",
+    label: "최소 데이터",
+    description: "일부 섹션만 데이터가 있는 경우",
+    data: mockEmptyAnalysisResult,
+    icon: Database,
+  },
+];
+
 const AnalyzePage = () => {
-  const [step, setStep] = useState("profile"); // profile, loading, chat
-  const [userProfile, setUserProfile] = useState(null);
-  const [analysisResult, setAnalysisResult] = useState(null);
+  // Mock 시나리오 인덱스
+  const [mockScenarioIndex, setMockScenarioIndex] = useState(0);
+  const currentScenario = MOCK_SCENARIOS[mockScenarioIndex];
+
+  // Mock 모드일 경우 바로 chat 화면으로
+  const [step, setStep] = useState(USE_MOCK_DATA ? "chat" : "profile");
+  const [userProfile, setUserProfile] = useState(
+    USE_MOCK_DATA ? { repositoryUrl: currentScenario.data.repositoryUrl } : null
+  );
+  const [analysisResult, setAnalysisResult] = useState(
+    USE_MOCK_DATA ? currentScenario.data : null
+  );
   const [error, setError] = useState(null);
+
+  // Mock 시나리오 변경 시 데이터 업데이트
+  useEffect(() => {
+    if (USE_MOCK_DATA) {
+      const scenario = MOCK_SCENARIOS[mockScenarioIndex];
+      setAnalysisResult(scenario.data);
+      setUserProfile({ repositoryUrl: scenario.data.repositoryUrl });
+    }
+  }, [mockScenarioIndex]);
+
+  // 이전 시나리오
+  const handlePrevScenario = () => {
+    setMockScenarioIndex((prev) =>
+      prev > 0 ? prev - 1 : MOCK_SCENARIOS.length - 1
+    );
+  };
+
+  // 다음 시나리오
+  const handleNextScenario = () => {
+    setMockScenarioIndex((prev) =>
+      prev < MOCK_SCENARIOS.length - 1 ? prev + 1 : 0
+    );
+  };
 
   // 분석 완료 후 페이지 상단으로 스크롤 (Header 높이 고려)
   useEffect(() => {
@@ -23,131 +82,6 @@ const AnalyzePage = () => {
     }
   }, [step]);
 
-  // SSE 결과 또는 REST API 결과를 프론트엔드 형식으로 변환
-  const transformAnalysisResult = (apiResponse, repositoryUrl) => {
-    const analysis = apiResponse.analysis || apiResponse;
-
-    console.log("=== API 응답 디버그 ===");
-    console.log("Analysis object:", JSON.stringify(analysis, null, 2));
-
-    return {
-      repositoryUrl: repositoryUrl,
-      analysisId:
-        apiResponse.job_id || analysis.repo_id || `analysis_${Date.now()}`,
-      summary: {
-        score: apiResponse.score || analysis.health_score || 0,
-        healthStatus:
-          analysis.health_level === "good"
-            ? "excellent"
-            : analysis.health_level === "warning"
-              ? "moderate"
-              : "needs-attention",
-        contributionOpportunities: (
-          apiResponse.recommended_issues ||
-          analysis.recommended_issues ||
-          []
-        ).length,
-        estimatedImpact:
-          (analysis.health_score || 0) >= 70
-            ? "high"
-            : (analysis.health_score || 0) >= 50
-              ? "medium"
-              : "low",
-      },
-      projectSummary:
-        apiResponse.readme_summary ||
-        analysis.summary_for_user ||
-        `이 저장소의 건강 점수는 ${apiResponse.score || analysis.health_score
-        }점입니다. ${analysis.health_score_interpretation || ""}`,
-      recommendations: [
-        // 기존 actions
-        ...(apiResponse.actions || []).map((action, idx) => ({
-          id: `action_${idx + 1}`,
-          title: action.title,
-          description: action.description,
-          difficulty: action.priority === "high" ? "easy" : "medium",
-          estimatedTime: action.duration,
-          impact: action.priority,
-          tags: action.url ? ["good-first-issue"] : ["improvement"],
-          url: action.url,
-          issueNumber: action.issue_number,
-        })),
-        // recommended_issues에서 추가
-        ...(
-          apiResponse.recommended_issues ||
-          analysis.recommended_issues ||
-          []
-        ).map((issue, idx) => ({
-          id: `issue_${issue.number || idx}`,
-          title: issue.title,
-          description: `GitHub Issue #${issue.number}`,
-          difficulty: issue.labels?.some(
-            (l) =>
-              l.toLowerCase().includes("easy") ||
-              l.toLowerCase().includes("first")
-          )
-            ? "easy"
-            : "medium",
-          estimatedTime: "2-4시간",
-          impact: "medium",
-          tags: issue.labels || ["issue"],
-          url: issue.url,
-          issueNumber: issue.number,
-        })),
-      ],
-      risks: (apiResponse.risks || []).map((risk, idx) => ({
-        id: `risk_${idx + 1}`,
-        type: risk.type || "general",
-        severity: risk.severity || "medium",
-        description: risk.description,
-      })),
-      technicalDetails: {
-        languages: [],
-        framework: "Unknown",
-        testCoverage: 0,
-        dependencies: analysis.dependency_complexity_score || 0,
-        lastCommit:
-          analysis.days_since_last_commit !== null &&
-            analysis.days_since_last_commit !== undefined
-            ? `${analysis.days_since_last_commit}일 전`
-            : "알 수 없음",
-        openIssues: analysis.open_issues_count || 0,
-        contributors: analysis.unique_contributors || 0,
-        stars: analysis.stars || 0,
-        forks: analysis.forks || 0,
-        // 점수 (100점 만점)
-        documentationQuality: analysis.documentation_quality || 0,
-        activityMaintainability: analysis.activity_maintainability || 0,
-        // 새 메트릭 추가
-        issueCloseRate:
-          analysis.issue_close_rate_pct ||
-          (analysis.issue_close_rate
-            ? `${(analysis.issue_close_rate * 100).toFixed(1)}%`
-            : "N/A"),
-        prMergeTime:
-          analysis.median_pr_merge_days_text ||
-          (analysis.median_pr_merge_days
-            ? `${analysis.median_pr_merge_days.toFixed(1)}일`
-            : "N/A"),
-        totalCommits30d: analysis.total_commits_30d || 0,
-      },
-      relatedProjects: [],
-      // 추천 이슈 (Good First Issues)
-      recommendedIssues:
-        apiResponse.recommended_issues || analysis.recommended_issues || [],
-      // 원본 API 응답 보관
-      rawAnalysis: analysis,
-      // 온보딩 플랜 (API 응답에서 가져오기)
-      onboardingPlan:
-        apiResponse.onboarding_plan || analysis.onboarding_plan || null,
-      // Agentic 플로우 결과
-      warnings: analysis.warnings || [],
-      flowAdjustments: analysis.flow_adjustments || [],
-      // 백엔드에서 생성한 AI 응답 (온보딩 가이드 등)
-      chatResponse: apiResponse.chat_response || analysis.chat_response || null,
-    };
-  };
-
   // SSE 완료 핸들러
   const handleStreamComplete = (sseResult) => {
     console.log("SSE 분석 완료:", sseResult);
@@ -155,13 +89,10 @@ const AnalyzePage = () => {
     const repoUrl = userProfile?.repositoryUrl || sseResult?.repo_id || "";
 
     // SSE 결과를 캐시에 저장 (채팅에서 같은 URL 입력시 재사용)
-    // sseResult가 이미 { analysis: {...} } 구조인 경우 이중 래핑 방지
-    const analysisData = sseResult.analysis || sseResult;
-    const cacheData = { ...sseResult, analysis: analysisData };
-    setCachedAnalysis(repoUrl, cacheData);
+    setCachedAnalysis(repoUrl, sseResult);
     console.log("[SSE] Cached result for:", repoUrl);
 
-    const transformed = transformAnalysisResult(cacheData, repoUrl);
+    const transformed = transformApiResponse(sseResult, repoUrl);
     setAnalysisResult(transformed);
     setStep("chat");
   };
@@ -187,7 +118,7 @@ const AnalyzePage = () => {
     // 기존 REST API 방식
     try {
       const apiResponse = await analyzeRepository(profileData.repositoryUrl);
-      const transformedResult = transformAnalysisResult(
+      const transformedResult = transformApiResponse(
         apiResponse,
         profileData.repositoryUrl
       );
@@ -202,6 +133,64 @@ const AnalyzePage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50">
+      {/* Mock 모드 시나리오 전환 UI */}
+      {USE_MOCK_DATA && step === "chat" && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
+          <div className="bg-white/95 backdrop-blur-sm rounded-2xl shadow-2xl border border-gray-200 px-4 py-3 flex items-center gap-4">
+            <button
+              onClick={handlePrevScenario}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              title="이전 시나리오"
+            >
+              <ChevronLeft className="w-5 h-5 text-gray-600" />
+            </button>
+
+            <div className="flex items-center gap-3 min-w-[200px]">
+              {(() => {
+                const IconComponent = currentScenario.icon;
+                return <IconComponent className="w-5 h-5 text-indigo-600" />;
+              })()}
+              <div className="text-center">
+                <div className="text-sm font-bold text-gray-900">
+                  {currentScenario.label}
+                </div>
+                <div className="text-xs text-gray-500">
+                  {currentScenario.description}
+                </div>
+              </div>
+            </div>
+
+            <button
+              onClick={handleNextScenario}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              title="다음 시나리오"
+            >
+              <ChevronRight className="w-5 h-5 text-gray-600" />
+            </button>
+
+            {/* 시나리오 인디케이터 */}
+            <div className="flex gap-1.5 ml-2">
+              {MOCK_SCENARIOS.map((_, idx) => (
+                <button
+                  key={idx}
+                  onClick={() => setMockScenarioIndex(idx)}
+                  className={`w-2.5 h-2.5 rounded-full transition-colors ${
+                    idx === mockScenarioIndex
+                      ? "bg-indigo-600"
+                      : "bg-gray-300 hover:bg-gray-400"
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Mock 모드 배지 */}
+          <div className="absolute -top-2 -right-2 px-2 py-0.5 bg-amber-500 text-white text-xs font-bold rounded-full">
+            MOCK
+          </div>
+        </div>
+      )}
+
       {step === "profile" && (
         <UserProfileForm onSubmit={handleProfileSubmit} error={error} />
       )}
@@ -217,6 +206,7 @@ const AnalyzePage = () => {
 
       {step === "chat" && (
         <AnalysisChat
+          key={mockScenarioIndex} // 시나리오 변경 시 컴포넌트 리렌더링
           userProfile={userProfile}
           analysisResult={analysisResult}
           onAnalysisUpdate={setAnalysisResult}

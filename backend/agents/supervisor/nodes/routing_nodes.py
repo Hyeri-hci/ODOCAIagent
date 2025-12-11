@@ -44,12 +44,12 @@ SKILL_LEVEL_KEYWORDS = {
 ANALYSIS_DEPTH_THRESHOLDS = {
     "deep": {
         "min_stars": 5000,        # 5000+ 스타 프로젝트
-        "min_files": 500,         # 500+ 파일
+        "min_files": 700,         # 700+ 파일 (대형 저장소)
         "description": "대규모 프로젝트 심층 분석"
     },
     "standard": {
         "min_stars": 100,         # 100-5000 스타 프로젝트
-        "min_files": 50,          # 50-500 파일
+        "min_files": 50,          # 50-700 파일
         "description": "일반 프로젝트 표준 분석"
     },
     "quick": {
@@ -62,8 +62,79 @@ ANALYSIS_DEPTH_THRESHOLDS = {
 # 분석 깊이별 키워드
 DEPTH_KEYWORDS = {
     "deep": ["자세히", "심층", "깊이", "상세", "detailed", "deep", "thorough", "comprehensive"],
-    "quick": ["빠르게", "간단히", "요약", "quick", "fast", "brief", "simple", "summary"],
+    "quick": ["빠르게", "간단히", "간단하게", "요약", "quick", "fast", "brief", "simple", "summary"],
 }
+
+# 대형 저장소 임계값
+LARGE_REPO_FILE_THRESHOLD = 700
+
+
+def detect_large_repository(file_count: int) -> bool:
+    """대형 저장소 여부 확인."""
+    return file_count >= LARGE_REPO_FILE_THRESHOLD
+
+
+def estimate_analysis_time(file_count: int, analysis_depth: str = "standard") -> dict:
+    """
+    분석 시간 예측.
+    
+    벤치마크 기준: microsoft/vscode (~5000 파일), facebook/react (~2000 파일)
+    
+    각 단계별 소요 시간 (초):
+    - fetch_snapshot: 기본 2초 + 파일 수 * 0.002초
+    - analyze_docs: 1-3초
+    - analyze_activity: 2-5초
+    - analyze_structure: 파일 수 * 0.003초 (standard 이상)
+    - parse_deps: 1-2초 (standard 이상)
+    - generate_summary (LLM): 3-8초 (standard 이상)
+    
+    Returns:
+        {"estimated_seconds": int, "estimated_minutes": float, "is_large": bool, "message": str}
+    """
+    is_large = detect_large_repository(file_count)
+    
+    # 기본 분석 시간 (quick 모드)
+    base_time = 2.0  # fetch_snapshot 기본
+    base_time += file_count * 0.002  # 파일 트리 처리
+    base_time += 2.0  # analyze_docs
+    base_time += 3.5  # analyze_activity
+    
+    if analysis_depth == "quick":
+        # quick 모드: 구조/의존성/LLM 요약 스킵
+        total_seconds = base_time
+    elif analysis_depth == "standard":
+        # standard 모드: 모든 분석 수행
+        total_seconds = base_time
+        total_seconds += file_count * 0.003  # analyze_structure
+        total_seconds += 1.5  # parse_deps
+        total_seconds += 5.0  # generate_summary (LLM)
+    else:  # deep
+        # deep 모드: 추가 메트릭 수집
+        total_seconds = base_time
+        total_seconds += file_count * 0.005  # analyze_structure (더 상세)
+        total_seconds += 2.0  # parse_deps
+        total_seconds += 7.0  # generate_summary (더 상세한 LLM)
+    
+    estimated_seconds = int(round(total_seconds))
+    estimated_minutes = round(total_seconds / 60.0, 1)
+    
+    # 안내 메시지 생성
+    if is_large:
+        message = (
+            f"대형 저장소입니다 ({file_count}개 파일). "
+            f"전체 분석에 약 {estimated_minutes}분이 소요됩니다. "
+            f"빠른 분석을 원하시면 'quick' 또는 '간단하게'를 입력해주세요."
+        )
+    else:
+        message = ""
+    
+    return {
+        "estimated_seconds": estimated_seconds,
+        "estimated_minutes": estimated_minutes,
+        "is_large": is_large,
+        "file_count": file_count,
+        "message": message,
+    }
 
 
 def determine_analysis_depth(state: SupervisorState) -> str:
@@ -176,8 +247,10 @@ def intent_analysis_node(state: SupervisorState) -> Dict[str, Any]:
     - detected_intent: 분류된 의도
     - intent_confidence: 분류 신뢰도
     - analysis_depth: 분석 깊이 (deep/standard/quick)
+    - large_repo_info: 대형 저장소 정보 (해당 시)
     """
-    result = {"step": state.step + 1}
+    result: Dict[str, Any] = {"step": state.step + 1}
+    warnings = list(state.warnings) if state.warnings else []
     
     # 이미 intent가 설정되어 있으면 유지 (API에서 직접 설정한 경우)
     if state.detected_intent and state.detected_intent != "unknown":
@@ -200,7 +273,26 @@ def intent_analysis_node(state: SupervisorState) -> Dict[str, Any]:
             result["analysis_depth"] = depth
             logger.info(f"Analysis depth determined: {depth}")
     
+    # 대형 저장소 감지 및 경고 메시지 생성
+    if state.repo_snapshot:
+        tree = getattr(state.repo_snapshot, 'tree', None) or state.repo_snapshot.get('tree', [])
+        file_count = len(tree) if tree else 0
+        
+        if detect_large_repository(file_count):
+            current_depth = result.get("analysis_depth") or state.analysis_depth or "standard"
+            time_info = estimate_analysis_time(file_count, current_depth)
+            
+            result["large_repo_info"] = time_info
+            
+            if time_info.get("message"):
+                warnings.append(time_info["message"])
+                logger.info(f"Large repository detected: {file_count} files, estimated {time_info['estimated_minutes']} min")
+    
+    if warnings:
+        result["warnings"] = warnings
+    
     return result
+
 
 
 def decision_node(state: SupervisorState) -> Dict[str, Any]:
@@ -320,7 +412,7 @@ def decision_node(state: SupervisorState) -> Dict[str, Any]:
 def _check_cache(owner: str, repo: str, ref: str = "main") -> bool:
     """캐시에 분석 결과가 있는지 확인."""
     try:
-        from backend.common.cache import analysis_cache
+        from backend.common.cache_manager import analysis_cache
         cached = analysis_cache.get_analysis(owner, repo, ref)
         return cached is not None
     except Exception as e:
@@ -333,7 +425,7 @@ def use_cached_result_node(state: SupervisorState) -> Dict[str, Any]:
     캐시에서 분석 결과를 로드하여 diagnosis_result에 설정.
     """
     try:
-        from backend.common.cache import analysis_cache
+        from backend.common.cache_manager import analysis_cache
         cached = analysis_cache.get_analysis(state.owner, state.repo, "main")
         
         if cached:

@@ -16,14 +16,16 @@ def test_diagnosis_no_llm_mode():
     print(f"\nTesting No-LLM mode for {owner}/{repo}...")
     
     # use_llm_summary=False로 실행
-    result, error_msg = run_supervisor_diagnosis(owner, repo, use_llm_summary=False)
+    result, error_msg, trace = run_supervisor_diagnosis(owner, repo, use_llm_summary=False)
     
     assert error_msg is None, f"Diagnosis failed: {error_msg}"
     assert result is not None, "Diagnosis result is None"
     
-    # 결과 검증
-    print(f"Health Score: {result.health_score}")
-    assert result.health_score >= 0
+    # 결과 검증 (result는 dict임)
+    print(f"Health Score: {result.get('health_score')}")
+    assert isinstance(result, dict), f"Expected dict, got {type(result)}"
+    assert result.get('health_score') is not None
+    assert result['health_score'] >= 0
     
     # 메시지 검증 (SupervisorState를 직접 반환받지 않으므로, 
     # run_supervisor_diagnosis가 반환하는 값에는 메시지가 포함되지 않음.

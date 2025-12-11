@@ -33,7 +33,9 @@ class StreamChunk:
     raw: Optional[Dict[str, Any]] = None
 
 class LLMClient(ABC):
-    """Abstract base class for an LLM client."""
+    DEFAULT_TIMEOUT = 60
+    DEFAULT_MAX_RETRIES = 3
+    DEFAULT_RETRY_DELAY = 1.0
 
     @abstractmethod
     def chat(self, request: ChatRequest, timeout: int = 60) -> ChatResponse:
@@ -45,23 +47,29 @@ class LLMClient(ABC):
         request: ChatRequest, 
         timeout: int = 60
     ) -> Generator[StreamChunk, None, None]:
-        """
-        스트리밍 채팅 요청 처리.
-        
-        기본 구현: 전체 응답을 한 번에 반환 (fallback).
-        서브클래스에서 실제 스트리밍 구현 가능.
-        
-        Args:
-            request: 채팅 요청
-            timeout: 타임아웃 (초)
-        
-        Yields:
-            StreamChunk: 응답 청크
-        """
-        # 기본 구현: 전체 응답을 단일 청크로 반환
         response = self.chat(request, timeout)
         yield StreamChunk(
             content=response.content,
             is_final=True,
             raw=response.raw,
         )
+    
+    def chat_with_retry(
+        self,
+        request: ChatRequest,
+        timeout: int = DEFAULT_TIMEOUT,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: float = DEFAULT_RETRY_DELAY,
+    ) -> ChatResponse:
+        import time
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                return self.chat(request, timeout)
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay * (attempt + 1))
+                    continue
+                raise last_error
