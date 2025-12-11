@@ -16,10 +16,20 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from backend.api.agent_service import run_agent_task, run_agent_task_async
+from backend.api.endpoints import health as health_endpoints
+from backend.api.endpoints import metrics as metrics_endpoints
+from backend.api.endpoints import compare as compare_endpoints
+from backend.api.endpoints import export as export_endpoints
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["agent"])
+
+# 분리된 엔드포인트 라우터 포함
+router.include_router(health_endpoints.router)
+router.include_router(metrics_endpoints.router)
+router.include_router(compare_endpoints.router)
+router.include_router(export_endpoints.router)
 
 
 # ============================================================
@@ -48,26 +58,6 @@ class AnalyzeResponse(BaseModel):
     chat_response: Optional[str] = Field(None, description="채팅 응답")
     onboarding_plan: Optional[list[dict[str, Any]]] = Field(None, description="온보딩 플랜")
     security: Optional[dict[str, Any]] = Field(None, description="보안 분석 결과")
-
-
-class HealthCheckResponse(BaseModel):
-    """Health check 응답."""
-    status: str = Field(..., description="서비스 상태", examples=["ok"])
-    service: str = Field(..., description="서비스 이름", examples=["ODOCAIagent"])
-
-
-class MetricsResponse(BaseModel):
-    """성능 메트릭 응답."""
-    summary: dict[str, Any] = Field(..., description="메트릭 요약")
-    recent_tasks: list[dict[str, Any]] = Field(default_factory=list, description="최근 작업 목록")
-
-
-class MetricsSummaryResponse(BaseModel):
-    """메트릭 요약 응답."""
-    task_count: int = Field(..., ge=0, description="총 작업 수")
-    avg_duration: float = Field(..., ge=0, description="평균 실행 시간 (초)")
-    success_rate: float = Field(..., ge=0, le=1, description="성공률 (0-1)")
-    agent_stats: dict[str, Any] = Field(default_factory=dict, description="에이전트별 통계")
 
 
 def parse_github_url(url: str) -> tuple[str, str, str]:
@@ -511,16 +501,6 @@ async def execute_agent_task(request: AgentTaskRequest) -> AgentTaskResponse:
         )
 
 
-@router.get("/health", response_model=HealthCheckResponse)
-async def health_check() -> HealthCheckResponse:
-    """
-    API 상태 확인.
-    
-    Returns:
-        HealthCheckResponse: 서비스 상태 정보
-    """
-    return HealthCheckResponse(status="ok", service="ODOCAIagent")
-
 
 # === Chat API ===
 
@@ -575,151 +555,6 @@ async def chat_with_assistant(request: ChatRequest) -> ChatResponse:
         error=response.error,
     )
 
-
-# Compare Analysis Schemas
-class CompareRequest(BaseModel):
-    """비교 분석 요청."""
-    repositories: List[str] = Field(
-        ..., 
-        description="비교할 저장소 목록 (예: ['owner1/repo1', 'owner2/repo2'])",
-        min_length=2,
-        max_length=5,
-    )
-
-
-class CompareResponse(BaseModel):
-    """비교 분석 응답."""
-    ok: bool
-    comparison: Optional[Dict[str, Any]] = None
-    individual_results: Optional[Dict[str, Any]] = None
-    summary: Optional[str] = None
-    warnings: List[str] = []
-    error: Optional[str] = None
-
-
-@router.post("/analyze/compare", response_model=CompareResponse)
-async def compare_repositories(request: CompareRequest) -> CompareResponse:
-    from backend.agents.supervisor.graph import get_supervisor_graph
-    from backend.agents.supervisor.models import SupervisorInput, SupervisorState
-    from backend.agents.supervisor.service import init_state_from_input
-    
-    repos = request.repositories
-    
-    if len(repos) < 2:
-        raise HTTPException(status_code=400, detail="최소 2개의 저장소가 필요합니다.")
-    
-    if len(repos) > 5:
-        raise HTTPException(status_code=400, detail="최대 5개의 저장소까지 비교 가능합니다.")
-    
-    try:
-        first_repo = repos[0]
-        try:
-            owner, repo, _ = parse_github_url(first_repo)
-        except ValueError:
-            if "/" in first_repo:
-                owner, repo = first_repo.split("/", 1)
-            else:
-                raise HTTPException(status_code=400, detail=f"잘못된 저장소 형식: {first_repo}")
-        
-        graph = get_supervisor_graph()
-        config = {"configurable": {"thread_id": f"compare_{owner}/{repo}"}}
-        
-        inp = SupervisorInput(
-            task_type="general_inquiry",
-            owner=owner,
-            repo=repo,
-            user_context={"intent": "compare"},
-        )
-        
-        initial_state = init_state_from_input(inp)
-        initial_state_dict = initial_state.model_dump()
-        initial_state_dict["detected_intent"] = "compare"
-        initial_state_dict["compare_repos"] = repos
-        
-        result = graph.invoke(SupervisorState(**initial_state_dict), config=config)
-        
-        comparison_data = {
-            "repositories": {},
-        }
-        
-        for repo_str, data in result.get("compare_results", {}).items():
-            comparison_data["repositories"][repo_str] = {
-                "health_score": data.get("health_score", 0),
-                "onboarding_score": data.get("onboarding_score", 0),
-                "health_level": data.get("health_level", "unknown"),
-                "onboarding_level": data.get("onboarding_level", "unknown"),
-                "documentation_quality": data.get("documentation_quality", 0),
-                "activity_maintainability": data.get("activity_maintainability", 0),
-            }
-        
-        if comparison_data["repositories"]:
-            scores = [(r, d["health_score"]) for r, d in comparison_data["repositories"].items()]
-            scores.sort(key=lambda x: x[1], reverse=True)
-            comparison_data["ranking"] = [r for r, _ in scores]
-            comparison_data["best_health"] = scores[0][0] if scores else None
-            
-            onboard_scores = [(r, d["onboarding_score"]) for r, d in comparison_data["repositories"].items()]
-            onboard_scores.sort(key=lambda x: x[1], reverse=True)
-            comparison_data["best_onboarding"] = onboard_scores[0][0] if onboard_scores else None
-        
-        return CompareResponse(
-            ok=True,
-            comparison=comparison_data,
-            individual_results=result.get("compare_results", {}),
-            summary=result.get("compare_summary"),
-            warnings=result.get("warnings", []),
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Compare analysis failed: {e}")
-        return CompareResponse(
-            ok=False,
-            error=str(e),
-            warnings=[],
-        )
-
-
-# Performance Metrics API
-@router.get("/admin/metrics", response_model=MetricsResponse)
-async def get_performance_metrics(limit: int = 50) -> MetricsResponse:
-    """
-    성능 메트릭 조회.
-    
-    Args:
-        limit: 조회할 최근 작업 수 (기본값: 50)
-    
-    Returns:
-        MetricsResponse: 메트릭 요약 및 최근 작업 목록
-    """
-    from backend.common.metrics import get_metrics_tracker
-    
-    tracker = get_metrics_tracker()
-    return MetricsResponse(
-        summary=tracker.get_summary(),
-        recent_tasks=tracker.get_recent_metrics(limit=limit),
-    )
-
-
-@router.get("/admin/metrics/summary", response_model=MetricsSummaryResponse)
-async def get_metrics_summary() -> MetricsSummaryResponse:
-    """
-    메트릭 요약 조회.
-    
-    Returns:
-        MetricsSummaryResponse: 집계된 메트릭 정보
-    """
-    from backend.common.metrics import get_metrics_tracker
-    
-    tracker = get_metrics_tracker()
-    summary = tracker.get_summary()
-    return MetricsSummaryResponse(
-        task_count=summary.get("task_count", 0),
-        avg_duration=summary.get("avg_duration", 0.0),
-        success_rate=summary.get("success_rate", 0.0),
-        agent_stats=summary.get("agent_stats", {}),
-    )
 
 
 # === Streaming Analysis API ===
@@ -1181,78 +1016,3 @@ async def analyze_repository_stream_get(
             "Access-Control-Allow-Origin": "*",
         }
     )
-
-
-# === Report Export API ===
-
-class ExportReportRequest(BaseModel):
-    """리포트 내보내기 요청."""
-    report_type: str = Field(..., description="diagnosis | onboarding | security")
-    owner: str = Field(..., description="저장소 소유자")
-    repo: str = Field(..., description="저장소 이름")
-    data: Dict[str, Any] = Field(..., description="리포트 데이터")
-    include_ai_trace: bool = Field(default=True, description="AI 판단 과정 포함")
-
-
-@router.post("/export/report")
-async def export_report(request: ExportReportRequest):
-    """
-    분석 결과를 Markdown 리포트로 내보내기.
-    
-    지원 리포트 유형:
-    - diagnosis: 진단 리포트
-    - onboarding: 온보딩 가이드
-    - security: 보안 분석 리포트
-    """
-    from backend.common.report_exporter import (
-        export_diagnosis_report,
-        export_onboarding_guide,
-        export_security_report
-    )
-    
-    try:
-        if request.report_type == "diagnosis":
-            markdown_content = export_diagnosis_report(
-                result=request.data,
-                owner=request.owner,
-                repo=request.repo,
-                include_ai_trace=request.include_ai_trace
-            )
-        elif request.report_type == "onboarding":
-            experience_level = request.data.get("experience_level", "beginner")
-            markdown_content = export_onboarding_guide(
-                plan=request.data,
-                owner=request.owner,
-                repo=request.repo,
-                experience_level=experience_level
-            )
-        elif request.report_type == "security":
-            markdown_content = export_security_report(
-                result=request.data,
-                owner=request.owner,
-                repo=request.repo
-            )
-        else:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"지원하지 않는 리포트 유형: {request.report_type}"
-            )
-        
-        # Markdown 파일로 반환
-        filename = f"{request.owner}_{request.repo}_{request.report_type}_report.md"
-        
-        from fastapi.responses import Response
-        return Response(
-            content=markdown_content,
-            media_type="text/markdown",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}",
-                "Access-Control-Allow-Origin": "*",
-            }
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception(f"Report export failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
