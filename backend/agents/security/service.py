@@ -12,8 +12,8 @@ class SecurityAnalysisService:
         self.github_client = GitHubClient(token=github_token, base_url=github_base_url)
         self.analyzer = RepositoryAnalyzer(github_client=self.github_client)
 
-    def analyze_repository(self, owner: str, repo: str, max_workers: int = 5) -> Dict[str, Any]:
-        """GitHub 레포지토리 의존성 분석."""
+    def analyze_repository(self, owner: str, repo: str, max_workers: int = 10) -> Dict[str, Any]:
+        """GitHub 레포지토리 의존성 분석 (기본값: 10 workers)."""
         return self.analyzer.analyze_repository(owner, repo, max_workers)
 
     def save_results(self, results: Dict[str, Any], output_file: Optional[str] = None) -> str:
@@ -49,7 +49,7 @@ def analyze_repository(owner: str, repo: str, **kwargs) -> Dict[str, Any]:
         github_token=kwargs.get('github_token'),
         github_base_url=kwargs.get('github_base_url')
     )
-    return service.analyze_repository(owner, repo, max_workers=kwargs.get('max_workers', 5))
+    return service.analyze_repository(owner, repo, max_workers=kwargs.get('max_workers', 10))
 
 
 __all__ = ['SecurityAnalysisService', 'analyze_repository']

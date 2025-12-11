@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def analyze_repository_dependencies(
     owner: str,
     repo: str,
-    max_workers: int = 5,
+    max_workers: int = 10,
     github_token: Optional[str] = None,
     github_base_url: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -25,7 +25,7 @@ def analyze_repository_dependencies(
     Args:
         owner: 레포지토리 소유자
         repo: 레포지토리 이름
-        max_workers: 병렬 처리 워커 수 (기본값: 5)
+        max_workers: 병렬 처리 워커 수 (기본값: 10으로 증가)
         github_token: GitHub Personal Access Token (선택)
         github_base_url: GitHub API 기본 URL (선택)
 

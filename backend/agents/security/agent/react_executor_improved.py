@@ -21,8 +21,8 @@ TOOL_ALTERNATIVES = {
     "analyze_dependencies_full": ["detect_lock_files", "parse_package_json"],
 }
 
-# 최소 시도 횟수 설정
-MIN_ATTEMPTS_BEFORE_STOP = 5  # 최소 5회는 시도
+# 최소 시도 횟수 설정 (최적화: 5회 -> 3회로 단축)
+MIN_ATTEMPTS_BEFORE_STOP = 3  # 최소 3회는 시도
 MAX_CONSECUTIVE_FAILURES = 3  # 연속 3회 실패 시 대안 시도
 MAX_SAME_TOOL_RETRIES = 2     # 같은 도구 최대 2회 재시도
 
@@ -113,10 +113,11 @@ class ReActExecutor:
 {current_state}
 
 중요한 규칙:
-1. 도구가 여러 번 실패했다면, 대체 도구를 시도하세요
-2. 조기에 포기하지 마세요 - 최소 5-10가지 다른 접근 방식을 시도하세요
-3. 막힌 경우, 다른 카테고리의 도구를 시도하세요 (예: GitHub API 실패 시 파일 파싱 시도)
-4. "continue": false는 모든 합리적인 옵션을 소진한 경우에만 설정하세요
+1. 사용자의 자연어 요청을 확인하고 해당 작업이 반드시 필요한 이유를 생각하고 행동하세요. 반드시 필요하지 않는 작업은 진행하지 말고 결과를 반환하세요.
+2. 도구가 여러 번 실패했다면, 대체 도구를 시도하세요
+3. 조기에 포기하지 마세요 - 최소 5-10가지 다른 접근 방식을 시도하세요
+4. 막힌 경우, 다른 카테고리의 도구를 시도하세요 (예: GitHub API 실패 시 파일 파싱 시도)
+5. "continue": false는 모든 합리적인 옵션을 소진한 경우에만 설정하세요
 
 작업:
 1. THINK: 현재 상황 분석
@@ -481,63 +482,54 @@ class ReActExecutor:
         parameters: Dict[str, Any],
         action_result: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """관찰 단계"""
-        print("[ReAct] OBSERVE phase...")
+        """관찰 단계 (최적화: 규칙 기반으로 단순화, LLM 호출 제거)"""
+        print("[ReAct] OBSERVE phase (optimized)...")
 
-        try:
-            # 결과를 요약하여 컨텍스트 길이 줄이기
-            result = action_result.get("result", {})
+        # 규칙 기반 관찰 (LLM 호출 제거)
+        success = action_result.get("success", False)
+        result = action_result.get("result", {})
+        error = action_result.get("error")
 
-            # 결과 요약: 중요한 정보만 추출
-            result_summary = {}
+        # 결과 분석
+        if success:
+            # 성공 시 관찰
+            observation_parts = [f"✓ {action_name} completed successfully"]
+
+            # 주요 결과 추출
             if isinstance(result, dict):
-                # 중요한 키만 추출
-                important_keys = ["success", "count", "total", "total_count", "lock_files",
-                                "vulnerabilities", "dependencies", "error", "summary"]
-                for key in important_keys:
-                    if key in result:
-                        value = result[key]
-                        # 리스트나 딕셔너리는 길이만 표시
-                        if isinstance(value, list):
-                            result_summary[key] = f"[{len(value)} items]"
-                        elif isinstance(value, dict):
-                            result_summary[key] = f"{{...}} ({len(value)} keys)"
-                        else:
-                            result_summary[key] = value
-            else:
-                result_summary = str(result)[:200]  # 문자열인 경우 200자로 제한
+                if "total_count" in result:
+                    observation_parts.append(f"Found {result['total_count']} items")
+                elif "count" in result:
+                    observation_parts.append(f"Count: {result['count']}")
+                elif "total_dependencies" in result:
+                    observation_parts.append(f"Found {result['total_dependencies']} dependencies")
+                elif "total_vulnerabilities" in result:
+                    observation_parts.append(f"Found {result['total_vulnerabilities']} vulnerabilities")
 
-            # 파라미터도 요약
-            params_summary = {k: v for k, v in parameters.items() if k != "state"}
+            observation = ". ".join(observation_parts)
+            learned = f"{action_name} executed successfully with useful results"
+            meets_expectation = True
+            next_step = "Continue with next planned step"
+        else:
+            # 실패 시 관찰
+            observation = f"✗ {action_name} failed"
+            if error:
+                observation += f": {str(error)[:100]}"
+            learned = f"Tool {action_name} encountered an error, may need alternative approach"
+            meets_expectation = False
+            next_step = "Try alternative tool or skip this step"
 
-            chain = self.observation_prompt | self.llm
-            response = await chain.ainvoke({
-                "action_name": action_name,
-                "parameters": json.dumps(params_summary, indent=2, ensure_ascii=False)[:300],
-                "result": json.dumps(result_summary, indent=2, ensure_ascii=False)[:500],  # 500자로 제한
-                "success": action_result.get("success", False),
-                "error": str(action_result.get("error", "None"))[:200]  # 에러 메시지도 200자로 제한
-            })
+        observation_data = {
+            "observation": observation,
+            "learned": learned,
+            "meets_expectation": meets_expectation,
+            "next_step_suggestion": next_step
+        }
 
-            content = response.content
-            observation_data = self._extract_json(content)
+        print(f"[ReAct]   Observation: {observation[:150]}...")
+        print(f"[ReAct]   Learned: {learned[:100]}...")
 
-            print(f"[ReAct]   Observation: {observation_data.get('observation', 'N/A')[:150]}...")
-            print(f"[ReAct]   Learned: {observation_data.get('learned', 'N/A')[:100]}...")
-
-            return observation_data
-
-        except Exception as e:
-            print(f"[ReAct] Observe phase error: {e}")
-            # 폴백 관찰
-            fallback_obs = {
-                "observation": f"Executed {action_name}: {'Success' if action_result.get('success') else 'Failed'}",
-                "learned": "Action completed",
-                "meets_expectation": action_result.get("success", False),
-                "next_step_suggestion": "Continue with plan"
-            }
-            print(f"[ReAct]   Observation (fallback): {fallback_obs['observation']}")
-            return fallback_obs
+        return observation_data
 
     async def reflect(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
         """
