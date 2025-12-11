@@ -18,6 +18,10 @@ export const useAnalysisStream = ({
 }) => {
   const [streamingMessage, setStreamingMessage] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
+  // LangGraph 노드 진행률 상태
+  const [nodeProgress, setNodeProgress] = useState(0);
+  const [progressMessage, setProgressMessage] = useState("");
+  const [currentNode, setCurrentNode] = useState("");
   const streamCancelRef = useRef(null);
 
   const startStream = (
@@ -36,6 +40,10 @@ export const useAnalysisStream = ({
 
     setStreamingMessage("");
     setIsStreaming(true);
+    // 진행률 초기화
+    setNodeProgress(0);
+    setProgressMessage("");
+    setCurrentNode("");
 
     streamCancelRef.current = sendChatMessageStreamV2(
       userMessage,
@@ -52,12 +60,41 @@ export const useAnalysisStream = ({
             break;
 
           case "processing":
-            console.log("처리 중:", data.agent || data.step);
+            console.log("처리 중:", data.agent || data.step || data.node);
+            // LangGraph 노드 진행률 처리
+            if (data.progress !== undefined) {
+              setNodeProgress(data.progress);
+            }
+            if (data.message) {
+              setProgressMessage(data.message);
+            }
+            if (data.node) {
+              setCurrentNode(data.node);
+            }
+            // 스텝 기반 진행률 (기존 호환)
+            if (data.step && !data.progress) {
+              const stepProgress = {
+                load_session: 5,
+                parse_intent: 15,
+                run_diagnosis_agent: 40,
+                run_onboarding_agent: 40,
+                run_security_agent: 40,
+                run_contributor_agent: 40,
+                finalize_answer: 85,
+                update_session: 95,
+              };
+              setNodeProgress(stepProgress[data.step] || 50);
+              setProgressMessage(data.step);
+            }
             break;
 
           case "answer": {
             setIsStreaming(false);
             setStreamingMessage("");
+            // 진행률 완료
+            setNodeProgress(100);
+            setProgressMessage("완료");
+            setCurrentNode("complete");
 
             if (data.session_id) {
               setSessionId(data.session_id);
@@ -255,5 +292,9 @@ export const useAnalysisStream = ({
     startStream,
     cancelStream,
     streamCancelRef,
+    // LangGraph 노드 진행률
+    nodeProgress,
+    progressMessage,
+    currentNode,
   };
 };
