@@ -6,26 +6,12 @@ import requests
 import logging
 
 from .config import GITHUB_API_BASE, GITHUB_TOKEN, DEFAULT_ACTIVITY_DAYS
-from .cache import cached, github_cache
+from .cache_manager import cached, github_cache
+from .errors import GitHubError, RepoNotFoundError, RepoPrivateError
 
 logger = logging.getLogger(__name__)
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
-
-
-class GitHubClientError(Exception):
-    """Custom exception for GitHub API call errors."""
-    pass
-
-
-class RepoAccessError(GitHubClientError):
-    """Raised when repo access is denied (403/404)."""
-    def __init__(self, owner: str, repo: str, status_code: int, reason: str):
-        self.owner = owner
-        self.repo = repo
-        self.status_code = status_code
-        self.reason = reason
-        super().__init__(f"Access denied to {owner}/{repo}: {status_code} - {reason}")
 
 
 @dataclass
@@ -144,13 +130,13 @@ def _github_graphql(query: str, variables: Dict[str, Any]) -> Dict[str, Any]:
         timeout=15,
     )
     if resp.status_code != 200:
-        raise GitHubClientError(
+        raise GitHubError(
             f"GraphQL request failed: {resp.status_code} {resp.text}"
         )
 
     data = resp.json()
     if "errors" in data and data["errors"]:
-        raise GitHubClientError(f"GraphQL errors: {data['errors']}")
+        raise GitHubError(f"GraphQL errors: {data['errors']}")
 
     return data.get("data") or {}
 
