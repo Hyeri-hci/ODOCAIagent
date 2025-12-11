@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field, model_validator
 class CandidateRepo(BaseModel):
     """
     RAG 검색 결과로 선정된 후보 리포지토리 스키마.
-    State의 'search_results' 리스트에 들어갈 객체입니다.
     """
     # --- 1. GitHub 기본 정보 (Metadata) ---
     id: int = Field(0, description="GitHub Repository ID")
@@ -18,7 +17,8 @@ class CandidateRepo(BaseModel):
     description: Optional[str] = Field(None, description="Project Description")
 
     main_language: str = Field("Unknown", description="Primary Language (e.g., Python)")
-    languages: List[str] = Field("Unknown", description="Languages")
+    # ⭐️ 수정됨: List[str]의 기본값은 리스트여야 합니다.
+    languages: List[str] = Field(default_factory=list, description="Languages")
 
     topics: List[str] = Field(default_factory=list, description="GitHub Topics")
 
@@ -29,14 +29,16 @@ class CandidateRepo(BaseModel):
     score: float = Field(0.0, description="유사도 점수 (Rerank Score)")
     match_snippet: str = Field(..., description="검색 쿼리와 매칭된 핵심 텍스트 조각 (설명 또는 README 일부)")
 
-    ai_score: int = Field(0, description="LLM evaluated relevance score (0-100)")
     ai_reason: str = Field(None, description="Reason why LLM recommends this project")
 
     rank: int = Field(0, description="트렌드 순위 (TrendService 결과에만 채워짐)")
     stars_since: int = Field(0, description="해당 기간 동안 받은 스타 수 (TrendService 결과에만 채워짐)")
 
+    search_query: Optional[str] = None
+    rag_query: Optional[str] = None
+    rag_filters: Optional[Dict[str, Any]] = None
+
     class Config:
-        # 딕셔너리에서 객체로 변환할 때 유연하게 처리
         from_attributes = True
 
 # Metric 및 Operator의 허용된 값 목록
@@ -82,7 +84,6 @@ class FinalRecommendation(BaseModel):
     
     simple_summary: str = Field(..., description="프로젝트의 간결한 한 줄 요약 (사용자 요청 기반)")
     
-    ai_score: int = Field(0, description="LLM 평가 점수 (0-100)")
     ai_reason: str = Field(..., description="LLM이 평가한 최종 추천 근거 (왜 이 프로젝트를 추천하는지)")
 
 class RecommendState(BaseModel):
@@ -90,16 +91,16 @@ class RecommendState(BaseModel):
 
     # 진행 상태
     step: int = 0
-    max_step: int = 4
 
     # 사용자의 의도
-    user_intent: str = Field("", description="LLM이 분석한 사용자의 구체적인 의도 (예: '기능은 유지하되 언어만 변경된 프로젝트 탐색')")
-    quantitative_filters: List[QuantitativeCondition] = Field(default_factory=list, description="LLM이 사용자 요청에서 추출한 정량적 필터 조건 (Issue, Commit 등).")
+    user_intent: str = Field("", description="LLM이 분석한 사용자의 구체적인 의도")
+    quantitative_filters: List[QuantitativeCondition] = Field(default_factory=list, description="LLM이 사용자 요청에서 추출한 정량적 필터 조건.")
 
     # 입력값
-    repo_url: Optional[str] = None
     owner: Optional[str] = None
     repo: Optional[str] = None
+    repo_url: Optional[str] = None
+
     user_request: str = ""
     ref: str = "main"
 
@@ -116,8 +117,10 @@ class RecommendState(BaseModel):
 
     github_seach_query: Optional[Dict[str, Any]] = None
 
+    # 핵심 결과: 프로젝트별 ai_reason이 포함됨
     search_results: List[CandidateRepo] = Field(default_factory=list)
 
+    # 최종 가공 결과 (사용 여부에 따라 제거 가능)
     final_results: List[FinalRecommendation] = Field(default_factory=list, description="최종 사용자에게 보여줄 추천 결과 목록")
     
     # 에러 및 복구

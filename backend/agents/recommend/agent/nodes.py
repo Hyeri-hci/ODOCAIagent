@@ -3,8 +3,8 @@ import time
 import asyncio
 from typing import Dict, Any, Optional, List
 from dataclasses import asdict
-from langgraph.graph import StateGraph, END
-from pydantic import BaseModel, ValidationError
+from langgraph.graph import END
+from pydantic import ValidationError
 
 from backend.agents.recommend.agent.state import RecommendState
 from backend.agents.recommend.core.ingest.summarizer import ContentSummarizer
@@ -18,6 +18,10 @@ from backend.agents.recommend.core.search.github_search import GitHubSearch
 
 from langchain_openai import ChatOpenAI
 from backend.agents.recommend.config.setting import settings
+
+# ⭐️ 수정됨: 불필요한 임포트 제거
+# from backend.agents.recommend.core.analysis.final_summary_generator import generate_summary 
+
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(name)s | %(message)s')
@@ -36,7 +40,7 @@ try:
 
     github_search_instance = GitHubSearch()
     summarizer_instance = ContentSummarizer()
-    scorer_instance = RepoScorer() # Scorer 인스턴스 생성 (비용 절약을 위해 재사용)
+    scorer_instance = RepoScorer()
     logger.info("✅ Global instances initialized.")
 except Exception as e:
     logger.error(f"❌ Failed to init global instances: {e}")
@@ -49,20 +53,15 @@ except Exception as e:
 async def parse_initial_request_node(state: RecommendState) -> Dict[str, Any]:
     """
     [첫 실행 노드] 사용자 요청을 분석하여 의도와 정량적 필터 조건만 추출하고 상태를 업데이트합니다.
-    (핵심 로직은 core/intent_parsing.py의 extract_initial_metadata를 호출)
     """
     
     user_request = state.user_request
     repo_url = state.repo_url
-    
+
     try:
         llm_client = globals()['llm'] 
     except KeyError:
         logger.error("❌ LLM client ('llm') not initialized in global scope.")
-        return {"user_intent": "semantic_search", "quantitative_filters": []}
-
-    if not user_request and not repo_url:
-        logger.warning("Request is empty. Defaulting to semantic_search.")
         return {"user_intent": "semantic_search", "quantitative_filters": []}
 
     try:
@@ -76,7 +75,6 @@ async def parse_initial_request_node(state: RecommendState) -> Dict[str, Any]:
         logger.info(f"✅ Initial Parsing Result: Intent={result.user_intent}, Filters={len(result.quantitative_filters)}")
         
         # 3. LangGraph 상태 업데이트용 맵 반환
-        # 반환된 딕셔너리의 키(user_intent, quantitative_filters)가 RecommendState의 필드를 업데이트합니다.
         return {
             "user_intent": result.user_intent,
             "quantitative_filters": result.quantitative_filters
@@ -206,7 +204,7 @@ async def generate_rag_search_query_node(state: RecommendState) -> Dict[str, Any
         return {"error": str(e), "failed_step": "generate_rag_search_query_node", "step": state.step + 1}
 
 # =================================================================
-# 👇 [NEW] 4. Vector Search Node (DB 조회)
+# 👇 4. Vector Search Node (DB 조회)
 # =================================================================
 def vector_search_node(state: RecommendState) -> Dict[str, Any]:
     """생성된 쿼리로 Qdrant 검색 수행"""
@@ -251,6 +249,8 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
                 # 검색 엔진이 계산한 점수와 스니펫
                 score=item.get("rerank_score", 0.0),
                 match_snippet=item.get("match_snippet", ""),
+                rag_query=state.search_query,
+                rag_filters=state.search_filters
             )
             structured_results.append(repo_obj)
         
@@ -276,10 +276,10 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         }
     
 # =================================================================
-# 👇 [NEW] 5. Scoring Node (LLM 평가)
+# 👇 5. Scoring Node (LLM 평가)
 # =================================================================
 async def score_candidates_node(state: RecommendState) -> Dict[str, Any]:
-    """LLM을 이용한 후보군 상세 평가"""
+    """LLM을 이용한 후보군 상세 평가 (ai_reason 생성)"""
     
     # 1. 평가할 후보가 없으면 패스
     if not state.search_results:
@@ -301,22 +301,24 @@ async def score_candidates_node(state: RecommendState) -> Dict[str, Any]:
             readme_summary_text = state.readme_summary.get("final_summary", "")
 
         # 4. Scorer 실행
+        # 이 단계에서 각 CandidateRepo 객체의 ai_score와 ai_reason이 채워집니다.
         scored_results = await scorer_instance.evaluate_candidates(
-            candidates=state.search_results,     # vector_search 결과
+            candidates=state.search_results,
             user_request=state.user_request,
-            intent=state.user_intent,            # "semantic_search" or "url_analysis"
-            source_repo=source_snapshot,         # 원본 객체
-            readme_summary=readme_summary_text   # 요약본 스트링
+            intent=state.user_intent,
+            source_repo=source_snapshot,
+            readme_summary=readme_summary_text
         )
 
         elapsed = round(time.time() - start_time, 3)
         timings = dict(state.timings)
         timings["ai_scoring"] = elapsed
 
-        logger.info(f"✅ Scoring complete. Top 1: {scored_results[0].name} (Score: {scored_results[0].ai_score})")
+        if scored_results:
+            logger.info(f"✅ Scoring complete. Top 1: {scored_results[0].name})")
 
         return {
-            "search_results": scored_results, # 점수가 매겨진 리스트로 업데이트
+            "search_results": scored_results[:6], # ai_reason이 포함된 리스트로 업데이트
             "timings": timings,
             "step": state.step + 1,
             "error": None
@@ -324,7 +326,6 @@ async def score_candidates_node(state: RecommendState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.error(f"❌ Scoring failed: {e}")
-        # 에러가 나도 프로세스는 계속 진행 (평가만 실패)
         return {"error": str(e), "failed_step": "score_candidates_node", "step": state.step + 1}
     
 async def trend_search_node(state: RecommendState) -> Dict[str, Any]:
@@ -343,10 +344,7 @@ async def trend_search_node(state: RecommendState) -> Dict[str, Any]:
         # 2. 결과 매핑 및 변환 (ParsedTrendingRepo -> CandidateRepo)
         structured_results: List[CandidateRepo] = []
         for item in raw_search_results:
-            # item은 ParsedTrendingRepo 객체이거나 Dict 형태입니다.
-            # CandidateRepo가 rank, stars_since 필드를 포함하도록 확장되었으므로 직접 변환 가능합니다.
             try:
-                # 필드가 일치한다고 가정하고 변환 (stars=total_stars, score=stars_since를 임시로 사용)
                 repo_obj = CandidateRepo(
                     id=0,
                     name=item.name,
@@ -355,17 +353,14 @@ async def trend_search_node(state: RecommendState) -> Dict[str, Any]:
                     description=item.description,
                     main_language=item.language,
                     stars=item.total_stars,
-                    # 트렌드 필드 매핑
                     rank=item.rank,
                     stars_since=item.stars_since,
-                    
-                    # RAG 필드는 0 또는 빈 값
                     score=0.0,
                     match_snippet=f"Trending Rank: {item.rank}, Stars this period: {item.stars_since}"
                 )
                 structured_results.append(repo_obj)
             except (KeyError, ValidationError, AttributeError) as ve:
-                 logger.warning(f"⚠️ Failed to map Trend result to CandidateRepo: {ve}")
+                logger.warning(f"⚠️ Failed to map Trend result to CandidateRepo: {ve}")
 
 
         elapsed = round(time.time() - start_time, 3)
@@ -397,7 +392,6 @@ async def generate_api_search_query_node(state: RecommendState) -> Dict[str, Any
     GitHub Search API에 적합한 최종 쿼리 문자열과 필터 파라미터를 생성합니다.
     """
     
-    # ⭐️ 쿼리 생성이 필요 없는 의도는 이 노드로 라우팅되지 않아야 합니다.
     mode = state.user_intent 
     if mode != "search_criteria":
         logger.warning(f"Query generation called for invalid mode: {mode}. Skipping.")
@@ -414,12 +408,10 @@ async def generate_api_search_query_node(state: RecommendState) -> Dict[str, Any
     try:
         result_params = await search_query_generator(user_input=state.user_request)
         
-        # 결과 추출 및 상태 업데이트 준비
         final_query_str = result_params.get("q", "")
         
-        # ⭐️ search_filters 딕셔너리에 API 호출에 필요한 모든 파라미터를 저장합니다.
         final_filters = {
-            "q": final_query_str, # 이 필드는 GitHub API 검색에 사용됩니다.
+            "q": final_query_str,
             "sort": result_params.get("sort"),
             "order": result_params.get("order")
         }
@@ -431,7 +423,6 @@ async def generate_api_search_query_node(state: RecommendState) -> Dict[str, Any
         logger.info(f"✅ Query Generated ({mode}): Q='{final_filters}...' | Filters set.")
 
         return {
-            # ⭐️ search_query는 LLM이 생성한 최종 쿼리 문자열 (API 검색용)
             "github_seach_query": final_filters,
             "timings": timings,
             "step": state.step + 1,
@@ -448,22 +439,17 @@ async def github_search_node(state: RecommendState) -> Dict[str, Any]:
     결과를 search_results에 저장합니다.
     """
     
-    # 1. 필수 입력값 체크
     if not state.github_seach_query or not state.github_seach_query.get("q"):
         logger.warning("No valid search query params found. Skipping GitHub API search.")
         return {"step": state.step + 1}
         
     start_time = time.time()
     
-    # 2. GitHub Search 호출 (동기 코드를 async 노드에서 호출)
     try:
         raw_results = github_search_instance.search_repositories(state.github_seach_query)
         
-        # 3. 결과 파싱 및 CandidateRepo로 변환
         structured_results: List[CandidateRepo] = []
         for item in raw_results:
-            # 🚨 NOTE: 이 부분은 GitHubSearch의 Step 3 (GitHubParser)이 담당해야 함
-            # 여기서는 DUMMY 매핑을 사용합니다.
             try:
                 repo_obj = CandidateRepo(
                     id=getattr(item, "id", 0),
@@ -473,7 +459,8 @@ async def github_search_node(state: RecommendState) -> Dict[str, Any]:
                     description=getattr(item, "description", "GitHub API search result."),
                     main_language=getattr(item, "main_language", "Unknown"),
                     stars=int(getattr(item, "stars", 0)),
-                    match_snippet=getattr(item, "match_snippet", "API result.")
+                    match_snippet=getattr(item, "match_snippet", "API result."),
+                    search_query=state.github_seach_query
                 )
                 structured_results.append(repo_obj)
             except Exception as ve:
@@ -498,45 +485,26 @@ async def github_search_node(state: RecommendState) -> Dict[str, Any]:
 
 
 def check_ingest_error_node(state: RecommendState) -> Dict[str, Any]:
-    # ... (check_ingest_error_node 구현 유지) ...
+    """에러 발생 시 재시도 횟수를 확인하고 복구 또는 종료합니다."""
     if not state.error: return {"step": state.step + 1}
     if state.retry_count < state.max_retry:
         return {"error": None, "failed_step": state.failed_step, "retry_count": state.retry_count + 1, "step": state.step + 1}
     return {"step": state.step + 1}
 
 # ------------------------------------------------------------------
-# 3. Routing Logic (라우팅 로직)
+# 3. Routing Logic (라우팅 로직 - 최종 정리)
 # ------------------------------------------------------------------
 
-# ⭐️ 새로운 라우터: parse_initial_request_node 이후
 def route_after_parsing(state: RecommendState) -> str:
     """초기 의도 파악 후 다음 단계를 결정합니다."""
-    if state.error:
-        return "check_ingest_error_node"
-        
+    if state.error: return "check_ingest_error_node"
     intent = state.user_intent
     
-    if intent == "url_analysis":
-        logger.info("🚦 Intent: url_analysis. Routing to fetch_snapshot_node.")
-        return "fetch_snapshot_node" 
-    
-    elif intent == "trend_analysis":
-        logger.info("🚦 Intent: trend_analysis. Routing to trend_search_node.")
-        return "trend_search_node"
-    
-    elif intent == "semantic_search":
-        # ⭐️ semantic_search: RAG 쿼리 생성으로 이동
-        logger.info(f"🚦 Intent: {intent}. Routing directly to generate_rag_query_node.")
-        return "generate_rag_query_node"
-    
-    elif intent == "search_criteria":
-        # ⭐️ search_criteria: API 쿼리 생성으로 이동
-        logger.info(f"🚦 Intent: search_criteria. Routing directly to generate_api_search_query_node.")
-        return "generate_api_search_query_node"
-    
-    else:
-        logger.warning(f"🚦 Unknown intent ({intent}). Defaulting to RAG query.")
-        return "generate_rag_query_node"
+    if intent == "url_analysis": return "fetch_snapshot_node" 
+    elif intent == "trend_analysis": return "trend_search_node"
+    elif intent == "semantic_search": return "generate_rag_query_node"
+    elif intent == "search_criteria": return "generate_api_search_query_node"
+    else: return "generate_rag_query_node"
 
 
 def route_after_fetch(state: RecommendState) -> str:
@@ -545,21 +513,17 @@ def route_after_fetch(state: RecommendState) -> str:
 
 def route_after_analysis(state: RecommendState) -> str:
     if state.error: return "check_ingest_error_node"
-    # url_analysis 흐름: 분석 후 RAG 쿼리 생성으로 이동
-    return "generate_rag_query_node" # ⭐️ 수정
+    return "generate_rag_query_node" 
 
 
-# ⭐️ route_after_rag_query_gen (RAG 쿼리 생성 후 Vector DB로 직행)
 def route_after_rag_query_gen(state: RecommendState) -> str:
     if state.error: return "check_ingest_error_node"
     return "vector_search_node"
 
-# ⭐️ route_after_api_query_gen (API 쿼리 생성 후 GitHub Search로 직행)
 def route_after_api_query_gen(state: RecommendState) -> str:
     if state.error: return "check_ingest_error_node"
-    return "github_search_node" # ⭐️ GitHub API 검색으로 이동
+    return "github_search_node" 
 
-# ⭐️ route_after_github_search (GitHub API 검색 후 Vector DB로 합류)
 def route_after_github_search(state: RecommendState) -> str:
     if state.error: return "check_ingest_error_node"
     return "vector_search_node"
@@ -568,10 +532,23 @@ def route_after_vector_search(state: RecommendState) -> str:
     if state.error: return "check_ingest_error_node"
     return "score_candidates_node"
 
+# ⭐️ 수정됨: score_candidates_node 후 -> 바로 END
 def route_after_scoring(state: RecommendState) -> str:
+    """Scoring 후, 개별 ai_reason을 생성했으므로 바로 END로 이동합니다."""
     if state.error: return "check_ingest_error_node"
-    return END
+    return END 
 
+# ⭐️ route_after_final_summary_gen 함수는 삭제되었습니다.
+
+
+# ⭐️ 수정됨: 트렌드 검색 후 -> score_candidates_node로 이동 (ai_reason 생성)
+def route_after_trend_search(state: RecommendState) -> str:
+    """트렌드 검색 후 다음 단계를 결정합니다."""
+    if state.error: 
+        return "check_ingest_error_node"
+    return "score_candidates_node"
+
+# ⭐️ 수정됨: 에러 복구 맵에서 generate_final_summary_node 제거
 def route_after_error_check(state: RecommendState) -> str:
     if state.error: return END 
     step_map = {
@@ -582,62 +559,8 @@ def route_after_error_check(state: RecommendState) -> str:
         "generate_api_search_query_node": "generate_api_search_query_node",
         "github_search_node": "github_search_node",
         "vector_search_node": "vector_search_node",
-        "score_candidates_node": "score_candidates_node"
+        "score_candidates_node": "score_candidates_node",
+        "trend_search_node": "trend_search_node",
+        # generate_final_summary_node 제거됨
     }
     return step_map.get(state.failed_step, END)
-
-def route_after_trend_search(state: RecommendState) -> str:
-    """트렌드 검색 후 다음 단계를 결정합니다."""
-    if state.error: 
-        return "check_ingest_error_node"
-    return END
-
-
-# ------------------------------------------------------------------
-# 4. Graph Construction & Execution (build_graph 수정)
-# ------------------------------------------------------------------
-
-def build_graph():
-    workflow = StateGraph(RecommendState)
-    
-    # 노드 등록
-    workflow.add_node("parse_initial_request_node", parse_initial_request_node)
-    workflow.add_node("fetch_snapshot_node", fetch_snapshot_node)
-    workflow.add_node("analyze_readme_summary_node", analyze_readme_summary_node)
-    
-    # ⭐️ RAG 쿼리 노드와 API 쿼리 노드를 분리 등록
-    workflow.add_node("generate_rag_query_node", generate_rag_search_query_node)
-    workflow.add_node("generate_api_search_query_node", generate_api_search_query_node) 
-    
-    # ⭐️ github_search_node 등록
-    workflow.add_node("github_search_node", github_search_node) 
-    
-    workflow.add_node("vector_search_node", vector_search_node)
-    workflow.add_node("score_candidates_node", score_candidates_node)
-    workflow.add_node("check_ingest_error_node", check_ingest_error_node)
-    workflow.add_node("trend_search_node", trend_search_node)
-    
-    # 진입점 설정
-    workflow.set_entry_point("parse_initial_request_node")
-    
-    # 엣지 연결
-    workflow.add_conditional_edges("parse_initial_request_node", route_after_parsing)
-    workflow.add_conditional_edges("fetch_snapshot_node", route_after_fetch)
-    workflow.add_conditional_edges("analyze_readme_summary_node", route_after_analysis)
-    
-    # ⭐️ RAG 쿼리 라우팅: RAG 쿼리 생성 후 Vector DB로 직행
-    workflow.add_conditional_edges("generate_rag_query_node", route_after_rag_query_gen) 
-    
-    # ⭐️ API 쿼리 라우팅: API 쿼리 생성 후 GitHub Search로 직행
-    workflow.add_conditional_edges("generate_api_search_query_node", route_after_api_query_gen) 
-    
-    # ⭐️ GitHub Search 후 Vector DB로 합류
-    workflow.add_conditional_edges("github_search_node", route_after_github_search)
-    
-    workflow.add_conditional_edges("vector_search_node", route_after_vector_search)
-    workflow.add_conditional_edges("score_candidates_node", route_after_scoring) 
-    workflow.add_conditional_edges("check_ingest_error_node", route_after_error_check)
-    
-    workflow.add_conditional_edges("trend_search_node", route_after_trend_search)
-    
-    return workflow.compile()
