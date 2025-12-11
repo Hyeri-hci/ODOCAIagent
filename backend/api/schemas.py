@@ -1,88 +1,155 @@
-from dataclasses import dataclass, asdict, field
-from typing import List, Dict, Any, Union, Optional
+"""
+API Request/Response 스키마 정의.
+"""
+from __future__ import annotations
+
+from typing import Any, Optional, Union
+from pydantic import BaseModel, Field, field_validator
+
 from backend.core.models import DiagnosisCoreResult
 
-@dataclass
-class DiagnosisSummaryDTO:
-    """프론트엔드 및 CLI에서 공통으로 사용할 진단 결과 요약 DTO."""
-    repo_id: str
-    documentation_quality: int
-    activity_maintainability: int
-    health_score: int
-    health_level: str
-    onboarding_score: int
-    onboarding_level: str
-    dependency_complexity_score: int
-    dependency_complexity_level: str
-    dependency_flags: List[str]
-    docs_issues: List[str]
-    activity_issues: List[str]
-    docs_issues_count: int
-    activity_issues_count: int
-    summary_for_user: Optional[str] = None
+
+class DiagnosisSummaryDTO(BaseModel):
+    """
+    프론트엔드 및 CLI에서 공통으로 사용할 진단 결과 요약 DTO.
+    """
+    
+    # 필수 필드
+    repo_id: str = Field(..., description="Repository ID (owner/repo)", examples=["facebook/react"])
+    documentation_quality: int = Field(..., ge=0, le=100, description="Documentation quality score (0-100)")
+    activity_maintainability: int = Field(..., ge=0, le=100, description="Activity & maintainability score (0-100)")
+    health_score: int = Field(..., ge=0, le=100, description="Overall health score (0-100)")
+    health_level: str = Field(..., description="Health level (bad/ok/good/excellent)")
+    onboarding_score: int = Field(..., ge=0, le=100, description="Onboarding score (0-100)")
+    onboarding_level: str = Field(..., description="Onboarding difficulty (hard/medium/easy)")
+    dependency_complexity_score: int = Field(..., ge=0, le=100, description="Dependency complexity score (0-100)")
+    dependency_complexity_level: str = Field(..., description="Dependency complexity level (low/medium/high)")
+    dependency_flags: list[str] = Field(default_factory=list, description="Dependency warning flags")
+    docs_issues: list[str] = Field(default_factory=list, description="Documentation issues")
+    activity_issues: list[str] = Field(default_factory=list, description="Activity issues")
+    docs_issues_count: int = Field(default=0, ge=0, description="Number of documentation issues")
+    activity_issues_count: int = Field(default=0, ge=0, description="Number of activity issues")
+    
+    # 선택 필드
+    summary_for_user: Optional[str] = Field(None, description="LLM-generated summary for user")
     
     # 상세 활동성 메트릭
+    days_since_last_commit: Optional[int] = Field(None, ge=0, description="Days since last commit")
+    total_commits_30d: int = Field(default=0, ge=0, description="Total commits in last 30 days")
+    unique_contributors: int = Field(default=0, ge=0, description="Number of unique contributors")
+    
+    # 상세 메트릭 (UX 개선용)
+    issue_close_rate: float = Field(default=0.0, ge=0.0, le=1.0, description="Issue close rate (0-1)")
+    median_pr_merge_days: Optional[float] = Field(None, ge=0, description="Median PR merge time in days")
+    median_issue_close_days: Optional[float] = Field(None, ge=0, description="Median issue close time in days")
+    open_issues_count: int = Field(default=0, ge=0, description="Number of open issues")
+    open_prs_count: int = Field(default=0, ge=0, description="Number of open PRs")
+    
+    # 문서 상세
+    readme_sections: Optional[dict[str, bool]] = Field(None, description="README section presence (WHAT/WHY/HOW/CONTRIBUTING)")
+    
+    # 저장소 메타데이터
+    stars: int = Field(default=0, ge=0, description="GitHub stars")
+    forks: int = Field(default=0, ge=0, description="GitHub forks")
+    
+    # 구조 분석 결과 (내부 처리용 - Frontend 표시 안 함)
+    structure_score: int = Field(default=0, ge=0, le=100, description="Structure score (0-100)")
+    has_tests: bool = Field(default=False, description="Has test directory")
+    has_ci: bool = Field(default=False, description="Has CI configuration")
+    has_docs_folder: bool = Field(default=False, description="Has docs folder")
+    has_build_config: bool = Field(default=False, description="Has build configuration")
+    
+    # 추천 이슈
+    recommended_issues: Optional[list[dict[str, Any]]] = Field(None, description="Recommended issues for onboarding")
+    
+    # 유사 프로젝트 추천
+    similar_projects: Optional[list[dict[str, Any]]] = Field(
+        None, 
+        description="Similar projects recommendation with metadata (name, owner, stars, forks, language, reason, similarity)"
+    )
+    
+    # Agentic 플로우 결과
+    warnings: list[str] = Field(default_factory=list, description="Agentic flow warnings")
+    flow_adjustments: list[str] = Field(default_factory=list, description="Agentic flow adjustments")
+    
+    # 메타 에이전트 결과
+    task_plan: Optional[list[dict[str, Any]]] = Field(None, description="Meta agent task plan")
+    task_results: Optional[dict[str, Any]] = Field(None, description="Meta agent task results")
+    chat_response: Optional[str] = Field(None, description="Chat agent response")
+    onboarding_plan: Optional[list[dict[str, Any]]] = Field(None, description="Onboarding plan")
+    
+    @field_validator("health_level")
+    @classmethod
+    def validate_health_level(cls, v: str) -> str:
+        """health_level 값 검증."""
+        allowed = {"bad", "ok", "good", "excellent"}
+        if v not in allowed:
+            raise ValueError(f"health_level must be one of {allowed}, got {v}")
+        return v
+    
+    @field_validator("onboarding_level")
+    @classmethod
+    def validate_onboarding_level(cls, v: str) -> str:
+        """onboarding_level 값 검증."""
+        allowed = {"hard", "medium", "easy"}
+        if v not in allowed:
+            raise ValueError(f"onboarding_level must be one of {allowed}, got {v}")
+        return v
+    
+    @field_validator("dependency_complexity_level")
+    @classmethod
+    def validate_dependency_level(cls, v: str) -> str:
+        """dependency_complexity_level 값 검증."""
+        allowed = {"low", "medium", "high"}
+        if v not in allowed:
+            raise ValueError(f"dependency_complexity_level must be one of {allowed}, got {v}")
+        return v
+    
+    def to_dict(self) -> dict[str, Any]:
+        return self.model_dump()
+    
+    model_config = {
+        "json_schema_extra": {
+            "examples": [{
+                "repo_id": "facebook/react",
+                "documentation_quality": 85,
+                "activity_maintainability": 92,
+                "health_score": 88,
+                "health_level": "excellent",
+                "onboarding_score": 78,
+                "onboarding_level": "easy",
+                "dependency_complexity_score": 45,
+                "dependency_complexity_level": "medium",
+                "dependency_flags": ["outdated_deps"],
+                "docs_issues": ["missing_api_docs"],
+                "activity_issues": [],
+                "docs_issues_count": 1,
+                "activity_issues_count": 0,
+                "stars": 225000,
+                "forks": 45000,
+            }]
+        }
+    }
+
+
+def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, dict[str, Any]]) -> DiagnosisSummaryDTO:
+ 
+    summary_for_user: Optional[str] = None
     days_since_last_commit: Optional[int] = None
     total_commits_30d: int = 0
     unique_contributors: int = 0
-    
-    # 상세 메트릭 (UX 개선용)
-    issue_close_rate: float = 0.0  # 이슈 해결률 (0-1)
-    median_pr_merge_days: Optional[float] = None  # PR 병합 중간값 (일)
-    median_issue_close_days: Optional[float] = None  # 이슈 해결 중간값 (일)
-    open_issues_count: int = 0  # 열린 이슈 수
-    open_prs_count: int = 0  # 열린 PR 수
-    
-    # 문서 상세
-    readme_sections: Optional[Dict[str, bool]] = None
-    
-    # 저장소 메타데이터
-    stars: int = 0
-    forks: int = 0
-    
-    # 구조 분석 결과 (내부 처리용 - Frontend 표시 안 함)
-    structure_score: int = 0
-    has_tests: bool = False
-    has_ci: bool = False
-    has_docs_folder: bool = False
-    has_build_config: bool = False
-    
-    # 추천 이슈
-    recommended_issues: Optional[List[Dict[str, Any]]] = None
-    
-    # Agentic 플로우 결과
-    warnings: List[str] = field(default_factory=list)
-    flow_adjustments: List[str] = field(default_factory=list)
-    
-    # 메타 에이전트 결과
-    task_plan: Optional[List[Dict[str, Any]]] = None
-    task_results: Optional[Dict[str, Any]] = None
-    chat_response: Optional[str] = None
-    onboarding_plan: Optional[List[Dict[str, Any]]] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
-
-
-def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]) -> DiagnosisSummaryDTO:
-    """DiagnosisCoreResult 또는 dict를 DiagnosisSummaryDTO로 변환합니다."""
-    
-    summary_for_user = None
-    days_since_last_commit = None
-    total_commits_30d = 0
-    unique_contributors = 0
-    readme_sections = None
+    readme_sections: Optional[dict[str, bool]] = None
     
     # 새 상세 메트릭 기본값
-    issue_close_rate = 0.0
-    median_pr_merge_days = None
-    median_issue_close_days = None
-    open_issues_count = 0
-    open_prs_count = 0
+    issue_close_rate: float = 0.0
+    median_pr_merge_days: Optional[float] = None
+    median_issue_close_days: Optional[float] = None
+    open_issues_count: int = 0
+    open_prs_count: int = 0
     
     # 저장소 메타데이터 기본값
-    stars = 0
-    forks = 0
+    stars: int = 0
+    forks: int = 0
     
     if isinstance(res, dict):
         if "scores" in res:
@@ -238,6 +305,8 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, Dict[str, Any]]
         has_ci=has_ci,
         has_docs_folder=has_docs_folder,
         has_build_config=has_build_config,
+        recommended_issues=res.get("recommended_issues") if isinstance(res, dict) else None,
+        similar_projects=res.get("similar_projects") if isinstance(res, dict) else None,
         warnings=warnings,
         flow_adjustments=flow_adjustments,
         # 메타 에이전트 결과

@@ -10,7 +10,7 @@ import logging
 import asyncio
 import json
 
-from backend.agents.supervisor.graph_v2 import run_supervisor_v2
+from backend.agents.supervisor.graph import run_supervisor
 from backend.common.session import get_session_store
 from backend.common.async_utils import retry_with_backoff, GracefulDegradation
 
@@ -76,7 +76,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         
         async def run_with_retry():
             try:
-                return await run_supervisor_v2(
+                return await run_supervisor(
                     user_message=request.message,
                     session_id=request.session_id,
                     owner=owner,
@@ -219,7 +219,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 try:
                     logger.info(f"Starting streaming supervisor: message='{request.message[:50]}...', owner={request.owner}, repo={request.repo}")
                     
-                    result = await run_supervisor_v2(
+                    result = await run_supervisor(
                         user_message=request.message,
                         session_id=request.session_id,
                         owner=request.owner,
