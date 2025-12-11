@@ -161,6 +161,13 @@ class SupervisorIntentParserV2(IntentParserBase):
    - 일반적 요청 → 0.7~0.8
    - 모호한 요청 → 0.5 이하
 
+6. detected_repo 결정 (중요!):
+   - 메시지에 "owner/repo" 형식 명시 → 해당 저장소
+   - 메시지에 프로젝트명만 있음 (예: "react", "vscode") → 세션의 Last mentioned repo 확인
+   - "📌 Last mentioned repo: owner/repo"가 있으면 → 해당 저장소 사용
+   - 메시지에 저장소 없음 + Last mentioned repo 없음 → 세션의 Repository 사용
+   - 예: "진단해줘" + Last mentioned repo: microsoft/vscode → detected_repo="microsoft/vscode"
+
 === 대명사 처리 예시 ===
 
 입력: "그거 초보자 관점에서 다시 설명해줘"

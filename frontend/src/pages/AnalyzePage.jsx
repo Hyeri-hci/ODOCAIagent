@@ -14,7 +14,7 @@ import { ChevronLeft, ChevronRight, Database, DatabaseZap } from "lucide-react";
 const USE_STREAM_MODE = true;
 
 // Mock 데이터 사용 여부 (UI 테스트용) - true로 설정하면 바로 결과 화면으로 이동
-const USE_MOCK_DATA = true;
+const USE_MOCK_DATA = false;
 
 // Mock 데이터 시나리오 목록
 const MOCK_SCENARIOS = [

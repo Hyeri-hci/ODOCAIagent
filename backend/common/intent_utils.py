@@ -145,6 +145,13 @@ def summarize_session_context(session_context: Dict[str, Any]) -> str:
     if available_data:
         summary_parts.append(f"✅ Available data: {', '.join(available_data)}")
     
+    # 최근 언급된 저장소 (멀티턴 컨텍스트)
+    last_mentioned_repo = accumulated.get("last_mentioned_repo")
+    if last_mentioned_repo:
+        summary_parts.append(
+            f"📌 Last mentioned repo: {last_mentioned_repo.get('full_name', 'unknown')}"
+        )
+    
     # 마지막 주제
     last_topic = accumulated.get("last_topic")
     if last_topic:

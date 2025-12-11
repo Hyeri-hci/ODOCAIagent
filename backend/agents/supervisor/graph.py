@@ -117,62 +117,101 @@ async def load_or_create_session_node(state: SupervisorState) -> Dict[str, Any]:
 
 
 async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
-    """의도 파싱 (Supervisor Intent Parser V2)"""
+    """
+    의도 파싱 (Supervisor Intent Parser V2)
+    
+    흐름:
+    1. 대명사 해결 (맥락 추론)
+    2. 저장소 감지 (owner/repo 패턴 + GitHub 검색)
+    3. Clarification 응답 처리 (숫자 선택 등)
+    4. 세션 컨텍스트 구성
+    5. LLM 의도 파싱 (IntentParserV2)
+    """
+    import re
+    from backend.common.github_client import search_repositories
+    from backend.common.intent_utils import extract_experience_level
+    
     logger.info("Parsing supervisor intent")
     
     user_message = state["user_message"]
     conversation_history = state.get("conversation_history", [])
-    accumulated_context = state.get("accumulated_context", {})
-    
-    # === 명확한 요청 패턴 바로 라우팅 (LLM 파싱 스킵) ===
-    # 저장소가 이미 지정되어 있으므로, 명확한 키워드만 있으면 바로 진행
+    accumulated_context = dict(state.get("accumulated_context", {}))
     msg_lower = user_message.lower()
     
-    # === 저장소 감지 (메시지에서 owner/repo 또는 프로젝트명 추출) ===
-    import re
-    from backend.common.github_client import search_repositories
+    # === 1단계: 대명사 해결 (맥락 추론) ===
+    resolved_message = user_message
+    pronoun_detected = False
     
+    try:
+        from backend.common.pronoun_resolver import resolve_pronoun
+        from backend.common.session import ConversationTurn, AccumulatedContext
+        from typing import List, cast
+        
+        if conversation_history and isinstance(conversation_history, list):
+            typed_history: List[ConversationTurn] = []
+            for turn in conversation_history:
+                if isinstance(turn, dict):
+                    typed_history.append(cast(ConversationTurn, turn))
+            
+            typed_context = cast(AccumulatedContext, accumulated_context)
+            
+            pronoun_result = resolve_pronoun(
+                user_message=user_message,
+                conversation_history=typed_history,
+                accumulated_context=typed_context
+            )
+            
+            if pronoun_result.get("resolved"):
+                pronoun_detected = True
+                logger.info(f"Pronoun resolved: {pronoun_result.get('pattern')} -> {pronoun_result.get('refers_to')}")
+                accumulated_context["last_pronoun_reference"] = pronoun_result
+    except Exception as e:
+        logger.warning(f"Pronoun resolution failed: {e}")
+    
+    # === 2단계: 저장소 감지 ===
     detected_owner = None
     detected_repo = None
-    search_results = None  # GitHub 검색 결과
+    search_results = None
     
-    # owner/repo 패턴 (예: facebook/react, Hyeri-hci/OSSDoctor)
+    # 2-1. owner/repo 패턴 (예: facebook/react)
     repo_pattern = r'([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)'
     repo_match = re.search(repo_pattern, user_message)
     if repo_match:
         detected_owner = repo_match.group(1)
         detected_repo = repo_match.group(2)
         logger.info(f"Detected repo from message: {detected_owner}/{detected_repo}")
+        accumulated_context["last_mentioned_repo"] = {
+            "owner": detected_owner,
+            "repo": detected_repo,
+            "full_name": f"{detected_owner}/{detected_repo}"
+        }
     
-    # 단독 프로젝트명 패턴 (예: "react 분석해줘", "OSSDoctor 진단해줘")
+    # 2-2. 단독 프로젝트명 (예: "react 분석해줘")
     if not detected_repo:
-        # 진단/분석 키워드를 제외하고 프로젝트명 추출 시도
         exclude_keywords = [
             "분석", "진단", "해줘", "해주세요", "찾아", "알려", 
             "보여", "전체", "건강도", "온보딩", "보안", "취약점",
-            "이", "저장소", "프로젝트", "라는", "를", "을", "좀"
+            "이", "저장소", "프로젝트", "라는", "를", "을", "좀",
+            "뭐야", "뭔가", "어때", "어떻게", "어떤"
         ]
         
-        # 메시지에서 키워드 제거 후 남은 단어 추출
         words = user_message.split()
         potential_project = None
         
         for word in words:
-            word_clean = word.strip().lower()
-            # 영문자로 시작하고 2자 이상
+            word_clean = word.strip().rstrip("?!는란이가을를").lower()
             if len(word_clean) >= 2 and word_clean[0].isalpha():
                 if word_clean not in exclude_keywords:
                     potential_project = word_clean
                     break
         
-        # 프로젝트명이 발견되면 GitHub에서 검색
         if potential_project and len(potential_project) >= 2:
             logger.info(f"Searching for project: {potential_project}")
             try:
                 search_results = search_repositories(potential_project, max_results=5)
                 
                 if search_results:
-                    # 1순위: 저장소 이름이 정확히 일치하는 것
+                    # 정확한 이름 매칭 우선
                     exact_match = None
                     for r in search_results:
                         if r["repo"].lower() == potential_project:
@@ -184,203 +223,93 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
                         detected_repo = exact_match["repo"]
                         logger.info(f"Exact match found: {detected_owner}/{detected_repo}")
                     elif search_results[0]["stars"] >= 10000:
-                        # 2순위: 명확한 1위 (10000 스타 이상이고 이름에 검색어 포함)
                         top = search_results[0]
                         if potential_project in top["repo"].lower():
                             detected_owner = top["owner"]
                             detected_repo = top["repo"]
                             logger.info(f"Top popular match: {detected_owner}/{detected_repo}")
-                    # 그 외: clarification으로 선택지 제공
+                    
+                    if detected_owner and detected_repo:
+                        accumulated_context["last_mentioned_repo"] = {
+                            "owner": detected_owner,
+                            "repo": detected_repo,
+                            "full_name": f"{detected_owner}/{detected_repo}"
+                        }
             except Exception as e:
                 logger.warning(f"GitHub search failed: {e}")
     
-    # 진단/분석 명확한 요청
-    diagnosis_keywords = [
-        "분석해줘", "분석해주세요", "분석 해줘",
-        "진단해줘", "진단해주세요", "진단 해줘",
-        "건강도", "건강 점수", "health score", "health",
-        "전체 진단", "전체 분석", "full diagnosis",
-        "저장소 분석", "저장소 진단", "repo 분석",
-        "이 저장소", "이 레포", "this repo"
-    ]
+    # 2-3. last_mentioned_repo에서 복원
+    if not detected_repo:
+        last_mentioned = accumulated_context.get("last_mentioned_repo", {})
+        if last_mentioned.get("owner") and last_mentioned.get("repo"):
+            detected_owner = last_mentioned["owner"]
+            detected_repo = last_mentioned["repo"]
+            logger.info(f"Using last mentioned repo: {detected_owner}/{detected_repo}")
     
-    is_diagnosis_request = any(kw in msg_lower for kw in diagnosis_keywords)
-    
-    # "분석", "진단" 단독 사용도 허용
-    if not is_diagnosis_request:
-        simple_diag_keywords = ["분석", "진단", "diagnose", "analyze"]
-        for kw in simple_diag_keywords:
-            if kw in msg_lower and len(user_message) < 50:  # 짧은 메시지
-                is_diagnosis_request = True
-                break
-    
-    if is_diagnosis_request:
-        # 검색 결과가 여러 개이고 명확하지 않으면 clarification 요청
-        if search_results and len(search_results) > 1 and not detected_owner:
-            # 상위 3개 결과 표시
-            options = []
-            for i, r in enumerate(search_results[:3], 1):
-                stars_str = f"{r['stars']:,}" if r['stars'] >= 1000 else str(r['stars'])
-                options.append(f"{i}. {r['full_name']} (스타: {stars_str})")
-            
-            question = f"다음 중 어떤 저장소를 진단할까요?\n" + "\n".join(options)
-            
-            # 검색 결과를 컨텍스트에 저장
-            new_context = dict(accumulated_context)
-            new_context["pending_search_results"] = search_results[:3]
-            
-            return {
-                "supervisor_intent": {
-                    "task_type": "diagnosis",
-                    "target_agent": "diagnosis",
-                    "needs_clarification": True,
-                    "confidence": 0.7,
-                    "reasoning": "여러 저장소 검색 결과 중 선택 필요"
-                },
-                "needs_clarification": True,
-                "clarification_questions": [question],
-                "target_agent": None,
-                "accumulated_context": new_context
-            }
-        
-        # 감지된 저장소가 있으면 state 업데이트
-        result = {
-            "supervisor_intent": {
-                "task_type": "diagnosis",
-                "target_agent": "diagnosis",
-                "needs_clarification": False,
-                "confidence": 0.95,
-                "reasoning": f"명확한 진단 요청 키워드 감지"
-            },
-            "needs_clarification": False,
-            "clarification_questions": [],
-            "target_agent": "diagnosis"
-        }
-        
-        if detected_owner and detected_repo:
-            result["owner"] = detected_owner
-            result["repo"] = detected_repo
-            logger.info(f"Updating target repo to: {detected_owner}/{detected_repo}")
-        
-        logger.info(f"Direct diagnosis request detected: '{user_message}'")
-        return result
-    
-    # 온보딩 명확한 요청 (경험 수준 포함 시)
-    onboarding_keywords = ["온보딩", "기여", "contribute", "참여", "가이드"]
-    from backend.common.intent_utils import extract_experience_level
-    
-    is_onboarding_request = any(kw in msg_lower for kw in onboarding_keywords)
-    experience_level = extract_experience_level(user_message)
-    
-    if is_onboarding_request and experience_level:
-        logger.info(f"Direct onboarding request with level: '{experience_level}'")
-        new_context = dict(accumulated_context)
-        user_profile = new_context.get("user_profile", {})
-        user_profile["experience_level"] = experience_level
-        new_context["user_profile"] = user_profile
-        
-        return {
-            "supervisor_intent": {
-                "task_type": "onboarding",
-                "target_agent": "onboarding",
-                "needs_clarification": False,
-                "confidence": 0.95,
-                "reasoning": f"온보딩 요청 + 경험 수준 '{experience_level}' 감지"
-            },
-            "needs_clarification": False,
-            "clarification_questions": [],
-            "target_agent": "onboarding",
-            "accumulated_context": new_context
-        }
-    
-    # 보안 명확한 요청
-    security_keywords = ["보안", "취약점", "security", "cve", "vulnerability"]
-    if any(kw in msg_lower for kw in security_keywords):
-        logger.info(f"Direct security request detected: '{user_message}'")
-        return {
-            "supervisor_intent": {
-                "task_type": "security",
-                "target_agent": "security",
-                "needs_clarification": False,
-                "confidence": 0.95,
-                "reasoning": "명확한 보안 요청 키워드 감지"
-            },
-            "needs_clarification": False,
-            "clarification_questions": [],
-            "target_agent": "security"
-        }
-    
-    # === Clarification 응답 처리 (루프 방지) ===
-    # 이전 턴이 clarification 요청이었으면, 현재 메시지는 그에 대한 응답
+    # === 3단계: Clarification 응답 처리 (숫자 선택) ===
+    # 이전 턴에서 clarification 요청했으면 응답 처리
     if conversation_history:
         last_turn = conversation_history[-1] if conversation_history else None
         if last_turn:
             last_response = last_turn.get("agent_response", "")
             last_intent = last_turn.get("resolved_intent", {})
             
-            # 이전에 저장소 선택을 물었던 경우 (pending_search_results 확인)
+            # 저장소 선택 응답 (pending_search_results)
             pending_results = accumulated_context.get("pending_search_results", [])
-            if pending_results and ("어떤 저장소를 진단" in last_response):
-                msg_stripped = user_message.strip()
-                selected_idx = None
-                
-                # 숫자로 선택
-                if msg_stripped == "1":
-                    selected_idx = 0
-                elif msg_stripped == "2":
-                    selected_idx = 1
-                elif msg_stripped == "3":
-                    selected_idx = 2
-                
-                if selected_idx is not None and selected_idx < len(pending_results):
-                    selected = pending_results[selected_idx]
-                    logger.info(f"User selected repo: {selected['full_name']}")
-                    
-                    # pending 결과 제거
-                    new_context = dict(accumulated_context)
-                    if "pending_search_results" in new_context:
-                        del new_context["pending_search_results"]
-                    
-                    return {
-                        "supervisor_intent": {
-                            "task_type": "diagnosis",
-                            "target_agent": "diagnosis",
+            if pending_results and ("어떤 저장소를" in last_response):
+                try:
+                    selection = int(user_message.strip()) - 1
+                    if 0 <= selection < len(pending_results):
+                        selected = pending_results[selection]
+                        logger.info(f"User selected repo: {selected['full_name']}")
+                        
+                        new_context = dict(accumulated_context)
+                        new_context.pop("pending_search_results", None)
+                        new_context["last_mentioned_repo"] = {
+                            "owner": selected["owner"],
+                            "repo": selected["repo"],
+                            "full_name": selected["full_name"]
+                        }
+                        
+                        return {
+                            "supervisor_intent": {
+                                "task_type": "diagnosis",
+                                "target_agent": "diagnosis",
+                                "needs_clarification": False,
+                                "confidence": 0.95,
+                                "reasoning": f"사용자가 {selected['full_name']} 선택"
+                            },
                             "needs_clarification": False,
-                            "confidence": 0.95,
-                            "reasoning": f"사용자가 {selected['full_name']} 선택"
-                        },
-                        "needs_clarification": False,
-                        "clarification_questions": [],
-                        "target_agent": "diagnosis",
-                        "owner": selected["owner"],
-                        "repo": selected["repo"],
-                        "accumulated_context": new_context
-                    }
+                            "clarification_questions": [],
+                            "target_agent": "diagnosis",
+                            "owner": selected["owner"],
+                            "repo": selected["repo"],
+                            "accumulated_context": new_context
+                        }
+                except (ValueError, IndexError):
+                    pass
             
-            # 이전에 경험 수준을 물었던 경우
+            # 경험 수준 응답
             if "경험 수준을 알려주세요" in last_response or last_intent.get("needs_clarification"):
                 experience_level = extract_experience_level(user_message)
                 
-                # 숫자 응답도 처리 (1, 2, 3)
+                # 숫자 응답 처리
                 if not experience_level:
                     msg_stripped = user_message.strip()
-                    if msg_stripped == "1" or "1" in msg_stripped:
+                    if msg_stripped == "1":
                         experience_level = "beginner"
-                    elif msg_stripped == "2" or "2" in msg_stripped:
+                    elif msg_stripped == "2":
                         experience_level = "intermediate"
-                    elif msg_stripped == "3" or "3" in msg_stripped:
+                    elif msg_stripped == "3":
                         experience_level = "advanced"
                 
                 if experience_level:
-                    logger.info(f"Clarification response detected: experience_level={experience_level}")
-                    
-                    # accumulated_context에 사용자 프로필 저장
+                    logger.info(f"Experience level from clarification: {experience_level}")
                     new_context = dict(accumulated_context)
                     user_profile = new_context.get("user_profile", {})
                     user_profile["experience_level"] = experience_level
                     new_context["user_profile"] = user_profile
                     
-                    # 온보딩으로 바로 라우팅 (재파싱 없이)
                     return {
                         "supervisor_intent": {
                             "task_type": "onboarding",
@@ -395,75 +324,89 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
                         "accumulated_context": new_context
                     }
     
-    # 대명사 해결 시도
-    resolved_message = user_message
-    pronoun_detected = False
-    
-    try:
-        # 타입 변환: Dict -> ConversationTurn, AccumulatedContext
-        from backend.common.pronoun_resolver import resolve_pronoun
-        from backend.common.session import ConversationTurn, AccumulatedContext
-        from typing import List, cast
+    # === 4단계: 검색 결과가 여러 개면 clarification 요청 ===
+    if search_results and len(search_results) > 1 and not detected_owner:
+        options = []
+        for i, r in enumerate(search_results[:3], 1):
+            stars_str = f"{r['stars']:,}" if r['stars'] >= 1000 else str(r['stars'])
+            options.append(f"{i}. {r['full_name']} (스타: {stars_str})")
         
-        # conversation_history가 이미 올바른 형식인지 확인
-        if conversation_history and isinstance(conversation_history, list):
-            # Dict를 ConversationTurn으로 변환
-            typed_history: List[ConversationTurn] = []
-            for turn in conversation_history:
-                if isinstance(turn, dict):
-                    typed_history.append(cast(ConversationTurn, turn))  # TypedDict이므로 dict 그대로 사용
-            
-            # accumulated_context도 마찬가지
-            typed_context = cast(AccumulatedContext, accumulated_context if isinstance(accumulated_context, dict) else {})
-            
-            pronoun_result = resolve_pronoun(
-                user_message=user_message,
-                conversation_history=typed_history,
-                accumulated_context=typed_context
-            )
-            
-            if pronoun_result.get("resolved"):
-                pronoun_detected = True
-                logger.info(f"Pronoun resolved: {pronoun_result.get('pattern')} -> {pronoun_result.get('refers_to')}")
-                
-                # 대명사가 해결되면 세션 컨텍스트에 힌트 추가
-                # 메시지 자체를 변경하지 않고, 컨텍스트에 정보를 추가
-                if pronoun_result.get("refers_to"):
-                    accumulated_context = dict(accumulated_context)
-                    accumulated_context["last_pronoun_reference"] = pronoun_result
-    except Exception as e:
-        logger.warning(f"Pronoun resolution failed: {e}")
+        question = f"다음 중 어떤 저장소를 분석할까요?\n" + "\n".join(options)
+        
+        new_context = dict(accumulated_context)
+        new_context["pending_search_results"] = search_results[:3]
+        
+        return {
+            "supervisor_intent": {
+                "task_type": "clarification",
+                "target_agent": None,
+                "needs_clarification": True,
+                "confidence": 0.7,
+                "reasoning": "여러 저장소 검색 결과 중 선택 필요"
+            },
+            "needs_clarification": True,
+            "clarification_questions": [question],
+            "target_agent": None,
+            "accumulated_context": new_context
+        }
     
-    # 세션 컨텍스트 구성
+    # === 5단계: 세션 컨텍스트 구성 ===
     session_context = {
         "owner": state["owner"],
         "repo": state["repo"],
         "ref": state.get("ref", "main"),
         "conversation_history": conversation_history,
         "accumulated_context": accumulated_context,
-        "pronoun_detected": pronoun_detected
+        "pronoun_detected": pronoun_detected,
+        "detected_repo": f"{detected_owner}/{detected_repo}" if detected_owner else None
     }
     
-    # Intent 파싱
+    # === 6단계: LLM 의도 파싱 ===
     parser = SupervisorIntentParserV2()
     intent = await parser.parse(
         user_message=resolved_message,
         session_context=session_context
     )
     
-    # Clarification 필요 여부
     needs_clarification = intent.needs_clarification
     clarification_questions = intent.clarification_questions
     
     if needs_clarification:
         logger.info(f"Clarification needed: {clarification_questions}")
     
-    return {
+    result = {
         "supervisor_intent": intent.dict(),
         "needs_clarification": needs_clarification,
         "clarification_questions": clarification_questions,
-        "target_agent": intent.target_agent
+        "target_agent": intent.target_agent,
+        "accumulated_context": accumulated_context
     }
+    
+    # LLM이 detected_repo를 반환했으면 세션 업데이트
+    if intent.detected_repo:
+        try:
+            parts = intent.detected_repo.split("/")
+            if len(parts) == 2:
+                result["owner"] = parts[0]
+                result["repo"] = parts[1]
+                logger.info(f"LLM detected repo: {intent.detected_repo}")
+                
+                accumulated_context["last_mentioned_repo"] = {
+                    "owner": parts[0],
+                    "repo": parts[1],
+                    "full_name": intent.detected_repo
+                }
+                result["accumulated_context"] = accumulated_context
+        except Exception as e:
+            logger.warning(f"Failed to parse detected_repo: {e}")
+    
+    # 규칙 기반 detected_owner/detected_repo 우선
+    if detected_owner and detected_repo:
+        result["owner"] = detected_owner
+        result["repo"] = detected_repo
+        logger.info(f"Using pre-detected repo: {detected_owner}/{detected_repo}")
+    
+    return result
 
 
 def check_clarification_node(state: SupervisorState) -> Literal["clarification_response", "route_to_agent"]:
