@@ -1244,6 +1244,8 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
     agent_result = state.get("agent_result")
     target_agent = state.get("target_agent")
     
+    result_updates = {}  # 최종 state에 반환할 값들
+    
     if agent_result and isinstance(agent_result, dict):
         result_type = agent_result.get("type")
         
@@ -1252,6 +1254,7 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
             data_generated.append("diagnosis_result")
             session.update_context("diagnosis_result", agent_result)
             session.update_context("last_topic", "diagnosis")
+            result_updates["diagnosis_result"] = agent_result  # state에도 반환
             logger.info("Stored diagnosis_result in session context")
         
         # Onboarding 결과 저장
@@ -1259,6 +1262,7 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
             data_generated.append("onboarding_plan")
             session.update_context("onboarding_plan", agent_result)
             session.update_context("last_topic", "onboarding")
+            result_updates["onboarding_result"] = agent_result
             logger.info("Stored onboarding_plan in session context")
         
         # Security 결과 저장
@@ -1266,6 +1270,7 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
             data_generated.append("security_scan")
             session.update_context("security_scan", agent_result)
             session.update_context("last_topic", "security")
+            result_updates["security_result"] = agent_result
             logger.info("Stored security_scan in session context")
         
         # Contributor 결과 저장
@@ -1273,6 +1278,7 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
             data_generated.append("contributor_guide")
             session.update_context("contributor_guide", agent_result)
             session.update_context("last_topic", "contributor")
+            result_updates["contributor_result"] = agent_result
             logger.info("Stored contributor_guide in session context")
         
         # Chat 결과도 저장 (참조 가능하도록)
@@ -1293,7 +1299,7 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
     session_store.update_session(session)
     logger.info(f"Session updated: {session_id}")
     
-    return {}
+    return result_updates
 
 
 # === 라우팅 함수 ===

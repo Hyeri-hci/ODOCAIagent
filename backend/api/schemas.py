@@ -91,6 +91,9 @@ class DiagnosisSummaryDTO(BaseModel):
     @classmethod
     def validate_onboarding_level(cls, v: str) -> str:
         """onboarding_level 값 검증."""
+        # normal -> medium 매핑
+        if v == "normal":
+            v = "medium"
         allowed = {"hard", "medium", "easy"}
         if v not in allowed:
             raise ValueError(f"onboarding_level must be one of {allowed}, got {v}")
