@@ -13,7 +13,7 @@ from backend.core.docs_core import analyze_docs
 from backend.core.activity_core import analyze_activity_optimized
 from backend.core.structure_core import analyze_structure
 from backend.core.dependencies_core import parse_dependencies
-from backend.core.scoring_core import compute_scores
+from backend.core.scoring_core import compute_scores, compute_health_level, compute_onboarding_level
 from backend.llm.factory import fetch_llm_client
 from backend.llm.base import ChatRequest, ChatMessage
 
@@ -81,6 +81,8 @@ async def execute_full_path(
             # 점수 - DiagnosisCoreResult 객체에서 속성 추출
             "health_score": getattr(scoring_result, 'health_score', 0),
             "onboarding_score": getattr(scoring_result, 'onboarding_score', 0),
+            "health_level": compute_health_level(getattr(scoring_result, 'health_score', 0)),
+            "onboarding_level": compute_onboarding_level(getattr(scoring_result, 'onboarding_score', 0)),
             "docs_score": getattr(scoring_result, 'documentation_quality', 0),
             "activity_score": getattr(scoring_result, 'activity_maintainability', 0),
             "structure_score": structure_result.structure_score if structure_result else 0,
