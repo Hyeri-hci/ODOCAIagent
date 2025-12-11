@@ -4,6 +4,7 @@ Fast/Full/Reinterpret 3가지 경로를 통합한 LangGraph
 """
 from typing import Dict, Any, Optional, TypedDict, Literal
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 import logging
 
 from backend.agents.diagnosis.intent_parser import DiagnosisIntentParser, DiagnosisIntentV2
@@ -225,7 +226,7 @@ def build_diagnosis_graph():
     graph.add_edge("full_path_node", END)
     graph.add_edge("reinterpret_path_node", END)
     
-    return graph.compile()
+    return graph.compile(checkpointer=MemorySaver())
 
 _diagnosis_graph = None
 
@@ -264,3 +265,70 @@ async def run_diagnosis(
     final_state = await graph.ainvoke(initial_state)
     
     return final_state.get("result", {})
+
+
+async def run_diagnosis_stream(
+    owner: str,
+    repo: str,
+    ref: str = "main",
+    user_message: Optional[str] = None,
+    supervisor_intent: Optional[Dict[str, Any]] = None
+):
+    """
+    Diagnosis 그래프 스트리밍 실행 - 각 노드 완료 시 진행 상황 전달.
+    
+    Yields:
+        Dict with keys: step, node, progress, message, data
+    """
+    graph = get_diagnosis_graph()
+    initial_state: DiagnosisGraphState = {
+        "owner": owner,
+        "repo": repo,
+        "ref": ref,
+        "user_message": user_message or f"{owner}/{repo} 저장소를 진단해주세요",
+        "supervisor_intent": supervisor_intent,
+        "use_cache": True,
+        "execution_time_ms": 0,
+        "diagnosis_intent": None,
+        "cache_key": None,
+        "cached_result": None,
+        "execution_path": None,
+        "result": None,
+        "error": None
+    }
+    
+    node_progress = {
+        "parse_intent": {"progress": 20, "message": "의도 분석 중"},
+        "check_cache": {"progress": 40, "message": "캐시 확인 중"},
+        "fast_path_node": {"progress": 80, "message": "빠른 분석 실행 중"},
+        "full_path_node": {"progress": 80, "message": "전체 분석 실행 중"},
+        "reinterpret_path_node": {"progress": 80, "message": "재해석 분석 실행 중"},
+    }
+    
+    step = 0
+    final_result = None
+    
+    async for event in graph.astream(initial_state):
+        step += 1
+        for node_name, node_output in event.items():
+            info = node_progress.get(node_name, {"progress": 50, "message": node_name})
+            
+            yield {
+                "step": step,
+                "node": node_name,
+                "progress": info["progress"],
+                "message": info["message"],
+                "data": node_output
+            }
+            
+            if node_output.get("result"):
+                final_result = node_output.get("result")
+    
+    yield {
+        "step": step + 1,
+        "node": "complete",
+        "progress": 100,
+        "message": "진단 완료",
+        "data": {"result": final_result}
+    }
+

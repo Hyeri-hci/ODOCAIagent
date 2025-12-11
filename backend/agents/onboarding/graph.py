@@ -15,6 +15,7 @@ parse_intent → analyze_diagnosis → assess_risks → fetch_issues → generat
 """
 from typing import Dict, Any, Optional, Literal, List, Callable, TypeVar
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 import logging
 from functools import wraps
 
@@ -604,7 +605,7 @@ def build_onboarding_graph():
     graph.add_edge("summarize", END)
     graph.add_edge("error_handler", END)
     
-    return graph.compile()
+    return graph.compile(checkpointer=MemorySaver())
 
 
 # === 싱글톤 그래프 ===
@@ -687,3 +688,93 @@ async def run_onboarding_graph(
             error=str(e),
             summary=f"온보딩 그래프 실행 중 오류가 발생했습니다: {e}"
         ).dict()
+
+
+async def run_onboarding_stream(
+    owner: str,
+    repo: str,
+    experience_level: str = "beginner",
+    diagnosis_summary: str = "",
+    user_context: Optional[Dict[str, Any]] = None,
+    user_message: Optional[str] = None,
+    ref: str = "main",
+    include_recommendations: bool = True
+):
+    """
+    Onboarding Graph 스트리밍 실행 - 각 노드 완료 시 진행 상황 전달.
+    
+    Yields:
+        Dict with keys: step, node, progress, message, data
+    """
+    graph = get_onboarding_graph()
+    
+    initial_state: OnboardingState = {
+        "owner": owner,
+        "repo": repo,
+        "ref": ref,
+        "experience_level": experience_level,
+        "diagnosis_summary": diagnosis_summary,
+        "user_context": user_context or {},
+        "user_message": user_message,
+        "candidate_issues": None,
+        "plan": None,
+        "summary": None,
+        "diagnosis_analysis": None,
+        "onboarding_risks": None,
+        "plan_config": None,
+        "agent_decision": None,
+        "similar_projects": None,
+        "include_recommendations": include_recommendations,
+        "result": None,
+        "error": None,
+        "execution_path": None
+    }
+    
+    node_progress = {
+        "parse_intent": {"progress": 10, "message": "의도 분석 중"},
+        "analyze_diagnosis": {"progress": 25, "message": "진단 결과 분석 중"},
+        "assess_risks": {"progress": 40, "message": "위험 평가 중"},
+        "fetch_issues": {"progress": 55, "message": "이슈 수집 중"},
+        "generate_plan": {"progress": 70, "message": "플랜 생성 중"},
+        "fetch_recommendations": {"progress": 85, "message": "추천 프로젝트 검색 중"},
+        "summarize": {"progress": 95, "message": "요약 생성 중"},
+        "error_handler": {"progress": 100, "message": "에러 처리 중"},
+    }
+    
+    step = 0
+    final_result = None
+    
+    try:
+        async for event in graph.astream(initial_state):
+            step += 1
+            for node_name, node_output in event.items():
+                info = node_progress.get(node_name, {"progress": 50, "message": node_name})
+                
+                yield {
+                    "step": step,
+                    "node": node_name,
+                    "progress": info["progress"],
+                    "message": info["message"],
+                    "data": node_output
+                }
+                
+                if node_output.get("result"):
+                    final_result = node_output.get("result")
+        
+        yield {
+            "step": step + 1,
+            "node": "complete",
+            "progress": 100,
+            "message": "온보딩 플랜 완료",
+            "data": {"result": final_result}
+        }
+    except Exception as e:
+        logger.error(f"[Onboarding Stream] Error: {e}")
+        yield {
+            "step": step + 1,
+            "node": "error",
+            "progress": 100,
+            "message": f"오류 발생: {e}",
+            "data": {"error": str(e)}
+        }
+

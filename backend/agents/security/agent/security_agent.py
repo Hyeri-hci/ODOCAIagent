@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, Literal
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 from .state import (
     SecurityAnalysisState,
     create_initial_state,
@@ -30,6 +31,8 @@ class SecurityAgent:
             # 최대 반복 횟수-ReAct 패턴에서 사용될 최대 반복 횟수
         enable_reflection: bool = True,
             # 반성을 할 것인지 아닌지 활성화
+        enable_hitl: bool = False,
+            # Human-in-the-Loop: True면 reflect 노드 전에 중단
     ):
         # LLM 선언을 위한 파라미터
         self.LLM_BASE_URL = llm_base_url
@@ -49,6 +52,7 @@ class SecurityAgent:
         self.execution_mode = execution_mode
         self.max_iterations = max_iterations
         self.enable_reflection = enable_reflection
+        self.enable_hitl = enable_hitl
 
         # 컴포넌트 초기화
         self.intent_parser = IntentParser(
@@ -125,7 +129,10 @@ class SecurityAgent:
 
         workflow.add_edge("finalize", END)
 
-        return workflow.compile()
+        return workflow.compile(
+            checkpointer=MemorySaver(),
+            interrupt_before=["reflect"] if self.enable_hitl else None
+        )
 
     async def _parse_intent_node(self, state: SecurityAnalysisState) -> Dict[str, Any]:
         """의도 파싱 노드"""
@@ -410,6 +417,72 @@ class SecurityAgent:
                     "dependencies": initial_state.get("dependencies"),
                     "vulnerabilities": initial_state.get("vulnerabilities")
                 }
+            }
+
+    async def analyze_stream(
+        self,
+        user_request: str,
+        owner: Optional[str] = None,
+        repository: Optional[str] = None,
+        github_token: Optional[str] = None
+    ):
+        """
+        보안 분석 스트리밍 실행 - 각 노드 완료 시 진행 상황 전달.
+        
+        Yields:
+            Dict with keys: step, node, progress, message, data
+        """
+        node_progress = {
+            "parse_intent": {"progress": 15, "message": "의도 분석 중"},
+            "create_plan": {"progress": 30, "message": "계획 수립 중"},
+            "execute_react": {"progress": 60, "message": "ReAct 실행 중"},
+            "reflect": {"progress": 80, "message": "결과 반성 중"},
+            "finalize": {"progress": 95, "message": "최종화 중"},
+        }
+        
+        initial_state = create_initial_state(
+            user_request=user_request,
+            owner=owner,
+            repository=repository,
+            github_token=github_token,
+            execution_mode=self.execution_mode,
+            max_iterations=self.max_iterations
+        )
+        
+        step = 0
+        final_result = None
+        
+        try:
+            async for event in self.graph.astream(initial_state):
+                step += 1
+                for node_name, node_output in event.items():
+                    info = node_progress.get(node_name, {"progress": 50, "message": node_name})
+                    
+                    yield {
+                        "step": step,
+                        "node": node_name,
+                        "progress": info["progress"],
+                        "message": info["message"],
+                        "data": node_output
+                    }
+                    
+                    if node_output.get("final_result"):
+                        final_result = node_output.get("final_result")
+            
+            yield {
+                "step": step + 1,
+                "node": "complete",
+                "progress": 100,
+                "message": "보안 분석 완료",
+                "data": {"result": final_result}
+            }
+        except Exception as e:
+            yield {
+                "step": step + 1,
+                "node": "error",
+                "progress": 100,
+                "message": f"오류 발생: {e}",
+                "data": {"error": str(e)}
             }
 
     async def analyze_simple(

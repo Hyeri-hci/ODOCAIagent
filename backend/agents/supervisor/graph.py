@@ -4,6 +4,7 @@ Supervisor Graph - 세션 기반 메타 에이전트
 
 from typing import Dict, Any, Optional, Literal
 from langgraph.graph import StateGraph, END
+from langgraph.checkpoint.memory import MemorySaver
 import logging
 
 from backend.agents.supervisor.models import SupervisorState
@@ -1374,8 +1375,14 @@ async def run_additional_agents_node(state: SupervisorState) -> Dict[str, Any]:
 
 # === 그래프 빌드 ===
 
-def build_supervisor_graph():
-    """Supervisor Graph 빌드"""
+def build_supervisor_graph(enable_hitl: bool = False):
+    """
+    Supervisor Graph 빌드
+    
+    Args:
+        enable_hitl: Human-in-the-Loop 패턴 활성화.
+                     True면 clarification_response 노드 전에 중단.
+    """
     
     graph = StateGraph(SupervisorState)
     
@@ -1458,7 +1465,10 @@ def build_supervisor_graph():
     # update_session → END
     graph.add_edge("update_session", END)
     
-    return graph.compile()
+    return graph.compile(
+        checkpointer=MemorySaver(),
+        interrupt_before=["clarification_response"] if enable_hitl else None
+    )
 
 
 # === 싱글톤 그래프 ===
