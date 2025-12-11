@@ -4,6 +4,9 @@ from unittest.mock import patch, MagicMock
 from backend.api.agent_service import run_agent_task
 from backend.agents.supervisor.models import OnboardingUserContext
 
+# 통합 테스트 마커 (실제 그래프 실행)
+pytestmark = pytest.mark.slow
+
 
 class TestOnboardingUserContext:
     """OnboardingUserContext 모델 테스트."""

@@ -14,7 +14,8 @@ from backend.agents.supervisor.nodes.meta_nodes import (
 
 @pytest.fixture
 def mock_predict():
-    with patch("backend.agents.supervisor.nodes.meta_nodes._invoke_chain") as mock:
+    # _invoke_chain이 intent_parsing 모듈로 이동됨
+    with patch("backend.agents.supervisor.nodes.intent_parsing._invoke_chain") as mock:
         yield mock
 
 

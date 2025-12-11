@@ -50,7 +50,7 @@ def test_diagnose_repository_api():
     
     assert response_fail["ok"] is False
     assert "error" in response_fail
-    assert "repo_id" in response_fail
-    assert response_fail["repo_id"] == f"{bad_owner}/{bad_repo}@main"
+    assert "task_type" in response_fail
+    assert response_fail["task_type"] == "diagnose_repo"
     
     print(f"Failure Response: {response_fail}")

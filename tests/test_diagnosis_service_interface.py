@@ -1,45 +1,36 @@
 from backend.agents.diagnosis.models import DiagnosisInput
 from backend.agents.diagnosis.service import run_diagnosis
-from unittest.mock import patch, MagicMock
-from backend.core.models import DiagnosisCoreResult
+from unittest.mock import patch, AsyncMock
+import pytest
 
-@patch("backend.agents.diagnosis.service.fetch_repo_snapshot")
-@patch("backend.agents.diagnosis.service.analyze_docs")
-@patch("backend.agents.diagnosis.service.analyze_activity")
-@patch("backend.agents.diagnosis.service.analyze_structure")
-@patch("backend.agents.diagnosis.service.parse_dependencies")
-@patch("backend.agents.diagnosis.service.compute_scores")
-def test_run_diagnosis_basic(mock_compute, mock_deps, mock_structure, mock_activity, mock_docs, mock_fetch):
-    # Mock return values
-    mock_fetch.return_value = MagicMock()
-    mock_docs.return_value = MagicMock(missing_sections=[], marketing_ratio=0.5)
-    mock_docs.return_value.to_dict.return_value = {}
-    mock_activity.return_value = MagicMock()
-    mock_activity.return_value.to_dict.return_value = {}
-    mock_structure.return_value = MagicMock()
-    mock_structure.return_value.to_dict.return_value = {}
-    mock_deps.return_value = MagicMock()
+@pytest.mark.asyncio
+@patch("backend.agents.diagnosis.service.run_diagnosis_graph")
+async def test_run_diagnosis_basic(mock_run_graph):
+    """Test run_diagnosis wraps run_diagnosis_graph correctly (async)"""
     
-    mock_diagnosis_result = DiagnosisCoreResult(
-        repo_id="Hyeri-hci/ODOCAIagent",
-        documentation_quality=80,
-        activity_maintainability=70,
-        health_score=75,
-        health_level="good",
-        onboarding_score=80,
-        onboarding_level="easy",
-        is_healthy=True,
-        dependency_complexity_score=20,
-        dependency_flags=[],
-        docs_issues=[],
-        activity_issues=[]
-    )
-    mock_compute.return_value = mock_diagnosis_result
-
-    # Run
+    # Mock run_diagnosis_graph return value
+    mock_result = {
+        "repo_id": "Hyeri-hci/ODOCAIagent",
+        "health_score": 75.0,
+        "health_level": "Good",
+        "onboarding_score": 80.0,
+        "onboarding_level": "Easy",
+        "docs": {"total_score": 80},
+        "activity": {"total_score": 70},
+        "structure": {"has_tests": True},
+        "dependency_complexity_score": 20,
+        "dependency_flags": [],
+        "stars": 100,
+        "forks": 50,
+        "summary_for_user": "Test summary",
+        "raw_metrics": {}
+    }
+    mock_run_graph.return_value = mock_result
+    
+    # Run (async 함수)
     input_ = DiagnosisInput(owner="Hyeri-hci", repo="ODOCAIagent", use_llm_summary=False)
-    output = run_diagnosis(input_)
-
+    output = await run_diagnosis(input_)
+    
     # Verify
     assert output.repo_id == "Hyeri-hci/ODOCAIagent"
     assert isinstance(output.health_score, float)
@@ -48,3 +39,6 @@ def test_run_diagnosis_basic(mock_compute, mock_deps, mock_structure, mock_activ
     assert isinstance(output.activity, dict)
     assert isinstance(output.structure, dict)
     assert isinstance(output.summary_for_user, str)
+    
+    # Verify run_diagnosis_graph was called
+    mock_run_graph.assert_called_once()
