@@ -118,3 +118,5 @@ docs/agents
 
 tests/performance/
 
+run_performance_tests.py
+pytest.ini
