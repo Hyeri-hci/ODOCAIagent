@@ -2,7 +2,6 @@
 Diagnosis Agent - Fast Path
 빠른 조회 실행 (README, Activity, Dependencies 등)
 """
-
 from typing import Dict, Any, Optional, Literal
 from backend.common import github_client
 from backend.common.cache_manager import get_cache_manager
@@ -18,26 +17,6 @@ async def execute_fast_path(
     target: Literal["readme", "activity", "dependencies", "structure"],
     cached_result: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """
-    빠른 조회 실행
-    
-    Args:
-        owner: 저장소 소유자
-        repo: 저장소 이름
-        ref: 브랜치/태그
-        target: 조회 대상
-        cached_result: 캐시된 진단 결과 (있으면 우선 사용)
-    
-    Returns:
-        {
-            "type": "quick_query",
-            "target": target,
-            "data": {...},
-            "from_cache": True/False,
-            "execution_time_ms": 123
-        }
-    """
-    
     import time
     start_time = time.time()
     
@@ -156,7 +135,6 @@ async def _fetch_activity(owner: str, repo: str) -> Dict[str, Any]:
 async def _fetch_dependencies(owner: str, repo: str) -> Dict[str, Any]:
     """의존성 정보 가져오기"""
     try:
-        # fetch_repo_contents로 루트 디렉토리 확인
         contents = github_client.fetch_repo_contents(owner, repo, "")
         
         dep_file_names = [

@@ -2,12 +2,16 @@
 Diagnosis Intent Parser
 Diagnosis Agent 전용 - Fast/Full/Reinterpret 경로 결정
 """
-
 from typing import Dict, Any, Optional, List, Literal
 from pydantic import BaseModel, Field
-import json
 import logging
-import asyncio
+import json
+
+from backend.common.intent_utils import (
+    IntentParserBase,
+    detect_force_refresh,
+    detect_detail_level
+)
 
 logger = logging.getLogger(__name__)
 
@@ -53,12 +57,11 @@ class DiagnosisIntentV2(BaseModel):
     reasoning: str = ""
 
 
-class DiagnosisIntentParser:
+class DiagnosisIntentParser(IntentParserBase):
     """Diagnosis Agent 전용 의도 파싱기"""
     
     def __init__(self):
-        from backend.llm.factory import fetch_llm_client
-        self.llm = fetch_llm_client()
+        super().__init__()
         logger.info("DiagnosisIntentParser initialized")
     
     async def parse(
@@ -108,12 +111,14 @@ class DiagnosisIntentParser:
 === 경로 결정 기준 ===
 
 1. **Fast Path** (빠른 조회):
-   - "README만", "최근 커밋만", "의존성만" 등 특정 정보 요청
+   - "README만", "최근 커밋만", "의존성만" 등 **특정 정보만** 명시적으로 요청
    - 전체 분석 불필요
    - quick_query_target 설정
+   - ⚠️ 주의: "활발한지", "건강한지", "기여할만한지" 등 **평가/판단 질문은 Fast가 아님**
 
 2. **Full Path** (전체 진단):
    - "분석해줘", "진단해줘", "건강도 체크"
+   - "기여하고 싶은데", "사용해도 될까", "활발하게 유지보수되나요?" 등 **평가가 필요한 질문**
    - 캐시가 없거나 force_refresh 요청
    - analysis_depth:
      * quick: 빠른 개요 (1-2분)
@@ -145,8 +150,19 @@ class DiagnosisIntentParser:
 입력: "facebook/react README 보여줘"
 → {{"execution_path": "fast", "quick_query_target": "readme"}}
 
+입력: "최근 커밋만 확인하고 싶어"
+→ {{"execution_path": "fast", "quick_query_target": "activity"}}
+
 입력: "저장소 분석해줘"
 → {{"execution_path": "full", "analysis_depth": "standard"}}
+
+입력: "이 프로젝트에 기여하고 싶은데, 활발하게 유지보수되고 있나요?"
+→ {{"execution_path": "full", "analysis_depth": "standard"}}
+(이유: "기여하고 싶다"는 평가/판단이 필요한 질문이므로 Full Path)
+
+입력: "이 라이브러리 프로덕션에 써도 될까요?"
+→ {{"execution_path": "full", "analysis_depth": "standard"}}
+(이유: 프로덕션 사용 가능 여부는 전체 분석이 필요)
 
 입력: "초보자가 이해하기 쉽게 설명해줘" (캐시 있음)
 → {{"execution_path": "reinterpret", "reinterpret_perspective": "beginner"}}
@@ -156,16 +172,11 @@ class DiagnosisIntentParser:
 """
 
         try:
-            from backend.llm.base import ChatRequest, ChatMessage
+            intent_data = await self._call_llm(prompt)
             
-            request = ChatRequest(
-                messages=[ChatMessage(role="user", content=prompt)]
-            )
-            
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(None, self.llm.chat, request)
-            intent_data = json.loads(response.content)
-            intent = DiagnosisIntentV2(**intent_data)
+            # None 값 필터링 - Pydantic이 기본값을 사용하도록
+            filtered_data = {k: v for k, v in intent_data.items() if v is not None}
+            intent = DiagnosisIntentV2(**filtered_data)
             
             logger.info(
                 f"Diagnosis intent: path={intent.execution_path}, "
@@ -231,8 +242,8 @@ class DiagnosisIntentParser:
                 reasoning="상세 설명 요청"
             )
         
-        # force_refresh
-        force_refresh = any(word in user_message for word in ["최신", "다시", "업데이트"])
+        # force_refresh 감지
+        force_refresh = detect_force_refresh(user_message)
         
         # 기본: Full Path
         return DiagnosisIntentV2(

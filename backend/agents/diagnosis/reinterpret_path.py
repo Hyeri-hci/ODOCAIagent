@@ -2,7 +2,6 @@
 Diagnosis Agent - Reinterpret Path
 캐시된 진단 결과를 다양한 관점으로 재해석
 """
-
 from typing import Dict, Any, Optional, Literal
 from backend.llm.factory import fetch_llm_client
 from backend.llm.base import ChatRequest, ChatMessage
@@ -72,27 +71,6 @@ async def execute_reinterpret_path(
     user_question: Optional[str] = None,
     llm = None
 ) -> Dict[str, Any]:
-    """
-    기존 결과 재해석
-    
-    Args:
-        cached_result: 캐시된 진단 결과
-        perspective: 관점
-        detail_level: 상세도
-        user_question: 사용자 원본 질문 (컨텍스트)
-        llm: LLM 인스턴스 (선택사항)
-    
-    Returns:
-        {
-            "type": "reinterpret",
-            "perspective": perspective,
-            "detail_level": detail_level,
-            "original_result": {...},
-            "reinterpreted_answer": "...",
-            "execution_time_ms": 123
-        }
-    """
-    
     import time
     start_time = time.time()
     
@@ -173,8 +151,6 @@ async def execute_reinterpret_path(
 
 
 def _summarize_diagnosis(diagnosis_result: Dict[str, Any]) -> Dict[str, Any]:
-    """진단 결과를 LLM 입력용으로 요약"""
-    
     summary = {
         "repository": f"{diagnosis_result.get('owner', 'unknown')}/{diagnosis_result.get('repo', 'unknown')}",
         "analyzed_at": diagnosis_result.get("analyzed_at", "unknown"),
@@ -232,13 +208,6 @@ def _summarize_diagnosis(diagnosis_result: Dict[str, Any]) -> Dict[str, Any]:
 async def generate_perspective_suggestions(
     diagnosis_result: Dict[str, Any]
 ) -> list:
-    """
-    진단 결과에 따라 추천 관점 제시
-    
-    Returns:
-        ["beginner", "tech_lead", ...]
-    """
-    
     suggestions = []
     
     # 온보딩 점수가 낮으면 contributor 관점 추천
