@@ -56,6 +56,34 @@ class DynamicPlanner:
 4. 복잡도와 소요 시간 추정
 5. 주요 단계 사이에 검증 단계 추가
 
+작업 흐름 추천 (4가지 핵심 시나리오):
+
+1. 리포지토리 전체 의존성 조회 (extract_dependencies):
+   - parse_dependencies 도구 사용
+   - CPE DB 조회 X, NVD API 요청 X
+   - 의존성 목록만 반환
+
+2. 특정 파일 의존성 조회 (extract_file_dependencies):
+   - parse_file_dependencies 도구 사용
+   - 특정 파일만 파싱
+   - CPE DB 조회 X, NVD API 요청 X
+   - 의존성 목록만 반환
+
+3. 리포지토리 전체 취약점 조회 (scan_vulnerabilities):
+   - parse_dependencies 도구로 의존성 추출
+   - search_vulnerabilities 도구로 CPE DB 조회 및 NVD API 요청
+   - 취약점 정보 + 보안점수 반환
+
+4. 특정 파일 취약점 조회 (scan_file_vulnerabilities):
+   - search_file_vulnerabilities 도구 사용
+   - 특정 파일의 의존성 추출 → CPE DB 조회 → NVD API 요청
+   - 취약점 정보 + 보안점수 반환
+
+**중요**:
+- 의존성만 요청 시 절대 CPE DB나 NVD API를 호출하지 않습니다
+- 취약점 요청 시에만 CPE DB와 NVD API를 호출합니다
+- 특정 파일 요청 시 리포지토리 전체를 분석하지 않습니다
+
 다음 JSON 객체를 반환하세요:
 {{
     "steps": [
@@ -228,78 +256,18 @@ Parameters: {parameters}
             }
 
     def _create_default_plan(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
-        """기본 계획 생성 (LLM 실패시 폴백)"""
+        """기본 계획 생성 (LLM 실패시 폴백) - 4가지 시나리오 명확히 구분"""
         intent = state.get("parsed_intent")
         primary_action = intent["primary_action"] if intent else "analyze_all"
+        target_files = intent.get("target_files", []) if intent else []
 
-        if primary_action == "analyze_all":
+        # 1. 리포지토리 전체 의존성만 조회
+        if primary_action == "extract_dependencies":
             steps = [
                 {
                     "step_number": 1,
-                    "action": "fetch_repository_info",
-                    "description": "Fetch repository metadata",
-                    "parameters": {"owner": state.get("owner"), "repo": state.get("repository")},
-                    "validation": "Check if repo exists",
-                    "fallback": "Abort if repo not found"
-                },
-                {
-                    "step_number": 2,
-                    "action": "detect_lock_files",
-                    "description": "Detect dependency lock files",
-                    "parameters": {},
-                    "validation": "Check if lock files found",
-                    "fallback": "Continue without lock files"
-                },
-                {
-                    "step_number": 3,
                     "action": "parse_dependencies",
-                    "description": "Parse all dependencies",
-                    "parameters": {},
-                    "validation": "Check dependency count > 0",
-                    "fallback": "Report no dependencies"
-                },
-                {
-                    "step_number": 4,
-                    "action": "search_vulnerabilities",
-                    "description": "Search for vulnerabilities",
-                    "parameters": {},
-                    "validation": "Check CVE search completed",
-                    "fallback": "Continue without vulnerability data"
-                },
-                {
-                    "step_number": 5,
-                    "action": "calculate_security_score",
-                    "description": "Calculate security score",
-                    "parameters": {},
-                    "validation": "Check score calculated",
-                    "fallback": "Use default score"
-                },
-                {
-                    "step_number": 6,
-                    "action": "generate_security_report",
-                    "description": "Generate final report",
-                    "parameters": {},
-                    "validation": "Check report generated",
-                    "fallback": "Return raw data"
-                }
-            ]
-            complexity = "moderate"
-            duration = 180
-
-        elif primary_action == "extract_dependencies":
-            steps = [
-                {
-                    "step_number": 1,
-                    "action": "detect_lock_files",
-                    "description": "Detect dependency lock files",
-                    "parameters": {},
-                    "validation": "Check if lock files found",
-                    "fallback": "Abort if no lock files"
-                },
-                {
-                    "step_number": 2,
-                    "action": "parse_dependencies",
-                    "description": "Parse dependencies from lock files",
+                    "description": "Parse all dependencies (NO vulnerability scan)",
                     "parameters": {},
                     "validation": "Check dependency count > 0",
                     "fallback": "Report no dependencies"
@@ -307,13 +275,32 @@ Parameters: {parameters}
             ]
             complexity = "simple"
             duration = 30
+            print("[Planner] Plan: Extract dependencies only (NO CPE/NVD queries)")
 
+        # 2. 특정 파일의 의존성만 조회
+        elif primary_action == "extract_file_dependencies":
+            file_path = target_files[0] if target_files else "package.json"
+            steps = [
+                {
+                    "step_number": 1,
+                    "action": "parse_file_dependencies",
+                    "description": f"Parse dependencies from {file_path} (NO vulnerability scan)",
+                    "parameters": {"file_path": file_path},
+                    "validation": "Check dependencies parsed",
+                    "fallback": "Report error"
+                }
+            ]
+            complexity = "simple"
+            duration = 15
+            print(f"[Planner] Plan: Extract file dependencies for {file_path} (NO CPE/NVD queries)")
+
+        # 3. 리포지토리 전체 의존성 + 취약점 조회
         elif primary_action == "scan_vulnerabilities":
             steps = [
                 {
                     "step_number": 1,
                     "action": "parse_dependencies",
-                    "description": "Parse dependencies first",
+                    "description": "Parse all dependencies first",
                     "parameters": {},
                     "validation": "Check dependencies found",
                     "fallback": "Cannot scan without dependencies"
@@ -321,14 +308,64 @@ Parameters: {parameters}
                 {
                     "step_number": 2,
                     "action": "search_vulnerabilities",
-                    "description": "Search for CVE vulnerabilities",
+                    "description": "Search vulnerabilities (CPE DB + NVD API)",
                     "parameters": {},
-                    "validation": "Check CVE search completed",
+                    "validation": "Check vulnerability search completed",
                     "fallback": "Report no vulnerabilities"
                 }
             ]
-            complexity = "simple"
+            complexity = "moderate"
+            duration = 120
+            print("[Planner] Plan: Parse dependencies + Search vulnerabilities (CPE DB + NVD API)")
+
+        # 4. 특정 파일의 의존성 + 취약점 조회
+        elif primary_action == "scan_file_vulnerabilities":
+            file_path = target_files[0] if target_files else "package.json"
+            steps = [
+                {
+                    "step_number": 1,
+                    "action": "search_file_vulnerabilities",
+                    "description": f"Scan {file_path} for vulnerabilities (CPE DB + NVD API)",
+                    "parameters": {"file_path": file_path},
+                    "validation": "Check scan completed",
+                    "fallback": "Report error"
+                }
+            ]
+            complexity = "moderate"
             duration = 60
+            print(f"[Planner] Plan: Scan file vulnerabilities for {file_path} (CPE DB + NVD API)")
+
+        # 5. 전체 보안 분석 (의존성 + 취약점 + 보안점수 + 리포트)
+        elif primary_action == "analyze_all":
+            steps = [
+                {
+                    "step_number": 1,
+                    "action": "parse_dependencies",
+                    "description": "Parse all dependencies",
+                    "parameters": {},
+                    "validation": "Check dependency count > 0",
+                    "fallback": "Report no dependencies"
+                },
+                {
+                    "step_number": 2,
+                    "action": "search_vulnerabilities",
+                    "description": "Search vulnerabilities (CPE DB + NVD API)",
+                    "parameters": {},
+                    "validation": "Check vulnerability search completed",
+                    "fallback": "Continue without vulnerability data"
+                },
+                {
+                    "step_number": 3,
+                    "action": "generate_security_report",
+                    "description": "Generate final security report",
+                    "parameters": {},
+                    "validation": "Check report generated",
+                    "fallback": "Return raw data"
+                }
+            ]
+            complexity = "moderate"
+            duration = 180
+            print("[Planner] Plan: Full analysis (dependencies + vulnerabilities + report)")
 
         else:
             # 기타 액션에 대한 기본 계획
@@ -344,6 +381,7 @@ Parameters: {parameters}
             ]
             complexity = "simple"
             duration = 15
+            print(f"[Planner] Plan: Custom action - {primary_action}")
 
         execution_plan: ExecutionPlan = {
             "steps": steps,
@@ -355,7 +393,7 @@ Parameters: {parameters}
         return {
             "execution_plan": execution_plan,
             "plan_valid": True,
-            "plan_feedback": "Using default plan (LLM unavailable)"
+            "plan_feedback": f"Using default plan for {primary_action}"
         }
 
     def _extract_json(self, content: str) -> Dict[str, Any]:

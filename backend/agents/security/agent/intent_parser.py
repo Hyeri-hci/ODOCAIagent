@@ -31,13 +31,18 @@ class IntentParser:
             ("system", """당신은 보안 분석 에이전트를 위한 의도 파서입니다.
 사용자의 자연어 요청을 구조화된 의도로 변환하세요.
 
-사용 가능한 액션:
-- analyze_all: 전체 보안 분석 (의존성 + 취약점 + 라이센스 + 리포트)
-- extract_dependencies: 의존성만 추출
-- scan_vulnerabilities: 취약점 스캔
+**중요**: 사용자가 "의존성"만 요청하면 취약점 조회를 하지 않고, "취약점"을 요청하면 취약점까지 조회합니다.
+
+사용 가능한 액션 (4가지 핵심 타입):
+1. extract_dependencies - 리포지토리 전체의 의존성만 추출 (취약점 조회 X)
+2. extract_file_dependencies - 특정 파일의 의존성만 추출 (취약점 조회 X)
+3. scan_vulnerabilities - 리포지토리 전체의 의존성 + 취약점 조회
+4. scan_file_vulnerabilities - 특정 파일의 의존성 + 취약점 조회
+
+기타 액션:
+- analyze_all: 전체 보안 분석 (의존성 + 취약점 + 보안점수 + 리포트)
 - check_license: 라이센스 준수 확인
 - generate_report: 기존 데이터로 리포트 생성
-- analyze_file: 특정 파일 분석
 - custom: 커스텀 작업
 
 범위:
@@ -50,6 +55,12 @@ class IntentParser:
 - summary: 간단한 요약
 - json: JSON 형식
 - specific_fields: 요청된 필드만
+
+**액션 선택 가이드**:
+- "의존성 추출", "의존성 목록", "dependencies" 키워드만 → extract_dependencies
+- "package.json의 의존성", "특정 파일" → extract_file_dependencies
+- "취약점", "vulnerabilities", "CVE", "보안 이슈" → scan_vulnerabilities
+- "파일의 취약점", "package.json의 보안" → scan_file_vulnerabilities
 
 다음과 같은 JSON 객체를 반환하세요:
 {{

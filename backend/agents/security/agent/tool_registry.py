@@ -795,11 +795,120 @@ Grade: {state.get('security_grade', 'N/A')}"""
     return {"success": True, "summary": summary}
 
 
+# ===== File-Specific Tools =====
+
+@register_tool(
+    "parse_file_dependencies",
+    "Parse dependencies from a specific file (package.json, requirements.txt, etc.)",
+    "dependency"
+)
+async def parse_file_dependencies(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+    """
+    특정 파일의 의존성만 파싱 (CPE/NVD 조회 하지 않음)
+
+    Args:
+        file_path: 파일 경로 (예: "package.json", "requirements.txt")
+    """
+    file_path = kwargs.get("file_path") or state.get("target_files", [None])[0]
+
+    if not file_path:
+        return {
+            "success": False,
+            "error": "File path is required"
+        }
+
+    print(f"[parse_file_dependencies] Parsing {file_path}")
+
+    owner = kwargs.get("owner") or state.get("owner")
+    repo = kwargs.get("repo") or state.get("repository")
+    token = kwargs.get("token") or state.get("github_token")
+
+    # 파일 타입에 따라 적절한 파서 호출
+    if "package.json" in file_path.lower():
+        result = await parse_package_json(state, owner=owner, repo=repo, token=token)
+    elif "requirements.txt" in file_path.lower():
+        result = await parse_requirements_txt(state, owner=owner, repo=repo, token=token)
+    elif "pipfile" in file_path.lower():
+        result = await parse_pipfile(state, owner=owner, repo=repo, token=token)
+    elif "gemfile" in file_path.lower():
+        result = await parse_gemfile(state, owner=owner, repo=repo, token=token)
+    elif "cargo.toml" in file_path.lower():
+        result = await parse_cargo_toml(state, owner=owner, repo=repo, token=token)
+    else:
+        return {
+            "success": False,
+            "error": f"Unsupported file type: {file_path}"
+        }
+
+    if result.get("success"):
+        # State 업데이트 (취약점 조회는 하지 않음)
+        dependencies = result.get("dependencies", {})
+        ecosystem = result.get("ecosystem", "unknown")
+
+        return {
+            "success": True,
+            "dependencies": {ecosystem: dependencies},
+            "total_count": result.get("total_count", 0),
+            "file_path": file_path,
+            "ecosystem": ecosystem,
+            "state_update": {
+                "dependencies": {ecosystem: dependencies},
+                "dependency_count": result.get("total_count", 0),
+                "analyzed_files": [file_path]
+            }
+        }
+    else:
+        return result
+
+
+@register_tool(
+    "search_file_vulnerabilities",
+    "Search vulnerabilities for dependencies in a specific file",
+    "vulnerability"
+)
+async def search_file_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+    """
+    특정 파일의 의존성에 대한 취약점 조회
+
+    1. 파일의 의존성 파싱
+    2. CPE DB 조회
+    3. 취약점이 있는 의존성만 NVD API 요청
+    """
+    file_path = kwargs.get("file_path") or state.get("target_files", [None])[0]
+
+    if not file_path:
+        return {
+            "success": False,
+            "error": "File path is required"
+        }
+
+    print(f"[search_file_vulnerabilities] Analyzing vulnerabilities for {file_path}")
+
+    # 1. 파일의 의존성 먼저 파싱
+    deps_result = await parse_file_dependencies(state, file_path=file_path, **kwargs)
+
+    if not deps_result.get("success"):
+        return deps_result
+
+    # 2. 파싱된 의존성을 state에 업데이트
+    temp_state = {**state, **deps_result.get("state_update", {})}
+
+    # 3. 취약점 조회
+    vuln_result = await search_vulnerabilities(temp_state, **kwargs)
+
+    if vuln_result.get("success"):
+        # 파일 정보 추가
+        vuln_result["file_path"] = file_path
+        vuln_result["analyzed_files"] = [file_path]
+
+    return vuln_result
+
+
 # ===== Composite Tools =====
 
 @register_tool(
     "analyze_dependencies_full",
-    "Complete dependency analysis",
+    "Complete dependency analysis (without vulnerability scanning)",
     "dependency"
 )
 async def analyze_dependencies_full(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
