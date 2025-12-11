@@ -858,3 +858,64 @@ def _format_issues(nodes: List[Dict]) -> List[Dict[str, Any]]:
             "author": (node.get("author") or {}).get("login"),
         })
     return result
+
+
+@cached(ttl=300)
+def search_repositories(
+    query: str,
+    max_results: int = 5,
+) -> List[Dict[str, Any]]:
+    """
+    GitHub Search API를 사용하여 저장소 검색.
+    
+    Args:
+        query: 검색어 (저장소 이름)
+        max_results: 반환할 최대 결과 수
+        
+    Returns:
+        저장소 목록 [{owner, repo, full_name, stars, description, url}, ...]
+        인기순(스타 수)으로 정렬됨
+    """
+    logger.debug("GitHub API: search_repositories query=%s", query)
+    
+    url = f"{GITHUB_API_BASE}/search/repositories"
+    params = {
+        "q": query,
+        "sort": "stars",
+        "order": "desc",
+        "per_page": max_results,
+    }
+    
+    try:
+        resp = requests.get(url, headers=_build_headers(), params=params, timeout=10)
+        
+        if resp.status_code != 200:
+            logger.warning("search_repositories failed: %s", resp.status_code)
+            return []
+        
+        data = resp.json()
+        items = data.get("items", [])
+        
+        results = []
+        for item in items[:max_results]:
+            owner_data = item.get("owner") or {}
+            results.append({
+                "owner": owner_data.get("login", ""),
+                "repo": item.get("name", ""),
+                "full_name": item.get("full_name", ""),
+                "stars": item.get("stargazers_count", 0),
+                "description": item.get("description") or "",
+                "url": item.get("html_url", ""),
+                "language": item.get("language"),
+            })
+        
+        logger.info("Found %d repos for query '%s'", len(results), query)
+        return results
+        
+    except requests.Timeout:
+        logger.warning("search_repositories timeout: %s", query)
+        return []
+    except Exception as e:
+        logger.warning("search_repositories failed: %s - %s", query, e)
+        return []
+

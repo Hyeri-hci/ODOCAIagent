@@ -103,7 +103,8 @@ async def execute_full_path(
             
             # 메타
             "execution_time_ms": execution_time_ms,
-            "from_cache": False
+            "from_cache": False,
+            "_cache_timestamp": time.time()  # 캐시 타임스탬프
         }
         
     except Exception as e:
@@ -194,19 +195,25 @@ async def _generate_summary_async(
         # docs_result와 activity_result에서 안전하게 값 추출
         has_readme = False
         if isinstance(docs_result, dict):
-            has_readme = docs_result.get('has_readme', False)
+            has_readme = docs_result.get('readme_present', docs_result.get('has_readme', False))
+        elif hasattr(docs_result, 'readme_present'):
+            has_readme = docs_result.readme_present
         elif hasattr(docs_result, 'has_readme'):
             has_readme = docs_result.has_readme
         
         commits_count = 0
         if isinstance(activity_result, dict):
-            commits_count = activity_result.get('recent_commits_count', 0)
+            commits_count = activity_result.get('total_commits_in_window', activity_result.get('recent_commits_count', 0))
+        elif hasattr(activity_result, 'total_commits_in_window'):
+            commits_count = activity_result.total_commits_in_window
         elif hasattr(activity_result, 'recent_commits_count'):
             commits_count = activity_result.recent_commits_count
         
         active_contributors = 0
         if isinstance(activity_result, dict):
-            active_contributors = activity_result.get('active_contributors', 0)
+            active_contributors = activity_result.get('unique_authors', activity_result.get('active_contributors', 0))
+        elif hasattr(activity_result, 'unique_authors'):
+            active_contributors = activity_result.unique_authors
         elif hasattr(activity_result, 'active_contributors'):
             active_contributors = activity_result.active_contributors
         
@@ -268,7 +275,8 @@ def _extract_key_findings(docs_result, activity_result, scoring_result) -> list:
             "description": f"저장소 건강도가 {health_score}점으로 개선이 필요합니다."
         })
     
-    if hasattr(docs_result, 'has_readme') and docs_result.has_readme:
+    has_readme = getattr(docs_result, 'readme_present', getattr(docs_result, 'has_readme', False))
+    if has_readme:
         findings.append({
             "category": "docs",
             "severity": "info",
@@ -276,8 +284,8 @@ def _extract_key_findings(docs_result, activity_result, scoring_result) -> list:
             "description": "README.md 파일이 있어 프로젝트 이해에 도움이 됩니다."
         })
     
-    if hasattr(activity_result, 'recent_commits_count'):
-        commits = activity_result.recent_commits_count
+    commits = getattr(activity_result, 'total_commits_in_window', getattr(activity_result, 'recent_commits_count', 0))
+    if commits:
         if commits > 50:
             findings.append({
                 "category": "activity",
@@ -292,13 +300,17 @@ def _extract_key_findings(docs_result, activity_result, scoring_result) -> list:
 def _extract_warnings(docs_result, activity_result, scoring_result) -> list:
     warnings = []
     
-    if not hasattr(docs_result, 'has_readme') or not docs_result.has_readme:
+    has_readme = getattr(docs_result, 'readme_present', getattr(docs_result, 'has_readme', False))
+    if not has_readme:
         warnings.append("README.md 파일이 없습니다.")
     
-    if not hasattr(docs_result, 'has_license') or not docs_result.has_license:
+    # has_license는 DocsCoreResult에 없음 - missing_sections 체크로 대체
+    missing = getattr(docs_result, 'missing_sections', [])
+    if 'LICENSE' in missing or 'WHO' in missing:
         warnings.append("LICENSE 파일이 없습니다.")
     
-    if hasattr(activity_result, 'recent_commits_count') and activity_result.recent_commits_count < 10:
+    commits = getattr(activity_result, 'total_commits_in_window', 0)
+    if commits < 10:
         warnings.append("최근 커밋 활동이 적습니다.")
     
     return warnings[:5]

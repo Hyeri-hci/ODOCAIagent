@@ -124,6 +124,277 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     conversation_history = state.get("conversation_history", [])
     accumulated_context = state.get("accumulated_context", {})
     
+    # === 명확한 요청 패턴 바로 라우팅 (LLM 파싱 스킵) ===
+    # 저장소가 이미 지정되어 있으므로, 명확한 키워드만 있으면 바로 진행
+    msg_lower = user_message.lower()
+    
+    # === 저장소 감지 (메시지에서 owner/repo 또는 프로젝트명 추출) ===
+    import re
+    from backend.common.github_client import search_repositories
+    
+    detected_owner = None
+    detected_repo = None
+    search_results = None  # GitHub 검색 결과
+    
+    # owner/repo 패턴 (예: facebook/react, Hyeri-hci/OSSDoctor)
+    repo_pattern = r'([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)'
+    repo_match = re.search(repo_pattern, user_message)
+    if repo_match:
+        detected_owner = repo_match.group(1)
+        detected_repo = repo_match.group(2)
+        logger.info(f"Detected repo from message: {detected_owner}/{detected_repo}")
+    
+    # 단독 프로젝트명 패턴 (예: "react 분석해줘", "OSSDoctor 진단해줘")
+    if not detected_repo:
+        # 진단/분석 키워드를 제외하고 프로젝트명 추출 시도
+        exclude_keywords = [
+            "분석", "진단", "해줘", "해주세요", "찾아", "알려", 
+            "보여", "전체", "건강도", "온보딩", "보안", "취약점",
+            "이", "저장소", "프로젝트", "라는", "를", "을", "좀"
+        ]
+        
+        # 메시지에서 키워드 제거 후 남은 단어 추출
+        words = user_message.split()
+        potential_project = None
+        
+        for word in words:
+            word_clean = word.strip().lower()
+            # 영문자로 시작하고 2자 이상
+            if len(word_clean) >= 2 and word_clean[0].isalpha():
+                if word_clean not in exclude_keywords:
+                    potential_project = word_clean
+                    break
+        
+        # 프로젝트명이 발견되면 GitHub에서 검색
+        if potential_project and len(potential_project) >= 2:
+            logger.info(f"Searching for project: {potential_project}")
+            try:
+                search_results = search_repositories(potential_project, max_results=5)
+                
+                if search_results:
+                    # 1순위: 저장소 이름이 정확히 일치하는 것
+                    exact_match = None
+                    for r in search_results:
+                        if r["repo"].lower() == potential_project:
+                            exact_match = r
+                            break
+                    
+                    if exact_match:
+                        detected_owner = exact_match["owner"]
+                        detected_repo = exact_match["repo"]
+                        logger.info(f"Exact match found: {detected_owner}/{detected_repo}")
+                    elif search_results[0]["stars"] >= 10000:
+                        # 2순위: 명확한 1위 (10000 스타 이상이고 이름에 검색어 포함)
+                        top = search_results[0]
+                        if potential_project in top["repo"].lower():
+                            detected_owner = top["owner"]
+                            detected_repo = top["repo"]
+                            logger.info(f"Top popular match: {detected_owner}/{detected_repo}")
+                    # 그 외: clarification으로 선택지 제공
+            except Exception as e:
+                logger.warning(f"GitHub search failed: {e}")
+    
+    # 진단/분석 명확한 요청
+    diagnosis_keywords = [
+        "분석해줘", "분석해주세요", "분석 해줘",
+        "진단해줘", "진단해주세요", "진단 해줘",
+        "건강도", "건강 점수", "health score", "health",
+        "전체 진단", "전체 분석", "full diagnosis",
+        "저장소 분석", "저장소 진단", "repo 분석",
+        "이 저장소", "이 레포", "this repo"
+    ]
+    
+    is_diagnosis_request = any(kw in msg_lower for kw in diagnosis_keywords)
+    
+    # "분석", "진단" 단독 사용도 허용
+    if not is_diagnosis_request:
+        simple_diag_keywords = ["분석", "진단", "diagnose", "analyze"]
+        for kw in simple_diag_keywords:
+            if kw in msg_lower and len(user_message) < 50:  # 짧은 메시지
+                is_diagnosis_request = True
+                break
+    
+    if is_diagnosis_request:
+        # 검색 결과가 여러 개이고 명확하지 않으면 clarification 요청
+        if search_results and len(search_results) > 1 and not detected_owner:
+            # 상위 3개 결과 표시
+            options = []
+            for i, r in enumerate(search_results[:3], 1):
+                stars_str = f"{r['stars']:,}" if r['stars'] >= 1000 else str(r['stars'])
+                options.append(f"{i}. {r['full_name']} (스타: {stars_str})")
+            
+            question = f"다음 중 어떤 저장소를 진단할까요?\n" + "\n".join(options)
+            
+            # 검색 결과를 컨텍스트에 저장
+            new_context = dict(accumulated_context)
+            new_context["pending_search_results"] = search_results[:3]
+            
+            return {
+                "supervisor_intent": {
+                    "task_type": "diagnosis",
+                    "target_agent": "diagnosis",
+                    "needs_clarification": True,
+                    "confidence": 0.7,
+                    "reasoning": "여러 저장소 검색 결과 중 선택 필요"
+                },
+                "needs_clarification": True,
+                "clarification_questions": [question],
+                "target_agent": None,
+                "accumulated_context": new_context
+            }
+        
+        # 감지된 저장소가 있으면 state 업데이트
+        result = {
+            "supervisor_intent": {
+                "task_type": "diagnosis",
+                "target_agent": "diagnosis",
+                "needs_clarification": False,
+                "confidence": 0.95,
+                "reasoning": f"명확한 진단 요청 키워드 감지"
+            },
+            "needs_clarification": False,
+            "clarification_questions": [],
+            "target_agent": "diagnosis"
+        }
+        
+        if detected_owner and detected_repo:
+            result["owner"] = detected_owner
+            result["repo"] = detected_repo
+            logger.info(f"Updating target repo to: {detected_owner}/{detected_repo}")
+        
+        logger.info(f"Direct diagnosis request detected: '{user_message}'")
+        return result
+    
+    # 온보딩 명확한 요청 (경험 수준 포함 시)
+    onboarding_keywords = ["온보딩", "기여", "contribute", "참여", "가이드"]
+    from backend.common.intent_utils import extract_experience_level
+    
+    is_onboarding_request = any(kw in msg_lower for kw in onboarding_keywords)
+    experience_level = extract_experience_level(user_message)
+    
+    if is_onboarding_request and experience_level:
+        logger.info(f"Direct onboarding request with level: '{experience_level}'")
+        new_context = dict(accumulated_context)
+        user_profile = new_context.get("user_profile", {})
+        user_profile["experience_level"] = experience_level
+        new_context["user_profile"] = user_profile
+        
+        return {
+            "supervisor_intent": {
+                "task_type": "onboarding",
+                "target_agent": "onboarding",
+                "needs_clarification": False,
+                "confidence": 0.95,
+                "reasoning": f"온보딩 요청 + 경험 수준 '{experience_level}' 감지"
+            },
+            "needs_clarification": False,
+            "clarification_questions": [],
+            "target_agent": "onboarding",
+            "accumulated_context": new_context
+        }
+    
+    # 보안 명확한 요청
+    security_keywords = ["보안", "취약점", "security", "cve", "vulnerability"]
+    if any(kw in msg_lower for kw in security_keywords):
+        logger.info(f"Direct security request detected: '{user_message}'")
+        return {
+            "supervisor_intent": {
+                "task_type": "security",
+                "target_agent": "security",
+                "needs_clarification": False,
+                "confidence": 0.95,
+                "reasoning": "명확한 보안 요청 키워드 감지"
+            },
+            "needs_clarification": False,
+            "clarification_questions": [],
+            "target_agent": "security"
+        }
+    
+    # === Clarification 응답 처리 (루프 방지) ===
+    # 이전 턴이 clarification 요청이었으면, 현재 메시지는 그에 대한 응답
+    if conversation_history:
+        last_turn = conversation_history[-1] if conversation_history else None
+        if last_turn:
+            last_response = last_turn.get("agent_response", "")
+            last_intent = last_turn.get("resolved_intent", {})
+            
+            # 이전에 저장소 선택을 물었던 경우 (pending_search_results 확인)
+            pending_results = accumulated_context.get("pending_search_results", [])
+            if pending_results and ("어떤 저장소를 진단" in last_response):
+                msg_stripped = user_message.strip()
+                selected_idx = None
+                
+                # 숫자로 선택
+                if msg_stripped == "1":
+                    selected_idx = 0
+                elif msg_stripped == "2":
+                    selected_idx = 1
+                elif msg_stripped == "3":
+                    selected_idx = 2
+                
+                if selected_idx is not None and selected_idx < len(pending_results):
+                    selected = pending_results[selected_idx]
+                    logger.info(f"User selected repo: {selected['full_name']}")
+                    
+                    # pending 결과 제거
+                    new_context = dict(accumulated_context)
+                    if "pending_search_results" in new_context:
+                        del new_context["pending_search_results"]
+                    
+                    return {
+                        "supervisor_intent": {
+                            "task_type": "diagnosis",
+                            "target_agent": "diagnosis",
+                            "needs_clarification": False,
+                            "confidence": 0.95,
+                            "reasoning": f"사용자가 {selected['full_name']} 선택"
+                        },
+                        "needs_clarification": False,
+                        "clarification_questions": [],
+                        "target_agent": "diagnosis",
+                        "owner": selected["owner"],
+                        "repo": selected["repo"],
+                        "accumulated_context": new_context
+                    }
+            
+            # 이전에 경험 수준을 물었던 경우
+            if "경험 수준을 알려주세요" in last_response or last_intent.get("needs_clarification"):
+                experience_level = extract_experience_level(user_message)
+                
+                # 숫자 응답도 처리 (1, 2, 3)
+                if not experience_level:
+                    msg_stripped = user_message.strip()
+                    if msg_stripped == "1" or "1" in msg_stripped:
+                        experience_level = "beginner"
+                    elif msg_stripped == "2" or "2" in msg_stripped:
+                        experience_level = "intermediate"
+                    elif msg_stripped == "3" or "3" in msg_stripped:
+                        experience_level = "advanced"
+                
+                if experience_level:
+                    logger.info(f"Clarification response detected: experience_level={experience_level}")
+                    
+                    # accumulated_context에 사용자 프로필 저장
+                    new_context = dict(accumulated_context)
+                    user_profile = new_context.get("user_profile", {})
+                    user_profile["experience_level"] = experience_level
+                    new_context["user_profile"] = user_profile
+                    
+                    # 온보딩으로 바로 라우팅 (재파싱 없이)
+                    return {
+                        "supervisor_intent": {
+                            "task_type": "onboarding",
+                            "target_agent": "onboarding",
+                            "needs_clarification": False,
+                            "confidence": 0.95,
+                            "reasoning": f"Clarification 응답에서 경험 수준 '{experience_level}' 감지"
+                        },
+                        "needs_clarification": False,
+                        "clarification_questions": [],
+                        "target_agent": "onboarding",
+                        "accumulated_context": new_context
+                    }
+    
     # 대명사 해결 시도
     resolved_message = user_message
     pronoun_detected = False
@@ -371,21 +642,64 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
     
     if result_type == "full_diagnosis":
         # 진단 결과 요약
+        owner = agent_result.get("owner", state.get("owner", ""))
+        repo = agent_result.get("repo", state.get("repo", ""))
         health_score = agent_result.get("health_score", 0)
         onboarding_score = agent_result.get("onboarding_score", 0)
-        summary = agent_result.get("llm_summary", "")
+        health_level = agent_result.get("health_level", "")
+        docs_score = agent_result.get("docs_score", 0)
+        activity_score = agent_result.get("activity_score", 0)
         
-        answer = f"""## 진단 결과
+        # 요약 (llm_summary가 있으면 사용, 없으면 구성)
+        summary = agent_result.get("llm_summary", "")
+        if not summary:
+            # llm_summary가 없으면 직접 구성
+            warnings = agent_result.get("warnings", [])
+            recommendations = agent_result.get("recommendations", [])
+            
+            summary_parts = []
+            if health_score >= 80:
+                summary_parts.append(f"전반적으로 건강한 저장소입니다.")
+            elif health_score >= 60:
+                summary_parts.append(f"보통 수준의 건강도를 보입니다.")
+            else:
+                summary_parts.append(f"개선이 필요한 상태입니다.")
+            
+            if warnings:
+                summary_parts.append(f"주의사항: {', '.join(warnings[:2])}")
+            
+            summary = " ".join(summary_parts)
+        
+        # 주요 발견사항
+        key_findings = agent_result.get("key_findings", [])
+        findings_text = ""
+        if key_findings:
+            for finding in key_findings[:3]:
+                title = finding.get('title', '')
+                desc = finding.get('description', '')
+                if title and desc:
+                    findings_text += f"- **{title}**: {desc}\n"
+                elif title:
+                    findings_text += f"- {title}\n"
+        else:
+            # key_findings가 없으면 recommendations 사용
+            recommendations = agent_result.get("recommendations", [])
+            if recommendations:
+                for rec in recommendations[:3]:
+                    findings_text += f"- {rec}\n"
+        
+        answer = f"""## {owner}/{repo} 진단 결과
 
 **건강도:** {health_score}/100
 **온보딩 점수:** {onboarding_score}/100
+**문서화 점수:** {docs_score}/100
+**활동성 점수:** {activity_score}/100
 
 {summary}
 
 **주요 발견사항:**
+{findings_text if findings_text else "- 특이사항 없음"}
 """
-        for finding in agent_result.get("key_findings", [])[:3]:
-            answer += f"- {finding.get('title', '')}: {finding.get('description', '')}\n"
         
         # 제안 액션
         suggested_actions = [
@@ -424,23 +738,34 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
         summary = agent_result.get("summary", "")
         
         if plan:
-            steps_preview = "\n".join([
-                f"{i+1}. {step.get('title', '')}" 
-                for i, step in enumerate(plan.get('steps', [])[:5])
-            ])
-            
-            more_steps = "\n... (더 보기)" if len(plan.get('steps', [])) > 5 else ""
-            prereqs = ', '.join(plan.get('prerequisites', [])[:3])
+            # plan이 리스트인 경우 (주차별 플랜)
+            if isinstance(plan, list):
+                steps_preview = "\n".join([
+                    f"{i+1}. {step.get('title', step.get('week', f'Week {i+1}'))}" 
+                    for i, step in enumerate(plan[:5]) if isinstance(step, dict)
+                ])
+                more_steps = "\n... (더 보기)" if len(plan) > 5 else ""
+                prereqs = ""
+                difficulty = "normal"
+            else:
+                # plan이 dict인 경우
+                steps_preview = "\n".join([
+                    f"{i+1}. {step.get('title', '')}" 
+                    for i, step in enumerate(plan.get('steps', [])[:5]) if isinstance(step, dict)
+                ])
+                more_steps = "\n... (더 보기)" if len(plan.get('steps', [])) > 5 else ""
+                prereqs = ', '.join(plan.get('prerequisites', [])[:3])
+                difficulty = plan.get('difficulty', 'normal')
             
             answer = f"""**온보딩 플랜 생성 완료**
 
 {summary}
 
 **주요 단계:**
-{steps_preview}{more_steps}
+{steps_preview if steps_preview else "- 상세 단계는 플랜을 참조하세요"}{more_steps}
 
-**난이도:** {plan.get('difficulty', 'normal')}
-**필요 사전지식:** {prereqs}
+**난이도:** {difficulty}
+{"**필요 사전지식:** " + prereqs if prereqs else ""}
 """
         else:
             answer = f"**온보딩 플랜**\n\n{agent_result.get('message', '온보딩 플랜이 생성되었습니다.')}"
