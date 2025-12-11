@@ -114,3 +114,7 @@ docs/refactoring/
 docs/api/
 docs/architecture/
 
+docs/agents
+
+tests/performance/
+
