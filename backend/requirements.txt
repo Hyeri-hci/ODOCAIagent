@@ -10,3 +10,4 @@ uvicorn[standard]
 pydantic
 langchain-openai>=0.1.0
 pymysql>=1.0.0
+aiohttp
