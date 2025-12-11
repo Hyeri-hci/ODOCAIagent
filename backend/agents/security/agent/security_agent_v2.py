@@ -332,8 +332,8 @@ class SecurityAgentV2:
         if not self.executor.should_continue(state):
             return "finalize"
 
-        # 반성 주기 체크 (매 5번째 반복)
-        if self.enable_reflection and state.get("iteration", 0) % 5 == 0 and state.get("iteration", 0) > 0:
+        # 반성 주기 체크 (매 10번째 반복으로 변경 - 성능 최적화)
+        if self.enable_reflection and state.get("iteration", 0) % 10 == 0 and state.get("iteration", 0) > 0:
             return "reflect"
 
         return "continue"
