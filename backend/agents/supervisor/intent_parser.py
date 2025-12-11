@@ -24,11 +24,13 @@ class SupervisorIntentV2(BaseModel):
         "diagnosis",      # 진단 관련
         "onboarding",     # 온보딩 관련
         "security",       # 보안 관련
+        "recommend",      # 추천 관련
+        "contributor",    # 기여자 지원 관련
         "general_chat",   # 일반 대화
         "clarification"   # 명확화 필요
     ]
     
-    target_agent: Literal["diagnosis", "onboarding", "security", "chat", "none"]
+    target_agent: Literal["diagnosis", "onboarding", "security", "recommend", "contributor", "chat", "none"]
     
     # Agentic 기능
     needs_clarification: bool = Field(
@@ -70,6 +72,12 @@ class SupervisorIntentV2(BaseModel):
     implicit_context: bool = Field(
         default=False,
         description="암묵적 컨텍스트 사용 여부"
+    )
+    
+    # 멀티 에이전트 협업
+    additional_agents: List[str] = Field(
+        default_factory=list,
+        description="추가로 실행할 에이전트들 (예: ['security', 'onboarding'])"
     )
 
 
@@ -114,8 +122,9 @@ class SupervisorIntentParserV2(IntentParserBase):
 사용자의 의도를 파악하여 다음 JSON 형식으로 반환하세요:
 
 {{
-    "task_type": "diagnosis" | "onboarding" | "security" | "general_chat" | "clarification",
-    "target_agent": "diagnosis" | "onboarding" | "security" | "chat" | "none",
+    "task_type": "diagnosis" | "onboarding" | "security" | "contributor" | "general_chat" | "clarification",
+    "target_agent": "diagnosis" | "onboarding" | "security" | "contributor" | "chat" | "none",
+    "additional_agents": ["diagnosis", "security", "onboarding", "contributor"],
     "needs_clarification": true | false,
     "clarification_questions": ["질문1", "질문2"],
     "uses_previous_context": true | false,
@@ -130,12 +139,19 @@ class SupervisorIntentParserV2(IntentParserBase):
 
 1. task_type 결정:
    - "분석", "진단", "건강도", "점수" → diagnosis
-   - "온보딩", "가이드", "기여", "시작" → onboarding
+   - "온보딩", "가이드" → onboarding
    - "보안", "취약점", "CVE" → security
+   - "첫 기여", "Good First Issue", "이슈 추천", "기여 체크리스트", "코드 구조", "커뮤니티 활동", "폴더 구조", "첫 PR" → contributor
    - "비교해줘", "알려줘", "설명해줘" → general_chat
    - 정보가 부족하면 → clarification
 
-2. needs_clarification:
+2. additional_agents (복합 의도 감지):
+   - 여러 작업을 요청하면 main task를 target_agent에, 나머지를 additional_agents에 포함
+   - 예: "진단하고 보안도 확인해줘" → target_agent="diagnosis", additional_agents=["security"]
+   - 예: "분석하고 기여 방법도 알려줘" → target_agent="diagnosis", additional_agents=["onboarding"]
+   - 단일 작업이면 → additional_agents=[]
+
+3. needs_clarification:
    - 저장소가 명시되지 않고 세션에도 없으면 → true
    - 요청이 모호하면 → true
    - 예: "분석해줘" (어떤 저장소?)

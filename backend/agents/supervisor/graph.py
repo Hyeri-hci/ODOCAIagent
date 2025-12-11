@@ -10,7 +10,7 @@ from backend.agents.supervisor.models import SupervisorState
 from backend.agents.supervisor.intent_parser import SupervisorIntentParserV2
 from backend.agents.diagnosis.graph import run_diagnosis
 from backend.common.session import get_session_store, Session
-from backend.common.trace_manager import get_trace_manager
+from backend.common.metrics import get_trace_manager
 from backend.common.pronoun_resolver import resolve_pronoun, detect_implicit_context
 
 logger = logging.getLogger(__name__)
@@ -139,23 +139,95 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     accumulated_context = dict(state.get("accumulated_context", {}))
     
     # === 0단계: force_diagnosis 체크 ===
-    # /api/analyze/stream 같은 진단 전용 엔드포인트에서는 의도 파싱 건너뛰기
+    # /api/analyze/stream에서도 키워드 기반으로 적절한 에이전트 라우팅
     if user_context.get("force_diagnosis"):
-        logger.info("force_diagnosis flag set, skipping intent parsing")
+        msg_lower_check = user_message.lower()
+        
+        # 보안 키워드 체크
+        security_keywords = ["보안", "취약점", "security", "cve", "vulnerability", "의존성 취약"]
+        if any(kw in msg_lower_check for kw in security_keywords):
+            logger.info("force_diagnosis: routing to security agent based on keywords")
+            return {
+                "supervisor_intent": {
+                    "task_type": "security",
+                    "target_agent": "security",
+                    "needs_clarification": False,
+                    "confidence": 0.95,
+                    "reasoning": "보안 관련 키워드 감지"
+                },
+                "needs_clarification": False,
+                "clarification_questions": [],
+                "target_agent": "security",
+                "detected_intent": "security_scan",
+                "intent_confidence": 0.95,
+                "decision_reason": "security keywords detected"
+            }
+        
+        # 온보딩 키워드 체크
+        onboarding_keywords = ["온보딩", "기여", "contribute", "가이드", "참여", "시작하고 싶"]
+        if any(kw in msg_lower_check for kw in onboarding_keywords):
+            logger.info("force_diagnosis: routing to onboarding agent based on keywords")
+            return {
+                "supervisor_intent": {
+                    "task_type": "onboarding",
+                    "target_agent": "onboarding",
+                    "needs_clarification": False,
+                    "confidence": 0.95,
+                    "reasoning": "온보딩 관련 키워드 감지"
+                },
+                "needs_clarification": False,
+                "clarification_questions": [],
+                "target_agent": "onboarding",
+                "detected_intent": "build_onboarding_plan",
+                "intent_confidence": 0.95,
+                "decision_reason": "onboarding keywords detected"
+            }
+        
+        # 키워드 매칭 실패 + 메시지가 있으면 LLM 의도 파싱
+        if user_message.strip():
+            logger.info("force_diagnosis: no keyword match, using LLM intent parsing")
+            try:
+                session_context = {
+                    "owner": state.get("owner", ""),
+                    "repo": state.get("repo", ""),
+                    "accumulated_context": {},
+                    "pronoun_detected": False
+                }
+                
+                parser = SupervisorIntentParserV2()
+                intent = await parser.parse(
+                    user_message=user_message,
+                    session_context=session_context
+                )
+                
+                return {
+                    "supervisor_intent": intent.dict(),
+                    "needs_clarification": intent.needs_clarification,
+                    "clarification_questions": intent.clarification_questions,
+                    "target_agent": intent.target_agent,
+                    "detected_intent": intent.task_type,
+                    "intent_confidence": intent.confidence,
+                    "decision_reason": f"LLM parsed: {intent.reasoning}"
+                }
+            except Exception as e:
+                logger.warning(f"LLM intent parsing failed: {e}, defaulting to diagnosis")
+        
+        # 기본값: 진단 (메시지 없거나 LLM 실패)
+        logger.info("force_diagnosis: defaulting to diagnosis agent")
         return {
             "supervisor_intent": {
                 "task_type": "diagnosis",
                 "target_agent": "diagnosis",
                 "needs_clarification": False,
                 "confidence": 1.0,
-                "reasoning": "force_diagnosis flag set"
+                "reasoning": "force_diagnosis flag set (default)"
             },
             "needs_clarification": False,
             "clarification_questions": [],
             "target_agent": "diagnosis",
             "detected_intent": "diagnose_repo",
             "intent_confidence": 1.0,
-            "decision_reason": "force_diagnosis flag enabled"
+            "decision_reason": "force_diagnosis flag enabled (default)"
         }
     
     msg_lower = user_message.lower()
@@ -401,6 +473,7 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
         "needs_clarification": needs_clarification,
         "clarification_questions": clarification_questions,
         "target_agent": intent.target_agent,
+        "additional_agents": intent.additional_agents,  # 멀티 에이전트 협업
         "accumulated_context": accumulated_context
     }
     
@@ -532,15 +605,15 @@ async def run_onboarding_agent_node(state: SupervisorState) -> Dict[str, Any]:
 
 
 async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
-    """보안 Agent 실행 (SecurityAgentV2 연결)"""
+    """보안 Agent 실행 (SecurityAgent 연결)"""
     import os
-    logger.info("Running Security Agent V2")
+    logger.info("Running Security Agent")
     
     try:
-        from backend.agents.security.agent.security_agent_v2 import SecurityAgentV2
+        from backend.agents.security.agent.security_agent import SecurityAgent
         
-        # SecurityAgentV2 초기화
-        agent = SecurityAgentV2(
+        # SecurityAgent 초기화
+        agent = SecurityAgent(
             llm_base_url=os.getenv("LLM_BASE_URL", ""),
             llm_api_key=os.getenv("LLM_API_KEY", ""),
             llm_model=os.getenv("LLM_MODEL", "gpt-4"),
@@ -553,7 +626,7 @@ async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
         owner = state.get("owner", "")
         repo = state.get("repo", "")
         
-        # SecurityAgentV2 실행
+        # SecurityAgent 실행
         result = await agent.analyze(
             user_request=user_message if user_message else f"{owner}/{repo} 보안 분석",
             owner=owner,
@@ -563,6 +636,9 @@ async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
         
         logger.info(f"Security analysis completed: success={result.get('success', False)}")
         
+        # type 필드 추가 (finalize_answer_node에서 사용)
+        result["type"] = "security_scan"
+        
         return {
             "agent_result": result,
             "security_result": result,  # finalize에서 사용
@@ -570,7 +646,7 @@ async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
         }
         
     except ImportError as e:
-        logger.warning(f"SecurityAgentV2 import failed: {e}")
+        logger.warning(f"SecurityAgent import failed: {e}")
         return {
             "agent_result": {
                 "type": "security_scan",
@@ -585,6 +661,193 @@ async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
             "agent_result": {
                 "type": "security_scan",
                 "message": f"보안 분석 오류: {e}",
+                "status": "error"
+            },
+            "iteration": state.get("iteration", 0) + 1
+        }
+
+
+async def run_contributor_agent_node(state: SupervisorState) -> Dict[str, Any]:
+    """신규 기여자 지원 에이전트 실행 (첫 기여 가이드, 이슈 매칭, 체크리스트 등)"""
+    logger.info("Running Contributor Agent")
+    
+    try:
+        from backend.common.contribution_guide import (
+            generate_first_contribution_guide,
+            format_guide_as_markdown,
+            generate_contribution_checklist,
+            format_checklist_as_markdown
+        )
+        from backend.common.issue_matcher import (
+            match_issues_to_user,
+            format_matched_issues_as_markdown
+        )
+        from backend.common.structure_visualizer import (
+            generate_structure_visualization,
+            format_structure_as_markdown
+        )
+        from backend.common.community_analyzer import (
+            analyze_community_activity,
+            format_community_analysis_as_markdown
+        )
+        
+        owner = state.get("owner", "")
+        repo = state.get("repo", "")
+        user_message = state.get("user_message", "").lower()
+        
+        result = {
+            "type": "contributor",
+            "owner": owner,
+            "repo": repo,
+            "features": {}
+        }
+        
+        # 첫 기여 가이드 (기본 제공)
+        guide = generate_first_contribution_guide(owner, repo)
+        result["features"]["first_contribution_guide"] = guide
+        
+        # 기여 체크리스트 (기본 제공)
+        checklist = generate_contribution_checklist(owner, repo)
+        result["features"]["contribution_checklist"] = checklist
+        
+        # 요청에 따라 추가 기능 활성화
+        if any(kw in user_message for kw in ["구조", "폴더", "structure"]):
+            # 코드 구조 시각화 (파일 트리 필요 - accumulated_context에서 가져옴)
+            accumulated_context = state.get("accumulated_context", {})
+            file_tree = accumulated_context.get("file_tree", [])
+            if file_tree:
+                visualization = generate_structure_visualization(owner, repo, file_tree)
+                result["features"]["structure_visualization"] = visualization
+        
+        if any(kw in user_message for kw in ["이슈", "issue", "good first"]):
+            # Good First Issue 매칭 (accumulated_context에서 이슈 정보 가져옴)
+            accumulated_context = state.get("accumulated_context", {})
+            issues = accumulated_context.get("open_issues", [])
+            if issues:
+                matched = match_issues_to_user(issues, experience_level="beginner")
+                result["features"]["issue_matching"] = matched
+        
+        if any(kw in user_message for kw in ["커뮤니티", "활동", "community"]):
+            # 커뮤니티 활동 분석
+            accumulated_context = state.get("accumulated_context", {})
+            prs = accumulated_context.get("recent_prs", [])
+            issues = accumulated_context.get("recent_issues", [])
+            contributors = accumulated_context.get("contributors", [])
+            
+            community = analyze_community_activity(
+                owner, repo, 
+                recent_prs=prs, 
+                recent_issues=issues, 
+                contributors=contributors
+            )
+            result["features"]["community_analysis"] = community
+        
+        # 마크다운 요약 생성
+        summary_md = f"# {owner}/{repo} 기여 가이드\n\n"
+        summary_md += format_guide_as_markdown(guide)
+        summary_md += "\n---\n"
+        summary_md += format_checklist_as_markdown(checklist)
+        result["summary_markdown"] = summary_md
+        
+        logger.info(f"Contributor agent completed: {list(result['features'].keys())}")
+        
+        return {
+            "agent_result": result,
+            "iteration": state.get("iteration", 0) + 1
+        }
+        
+    except ImportError as e:
+        logger.warning(f"Contributor agent import failed: {e}")
+        return {
+            "agent_result": {
+                "type": "contributor",
+                "message": f"기여자 지원 모듈 로드 실패: {e}",
+                "status": "import_error"
+            },
+            "iteration": state.get("iteration", 0) + 1
+        }
+    except Exception as e:
+        logger.error(f"Contributor agent failed: {e}")
+        return {
+            "agent_result": {
+                "type": "contributor",
+                "message": f"기여자 지원 실행 오류: {e}",
+                "status": "error"
+            },
+            "iteration": state.get("iteration", 0) + 1
+        }
+
+
+async def run_recommend_agent_node(state: SupervisorState) -> Dict[str, Any]:
+    """추천 에이전트 실행 (onboarding 점수 기반 프로젝트 추천)"""
+    logger.info("Running Recommend Agent")
+    
+    try:
+        from backend.agents.recommend.agent.graph import run_recommend
+        
+        owner = state.get("owner", "")
+        repo = state.get("repo", "")
+        user_message = state.get("user_message", "")
+        
+        # 추천 에이전트 실행
+        result = await run_recommend(
+            owner=owner,
+            repo=repo,
+            user_message=user_message
+        )
+        
+        # 결과 포맷팅
+        search_results = result.get("search_results", [])
+        final_summary = result.get("final_summary", "")
+        
+        formatted_result = {
+            "type": "recommend",
+            "recommendations": [],
+            "summary": final_summary
+        }
+        
+        # onboarding 점수 기준 필터링 (70점 이상)
+        for item in search_results:
+            # RecommendSnapshot 객체인 경우 속성 접근
+            if hasattr(item, "onboarding_score"):
+                onboarding_score = item.onboarding_score or 0
+                if onboarding_score >= 70:
+                    formatted_result["recommendations"].append({
+                        "name": getattr(item, "name", ""),
+                        "full_name": getattr(item, "full_name", ""),
+                        "description": getattr(item, "description", ""),
+                        "stars": getattr(item, "stars", 0),
+                        "onboarding_score": onboarding_score,
+                        "ai_reason": getattr(item, "ai_reason", "")
+                    })
+            elif isinstance(item, dict):
+                onboarding_score = item.get("onboarding_score", 0) or 0
+                if onboarding_score >= 70:
+                    formatted_result["recommendations"].append(item)
+        
+        logger.info(f"Recommend agent completed: {len(formatted_result['recommendations'])} projects")
+        
+        return {
+            "agent_result": formatted_result,
+            "iteration": state.get("iteration", 0) + 1
+        }
+        
+    except ImportError as e:
+        logger.warning(f"Recommend agent import failed: {e}")
+        return {
+            "agent_result": {
+                "type": "recommend",
+                "message": f"추천 에이전트 모듈 로드 실패: {e}",
+                "status": "import_error"
+            },
+            "iteration": state.get("iteration", 0) + 1
+        }
+    except Exception as e:
+        logger.error(f"Recommend agent failed: {e}")
+        return {
+            "agent_result": {
+                "type": "recommend",
+                "message": f"추천 실행 오류: {e}",
                 "status": "error"
             },
             "iteration": state.get("iteration", 0) + 1
@@ -708,16 +971,64 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
 {findings_text if findings_text else "- 특이사항 없음"}
 """
         
-        # 제안 액션
-        suggested_actions = [
-            {"action": "온보딩 가이드 만들기", "perspective": "beginner"},
-            {"action": "다른 관점으로 보기", "perspective": "tech_lead"},
+        # 프로액티브 제안 (점수 기반 조건부 생성)
+        suggested_actions = []
+        
+        # 건강도가 낮으면 보안 점검 추천
+        if health_score < 50:
+            suggested_actions.append({
+                "action": "보안 취약점 점검 추천",
+                "type": "security",
+                "reason": f"건강도가 {health_score}점으로 낮습니다. 보안 점검을 권장합니다."
+            })
+        
+        # 온보딩 점수가 높으면 기여 가이드 추천
+        if onboarding_score >= 70:
+            suggested_actions.append({
+                "action": "기여 가이드 생성 가능",
+                "type": "onboarding",
+                "reason": f"온보딩 점수가 {onboarding_score}점으로 높습니다. 기여 가이드를 만들어 보세요."
+            })
+        
+        # 기본 제안 추가
+        suggested_actions.extend([
+            {"action": "온보딩 가이드 만들기", "type": "onboarding"},
             {"action": "보안 스캔 실행", "type": "security"}
-        ]
+        ])
+        
+        # AI 판단 근거 (Agentic 요소 가시화)
+        decision_reason = state.get("decision_reason", "")
+        supervisor_intent = state.get("supervisor_intent", {})
+        reasoning = supervisor_intent.get("reasoning", "") if isinstance(supervisor_intent, dict) else ""
+        
+        # 다음 단계 안내 (진단→온보딩 연결)
+        next_steps = """
+---
+**다음 단계:**
+이 저장소에 기여하고 싶다면 `온보딩 가이드 만들어줘`라고 말해보세요!
+보안 취약점이 걱정된다면 `보안 분석해줘`라고 요청하세요.
+"""
+        
+        # AI 판단 근거 섹션 (reasoning이 있으면 표시)
+        ai_trace = ""
+        if reasoning or decision_reason:
+            ai_trace = f"""
+---
+**[AI 판단 과정]**
+{reasoning or decision_reason}
+"""
+        
+        answer = answer + ai_trace + next_steps
         
         return {
             "final_answer": answer,
-            "suggested_actions": suggested_actions
+            "suggested_actions": suggested_actions,
+            "decision_trace": {
+                "reasoning": reasoning,
+                "decision_reason": decision_reason,
+                "target_agent": state.get("target_agent"),
+                "intent_confidence": state.get("intent_confidence", 0)
+            }
         }
     
     elif result_type == "quick_query":
@@ -776,6 +1087,92 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
 """
         else:
             answer = f"**온보딩 플랜**\n\n{agent_result.get('message', '온보딩 플랜이 생성되었습니다.')}"
+        
+        return {"final_answer": answer}
+    
+    elif result_type == "security_scan":
+        # 보안 분석 결과
+        results = agent_result.get("results", {})
+        security_score = results.get("security_score", agent_result.get("security_score"))
+        security_grade = results.get("security_grade", agent_result.get("security_grade", "N/A"))
+        risk_level = results.get("risk_level", agent_result.get("risk_level", "unknown"))
+        vulnerabilities = results.get("vulnerabilities", {})
+        vuln_total = vulnerabilities.get("total", 0)
+        vuln_critical = vulnerabilities.get("critical", 0)
+        vuln_high = vulnerabilities.get("high", 0)
+        vuln_medium = vulnerabilities.get("medium", 0)
+        vuln_low = vulnerabilities.get("low", 0)
+        
+        # 취약점 요약
+        if vuln_total == 0:
+            vuln_summary = "발견된 취약점이 없습니다."
+        else:
+            parts = []
+            if vuln_critical > 0:
+                parts.append(f"🔴 Critical: {vuln_critical}")
+            if vuln_high > 0:
+                parts.append(f"🟠 High: {vuln_high}")
+            if vuln_medium > 0:
+                parts.append(f"🟡 Medium: {vuln_medium}")
+            if vuln_low > 0:
+                parts.append(f"🟢 Low: {vuln_low}")
+            vuln_summary = " | ".join(parts) if parts else f"총 {vuln_total}개의 취약점"
+        
+        owner = state.get("owner", "")
+        repo = state.get("repo", "")
+        
+        answer = f"""## {owner}/{repo} 보안 분석 결과
+
+**보안 점수:** {security_score}/100 (등급: {security_grade})
+**위험도:** {risk_level}
+
+### 취약점 현황
+{vuln_summary}
+
+보안 분석이 완료되었습니다. 상세 정보는 우측 보고서의 "보안 분석" 섹션에서 확인하세요.
+"""
+        
+        return {"final_answer": answer}
+    
+    elif result_type == "contributor":
+        # 기여자 가이드 결과
+        features = agent_result.get("features", {})
+        owner = state.get("owner", "")
+        repo = state.get("repo", "")
+        
+        guide = features.get("first_contribution_guide", {})
+        checklist = features.get("contribution_checklist", {})
+        
+        # 첫 기여 가이드 요약
+        guide_summary = ""
+        steps = guide.get("steps", [])
+        if steps:
+            guide_summary = "\n".join([
+                f"{i+1}. {step.get('title', '')}"
+                for i, step in enumerate(steps[:5])
+            ])
+        
+        # 체크리스트 요약
+        checklist_items = checklist.get("items", [])
+        checklist_summary = ""
+        if checklist_items:
+            high_priority = [item for item in checklist_items if item.get("priority") == "high"]
+            checklist_summary = "\n".join([f"  - {item.get('title', '')}" for item in high_priority[:3]])
+        
+        answer = f"""## {owner}/{repo} 기여자 가이드
+
+**첫 기여를 위한 단계별 가이드가 준비되었습니다!**
+
+### 주요 단계
+{guide_summary if guide_summary else "상세 가이드를 우측 리포트에서 확인하세요."}
+
+### PR 제출 전 필수 체크
+{checklist_summary if checklist_summary else "체크리스트를 우측 리포트에서 확인하세요."}
+
+---
+**팁:** 우측의 \"기여자 가이드\" 섹션에서 상세 정보와 체크리스트를 확인할 수 있습니다.
+Good First Issue를 찾으시려면 `이슈 추천해줘`라고 말해보세요!
+"""
         
         return {"final_answer": answer}
     
@@ -842,6 +1239,13 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
             session.update_context("last_topic", "security")
             logger.info("Stored security_scan in session context")
         
+        # Contributor 결과 저장
+        elif result_type == "contributor" or target_agent == "contributor":
+            data_generated.append("contributor_guide")
+            session.update_context("contributor_guide", agent_result)
+            session.update_context("last_topic", "contributor")
+            logger.info("Stored contributor_guide in session context")
+        
         # Chat 결과도 저장 (참조 가능하도록)
         elif result_type == "chat" or target_agent == "chat":
             session.update_context("last_chat_response", agent_result)
@@ -884,6 +1288,55 @@ def route_to_agent_node(state: SupervisorState) -> Literal[
         return "chat_response"
 
 
+async def run_additional_agents_node(state: SupervisorState) -> Dict[str, Any]:
+    """추가 에이전트 순차 실행 (멀티 에이전트 협업)"""
+    additional_agents = state.get("additional_agents", [])
+    
+    if not additional_agents:
+        return {}
+    
+    logger.info(f"Running additional agents: {additional_agents}")
+    
+    multi_agent_results = dict(state.get("multi_agent_results", {}))
+    
+    # 메인 에이전트 결과 저장
+    main_result = state.get("agent_result")
+    target_agent = state.get("target_agent")
+    if main_result and target_agent:
+        multi_agent_results[target_agent] = main_result
+    
+    for agent_name in additional_agents:
+        logger.info(f"Running additional agent: {agent_name}")
+        
+        try:
+            if agent_name == "diagnosis":
+                result = await run_diagnosis_agent_node(state)
+                multi_agent_results["diagnosis"] = result.get("agent_result", result)
+                
+            elif agent_name == "security":
+                result = await run_security_agent_node(state)
+                multi_agent_results["security"] = result.get("agent_result", result)
+                
+            elif agent_name == "onboarding":
+                result = await run_onboarding_agent_node(state)
+                multi_agent_results["onboarding"] = result.get("agent_result", result)
+                
+            elif agent_name == "contributor":
+                result = await run_contributor_agent_node(state)
+                multi_agent_results["contributor"] = result.get("agent_result", result)
+                
+        except Exception as e:
+            logger.error(f"Additional agent {agent_name} failed: {e}")
+            multi_agent_results[agent_name] = {"error": str(e)}
+    
+    logger.info(f"Multi-agent execution completed: {list(multi_agent_results.keys())}")
+    
+    return {
+        "multi_agent_results": multi_agent_results,
+        "iteration": state.get("iteration", 0) + 1
+    }
+
+
 # === 그래프 빌드 ===
 
 def build_supervisor_graph():
@@ -898,6 +1351,8 @@ def build_supervisor_graph():
     graph.add_node("run_diagnosis_agent", run_diagnosis_agent_node)
     graph.add_node("run_onboarding_agent", run_onboarding_agent_node)
     graph.add_node("run_security_agent", run_security_agent_node)
+    graph.add_node("run_recommend_agent", run_recommend_agent_node)
+    graph.add_node("run_contributor_agent", run_contributor_agent_node)
     graph.add_node("chat_response", chat_response_node)
     graph.add_node("finalize_answer", finalize_answer_node)
     graph.add_node("update_session", update_session_node)
@@ -909,7 +1364,7 @@ def build_supervisor_graph():
     # Clarification 체크 및 Agent 라우팅
     def combined_routing(state: SupervisorState) -> Literal[
         "clarification_response", "run_diagnosis_agent", "run_onboarding_agent", 
-        "run_security_agent", "chat_response"
+        "run_security_agent", "run_recommend_agent", "run_contributor_agent", "chat_response"
     ]:
         """Clarification 체크 후 Agent 라우팅"""
         if state.get("needs_clarification", False):
@@ -926,6 +1381,10 @@ def build_supervisor_graph():
             return "run_onboarding_agent"
         elif target == "security":
             return "run_security_agent"
+        elif target == "recommend":
+            return "run_recommend_agent"
+        elif target == "contributor":
+            return "run_contributor_agent"
         else:
             return "chat_response"
     
@@ -937,6 +1396,8 @@ def build_supervisor_graph():
             "run_diagnosis_agent": "run_diagnosis_agent",
             "run_onboarding_agent": "run_onboarding_agent",
             "run_security_agent": "run_security_agent",
+            "run_recommend_agent": "run_recommend_agent",
+            "run_contributor_agent": "run_contributor_agent",
             "chat_response": "chat_response"
         }
     )
@@ -944,10 +1405,16 @@ def build_supervisor_graph():
     # Clarification 응답 → 종료
     graph.add_edge("clarification_response", "update_session")
     
-    # 모든 agent → finalize
-    graph.add_edge("run_diagnosis_agent", "finalize_answer")
-    graph.add_edge("run_onboarding_agent", "finalize_answer")
-    graph.add_edge("run_security_agent", "finalize_answer")
+    # 추가 에이전트 실행 노드
+    graph.add_node("run_additional_agents", run_additional_agents_node)
+    
+    # 모든 agent → run_additional_agents → finalize
+    graph.add_edge("run_diagnosis_agent", "run_additional_agents")
+    graph.add_edge("run_onboarding_agent", "run_additional_agents")
+    graph.add_edge("run_security_agent", "run_additional_agents")
+    graph.add_edge("run_recommend_agent", "run_additional_agents")
+    graph.add_edge("run_contributor_agent", "run_additional_agents")
+    graph.add_edge("run_additional_agents", "finalize_answer")
     graph.add_edge("chat_response", "update_session")
     
     # finalize → update_session
@@ -1026,5 +1493,8 @@ async def run_supervisor(
         "session_id": final_state.get("session_id"),
         "final_answer": final_state.get("final_answer"),
         "suggested_actions": final_state.get("suggested_actions", []),
-        "awaiting_clarification": final_state.get("awaiting_clarification", False)
+        "awaiting_clarification": final_state.get("awaiting_clarification", False),
+        "target_agent": final_state.get("target_agent"),
+        "agent_result": final_state.get("agent_result"),
+        "needs_clarification": final_state.get("needs_clarification", False),
     }

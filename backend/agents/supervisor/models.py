@@ -153,6 +153,9 @@ class SupervisorState(BaseModel):
     # === 에이전트 실행 ===
     agent_params: Dict[str, Any] = Field(default_factory=dict, description="에이전트 파라미터")
     agent_result: Optional[Dict[str, Any]] = Field(default=None, description="에이전트 실행 결과")
+    additional_agents: List[str] = Field(default_factory=list, description="추가 실행할 에이전트들")
+    security_result: Optional[Dict[str, Any]] = Field(default=None, description="보안 분석 결과")
+    multi_agent_results: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="멀티 에이전트 결과")
     
     # === 응답 ===
     final_answer: Optional[str] = Field(default=None, description="최종 응답")

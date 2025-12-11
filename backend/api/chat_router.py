@@ -312,6 +312,34 @@ def _summarize_agent_result(agent_result: Optional[Any]) -> Optional[Dict[str, A
                 "critical_count": sum(1 for v in vulns if v.get("severity") == "critical"),
                 "high_count": sum(1 for v in vulns if v.get("severity") == "high")
             }
+        
+        # ContributorGuide 요약
+        elif agent_result.get("type") == "contributor" or "features" in agent_result:
+            features = agent_result.get("features", {})
+            return {
+                "type": "contributor",
+                "has_guide": bool(features.get("first_contribution_guide")),
+                "has_checklist": bool(features.get("contribution_checklist")),
+                "has_community_analysis": bool(features.get("community_analysis")),
+                "has_issue_matching": bool(features.get("issue_matching"))
+            }
+        
+        # RecommendResult 요약
+        elif agent_result.get("type") == "recommend" or "recommendations" in agent_result:
+            recs = agent_result.get("recommendations", [])
+            return {
+                "type": "recommend",
+                "total_recommendations": len(recs),
+                "top_match": recs[0].get("full_name") if recs else None
+            }
+        
+        # CompareResult 요약
+        elif agent_result.get("type") == "compare" or "compare_results" in agent_result:
+            return {
+                "type": "compare",
+                "repos_compared": len(agent_result.get("compare_repos", [])),
+                "has_summary": bool(agent_result.get("compare_summary"))
+            }
     
     return {"type": "unknown", "data": str(agent_result)[:100]}
 
@@ -348,6 +376,22 @@ def _generate_suggestions(result: Dict[str, Any]) -> List[str]:
         elif target_agent == "security":
             suggestions.append("심각한 취약점만 보여줘")
             suggestions.append("해결 방법 추천해줘")
+        
+        # Contributor 결과 기반 추천
+        elif target_agent == "contributor":
+            suggestions.append("Good First Issue 추천해줘")
+            suggestions.append("커뮤니티 활동 분석해줘")
+            suggestions.append("코드 구조 보여줘")
+        
+        # Recommend 결과 기반 추천
+        elif target_agent == "recommend":
+            suggestions.append("첫 번째 프로젝트 자세히 분석해줘")
+            suggestions.append("다른 기준으로 추천해줘")
+        
+        # Compare 결과 기반 추천
+        elif target_agent == "compare":
+            suggestions.append("가장 적합한 프로젝트는?")
+            suggestions.append("각 프로젝트 장단점 요약해줘")
         
         # 기본 추천
         if not suggestions:

@@ -395,6 +395,46 @@ async def generate_plan_node(state: OnboardingState) -> Dict[str, Any]:
     }
 
 
+@safe_node(default_updates={"similar_projects": []})
+async def fetch_recommendations_node(state: OnboardingState) -> Dict[str, Any]:
+    """유사 프로젝트 추천 가져오기 (Recommend 에이전트 호출)"""
+    
+    # 추천 포함 여부 확인 (기본값: True)
+    if not state.get("include_recommendations", True):
+        logger.info("[Onboarding Agent] Skipping recommendations (disabled)")
+        return {
+            "similar_projects": [],
+            "execution_path": state.get("execution_path", "") + " → fetch_recommendations(skipped)"
+        }
+    
+    logger.info(f"[Onboarding Agent] Fetching recommendations for {state['owner']}/{state['repo']}")
+    
+    try:
+        from backend.agents.recommend.agent.graph import run_recommend
+        
+        result = await run_recommend(
+            owner=state["owner"],
+            repo=state["repo"],
+            user_message=state.get("user_message")
+        )
+        
+        # 상위 5개 추천만 가져옴
+        recommendations = result.get("recommendations", [])[:5]
+        
+        logger.info(f"[Onboarding Agent] Fetched {len(recommendations)} recommendations")
+        
+        return {
+            "similar_projects": recommendations,
+            "execution_path": state.get("execution_path", "") + " → fetch_recommendations"
+        }
+    except Exception as e:
+        logger.warning(f"[Onboarding Agent] Failed to fetch recommendations: {e}")
+        return {
+            "similar_projects": [],
+            "execution_path": state.get("execution_path", "") + " → fetch_recommendations(error)"
+        }
+
+
 @safe_node(default_updates={"summary": "", "result": {}})
 async def summarize_node(state: OnboardingState) -> Dict[str, Any]:
     """LLM을 사용하여 온보딩 플랜을 자연어로 요약 - 리스크 포함"""
@@ -455,6 +495,12 @@ async def summarize_node(state: OnboardingState) -> Dict[str, Any]:
         "decision_reasoning": state.get("agent_decision", {}).get("reasoning", ""),
     }
     
+    # 유사 프로젝트 추천 결과 추가
+    similar_projects = state.get("similar_projects", [])
+    if similar_projects:
+        result_dict["similar_projects"] = similar_projects
+        logger.info(f"[Onboarding Agent] Including {len(similar_projects)} similar projects in result")
+    
     return {
         "summary": summary,
         "result": result_dict,
@@ -506,17 +552,20 @@ def build_onboarding_graph():
     """
     Onboarding StateGraph 빌드 (하이브리드 패턴)
     
-    향상된 흐름:
+    향상된 흐름 (Recommend 통합):
     parse_intent → analyze_diagnosis → assess_risks → fetch_issues → generate_plan
-                                                                        ↓
-                                                            [check_error_and_route]
-                                                                   /          \\
-                                                         summarize    error_handler
-                                                              ↓              ↓
-                                                            END            END
+                                                                         ↓
+                                                                 fetch_recommendations
+                                                                         ↓
+                                                             [check_error_and_route]
+                                                                    /          \\
+                                                          summarize    error_handler
+                                                               ↓              ↓
+                                                             END            END
     
     특징:
     - 모든 노드에 @safe_node 데코레이터로 예외 처리
+    - fetch_recommendations로 유사 프로젝트도 함께 가져옴
     - generate_plan 후 에러 체크로 조건부 분기 (LangGraph 장점 활용)
     - 각 노드가 독립적인 판단을 수행하는 에이전트 방식
     """
@@ -529,8 +578,9 @@ def build_onboarding_graph():
     graph.add_node("assess_risks", assess_risks_node)
     graph.add_node("fetch_issues", fetch_issues_node)
     graph.add_node("generate_plan", generate_plan_node)
+    graph.add_node("fetch_recommendations", fetch_recommendations_node)  # 추천 노드 추가
     graph.add_node("summarize", summarize_node)
-    graph.add_node("error_handler", error_handler_node)  # 에러 핸들러 추가
+    graph.add_node("error_handler", error_handler_node)
     
     # 기본 순차 흐름
     graph.set_entry_point("parse_intent")
@@ -538,10 +588,11 @@ def build_onboarding_graph():
     graph.add_edge("analyze_diagnosis", "assess_risks")
     graph.add_edge("assess_risks", "fetch_issues")
     graph.add_edge("fetch_issues", "generate_plan")
+    graph.add_edge("generate_plan", "fetch_recommendations")  # 플랜 생성 후 추천 가져오기
     
-    # generate_plan 후 조건부 분기 (LangGraph 장점)
+    # fetch_recommendations 후 조건부 분기 (LangGraph 장점)
     graph.add_conditional_edges(
-        "generate_plan",
+        "fetch_recommendations",
         check_error_and_route,
         {
             "continue": "summarize",
@@ -578,7 +629,8 @@ async def run_onboarding_graph(
     diagnosis_summary: str = "",
     user_context: Optional[Dict[str, Any]] = None,
     user_message: Optional[str] = None,
-    ref: str = "main"
+    ref: str = "main",
+    include_recommendations: bool = True
 ) -> Dict[str, Any]:
     """
     Onboarding Graph 실행
@@ -591,9 +643,10 @@ async def run_onboarding_graph(
         user_context: 사용자 컨텍스트
         user_message: 사용자 메시지 (의도 파싱용)
         ref: 브랜치/태그
+        include_recommendations: 유사 프로젝트 추천 포함 여부 (기본값: True)
     
     Returns:
-        OnboardingOutput dict with agent_analysis
+        OnboardingOutput dict with agent_analysis and optional similar_projects
     """
     graph = get_onboarding_graph()
     
@@ -613,6 +666,9 @@ async def run_onboarding_graph(
         "onboarding_risks": None,
         "plan_config": None,
         "agent_decision": None,
+        # 추천 관련 필드 초기화
+        "similar_projects": None,
+        "include_recommendations": include_recommendations,
         # 결과 필드
         "result": None,
         "error": None,

@@ -32,6 +32,10 @@ class OnboardingState(TypedDict):
     plan_config: Optional[Dict[str, Any]]  # 플랜 설정 (weeks, issues_per_week 등)
     agent_decision: Optional[Dict[str, Any]]  # 에이전트 결정 로그
     
+    # 추천 관련 필드 (Recommend 에이전트 통합)
+    similar_projects: Optional[List[Dict[str, Any]]]  # 유사 프로젝트 추천 결과
+    include_recommendations: bool  # 추천 포함 여부 (기본값: True)
+    
     # 결과 필드
     result: Optional[Dict[str, Any]]
     error: Optional[str]

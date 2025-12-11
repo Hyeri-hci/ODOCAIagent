@@ -49,10 +49,10 @@ def run_security_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
         return {"error": "Security LLM settings not configured"}
 
     try:
-        from backend.agents.security.agent.security_agent_v2 import SecurityAgentV2
+        from backend.agents.security.agent.security_agent import SecurityAgent
 
         execution_mode = "fast" if mode == "FAST" else "intelligent"
-        agent = SecurityAgentV2(
+        agent = SecurityAgent(
             llm_base_url=SECURITY_LLM_BASE_URL or "",
             llm_api_key=SECURITY_LLM_API_KEY or "",
             llm_model=SECURITY_LLM_MODEL,
@@ -92,7 +92,7 @@ def run_security_agent(state: SupervisorState, mode: str) -> Dict[str, Any]:
         return result
 
     except Exception as e:
-        logger.error(f"Security Agent V2 failed: {e}")
+        logger.error(f"Security Agent failed: {e}")
         return {"error": str(e)}
 
 
