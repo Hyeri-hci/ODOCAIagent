@@ -466,3 +466,49 @@ def analyze_docs(
 ) -> DocsCoreResult:
     """Wrapper for analyze_documentation using RepoSnapshot"""
     return analyze_documentation(snapshot.readme_content, custom_required_sections)
+
+
+def extract_and_structure_summary_input(readme_content: str) -> Optional[str]:
+    """
+    [헬퍼 함수] README를 구조 분석하여 LLM 요약에 필요한 핵심 정보만 추출하고 구조화합니다.
+    """
+    if not readme_content or not readme_content.strip():
+        return None
+
+    sections = split_readme_into_sections(readme_content)
+    
+    # 1) 분류 (Classification)
+    categories = []
+    for sec in sections:
+        cls = _classify_section_rule_based(sec)
+        categories.append(cls.category)
+
+    # 2) 마지막 섹션 보정 (Bias)
+    if categories:
+        last_idx = len(categories) - 1
+        categories[last_idx] = _apply_last_section_bias(categories[last_idx], sections[last_idx])
+
+    # 3) 그룹화
+    grouped = defaultdict(list)
+    for sec, cat in zip(sections, categories):
+        grouped[cat].append(sec)
+
+    total_chars = len(readme_content)
+    
+    # 4) _summarize_category_sections를 사용한 정보 추출 및 구조화
+    structured_output = []
+    
+    for cat in CATEGORY_PRIORITY:
+        info = _summarize_category_sections(cat, grouped.get(cat, []), total_chars)
+        
+        if info.present and info.summary:
+            # LLM에게 전달할 구조화된 텍스트 포맷: 카테고리와 추출된 요약 내용
+            structured_output.append(f"[{cat.value} CATEGORY SUMMARY]\n{info.summary}")
+            
+            if cat == ReadmeCategory.HOW and info.example_snippets:
+                 structured_output.append(f"[{cat.value} EXAMPLE SNIPPET]\n{info.example_snippets[0]}")
+    
+    if not structured_output:
+        return readme_content[:2000] # 분석이 실패하면 원본 텍스트 앞부분을 fallback으로 사용
+
+    return "\n\n".join(structured_output)
