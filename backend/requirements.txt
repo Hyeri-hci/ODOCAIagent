@@ -4,6 +4,7 @@ python-dotenv
 langgraph
 langchain
 langchain-core
+langchain-text-splitters
 pytest
 fastapi
 uvicorn[standard]

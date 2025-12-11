@@ -29,13 +29,35 @@ export const useAnalysisStream = ({
     sessionId,
     analysisResult,
     addMessage,
-    setIsTyping
+    setIsTyping,
+    sessionRepo = null // 세션에 저장된 저장소 정보 (fallback용)
   ) => {
     const repoUrl = analysisResult?.repositoryUrl;
-    const { owner, repo } = parseGitHubUrl(repoUrl);
+    let { owner, repo } = parseGitHubUrl(repoUrl);
+
+    // analysisResult에서 추출 실패 시, sessionRepo에서 복원 시도
+    if ((!owner || !repo) && sessionRepo) {
+      owner = sessionRepo.owner;
+      repo = sessionRepo.repo;
+      console.log("[Stream] Using sessionRepo fallback:", owner, repo);
+    }
+
+    // 그래도 없으면 메시지에서 추출 시도
+    if (!owner || !repo) {
+      const urlInMessage = userMessage.match(
+        /(?:https?:\/\/)?(?:www\.)?github\.com\/([\w-]+)\/([\w.-]+)/i
+      );
+      if (urlInMessage) {
+        owner = urlInMessage[1];
+        repo = urlInMessage[2].replace(/\.git$/, "");
+        console.log("[Stream] Extracted from message:", owner, repo);
+      }
+    }
 
     if (!owner || !repo) {
-      console.warn("저장소 정보가 없습니다. 일반 대화 모드로 진행합니다.");
+      console.warn(
+        "저장소 정보가 없습니다. 백엔드에서 clarification 요청이 올 수 있습니다."
+      );
     }
 
     setStreamingMessage("");
@@ -123,7 +145,8 @@ export const useAnalysisStream = ({
                 );
                 const repoUrl =
                   analysisResult?.repositoryUrl ||
-                  `https://github.com/${owner || resultOwner}/${repo || resultRepo
+                  `https://github.com/${owner || resultOwner}/${
+                    repo || resultRepo
                   }`;
                 const updatedResult = transformApiResponse(
                   { analysis: agent_result },
@@ -202,18 +225,24 @@ export const useAnalysisStream = ({
 
               // 기여자 가이드 결과 처리
               if (target_agent === "contributor" && agent_result) {
-                console.log("기여자 가이드 결과 받음 (스트리밍):", agent_result);
+                console.log(
+                  "기여자 가이드 결과 받음 (스트리밍):",
+                  agent_result
+                );
 
                 const features = agent_result.features || {};
 
                 setAnalysisResult((prev) => ({
                   ...prev,
                   contributorGuide: agent_result,
-                  firstContributionGuide: features.first_contribution_guide || null,
-                  contributionChecklist: features.contribution_checklist || null,
+                  firstContributionGuide:
+                    features.first_contribution_guide || null,
+                  contributionChecklist:
+                    features.contribution_checklist || null,
                   communityAnalysis: features.community_analysis || null,
                   issueMatching: features.issue_matching || null,
-                  structureVisualization: features.structure_visualization || null,
+                  structureVisualization:
+                    features.structure_visualization || null,
                 }));
               }
 
@@ -244,6 +273,24 @@ export const useAnalysisStream = ({
                 }));
               }
             }
+            break;
+          }
+
+          case "clarification": {
+            // 명확화 요청 (저장소 선택, 경험 수준 등)
+            console.log("명확화 요청:", data.message);
+            setIsStreaming(false);
+            setStreamingMessage("");
+
+            const clarificationResponse = {
+              id: `ai_${Date.now()}`,
+              role: "assistant",
+              content: data.message || "추가 정보가 필요합니다.",
+              timestamp: new Date(),
+              isClarification: true, // 명확화 요청 표시
+            };
+            addMessage(clarificationResponse);
+            setIsTyping(false);
             break;
           }
 

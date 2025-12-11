@@ -301,26 +301,44 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
         }
     
     # 2-2. 단독 프로젝트명 (예: "react 분석해줘")
-    if not detected_repo:
+    # 이미 분석 중인 저장소가 있으면, 단일 단어를 프로젝트명으로 오인하지 않도록 스킵 (LLM이 문맥 전환 판단)
+    # 단, "이제 jquery 분석해줘" 처럼 명시적으로 새로운 분석을 요청하는 경우는 LLM 단계에서 처리됨
+    has_existing_repo = False
+    last_mentioned = accumulated_context.get("last_mentioned_repo", {})
+    if last_mentioned.get("owner") and last_mentioned.get("repo"):
+        has_existing_repo = True
+        logger.info(f"Existing repo in session: {last_mentioned['owner']}/{last_mentioned['repo']}")
+    else:
+        logger.info("No existing repo in session accumulated_context")
+
+    if not detected_repo and not has_existing_repo:
         exclude_keywords = [
-            "분석", "진단", "해줘", "해주세요", "찾아", "알려", 
+            # 동사/형용사/조사
+            "분석", "진단", "해줘", "해주세요", "찾아", "알려", "주세요",
             "보여", "전체", "건강도", "온보딩", "보안", "취약점",
             "이", "저장소", "프로젝트", "라는", "를", "을", "좀",
-            "뭐야", "뭔가", "어때", "어떻게", "어떤"
+            "뭐야", "뭔가", "어때", "어떻게", "어떤", "지금", "이제", "그럼",
+            "혹시", "비슷한", "추천", "좋은", "처음", "점수", "결과", 
+            "문서", "문서화", "액티비티", "활동", "커뮤니티", "구조", "파악",
+            "대화", "질문", "답변", "설명", "실행", "시작", "방법", "기여",
+            "이슈", "추천해", "여기", "거기", "저기", "그거", "이거"
         ]
         
         words = user_message.split()
         potential_project = None
         
         for word in words:
-            word_clean = word.strip().rstrip("?!는란이가을를").lower()
-            if len(word_clean) >= 2 and word_clean[0].isalpha():
-                if word_clean not in exclude_keywords:
-                    potential_project = word_clean
-                    break
+            # 특수문자 제거 및 소문자 변환 (한국어 조사 제거 강화)
+            word_clean = word.strip().rstrip("?!.,는란이가을를은도에서로부터와과의").lower()
+            
+            # 2글자 이상이고, 제외 키워드가 아니며, 숫자로만 구성되지 않은 경우
+            if len(word_clean) >= 2 and word_clean not in exclude_keywords:
+                # 영어/슷자 혼용이거나, 한글이어도 명사형일 가능성
+                potential_project = word_clean
+                break
         
-        if potential_project and len(potential_project) >= 2:
-            logger.info(f"Searching for project: {potential_project}")
+        if potential_project:
+            logger.info(f"Searching for project (initial context): {potential_project}")
             try:
                 search_results = search_repositories(potential_project, max_results=5)
                 
@@ -354,8 +372,7 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     
     # 2-3. last_mentioned_repo에서 복원
     if not detected_repo:
-        last_mentioned = accumulated_context.get("last_mentioned_repo", {})
-        if last_mentioned.get("owner") and last_mentioned.get("repo"):
+        if has_existing_repo:
             detected_owner = last_mentioned["owner"]
             detected_repo = last_mentioned["repo"]
             logger.info(f"Using last mentioned repo: {detected_owner}/{detected_repo}")
@@ -396,6 +413,7 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
                             "needs_clarification": False,
                             "clarification_questions": [],
                             "target_agent": "diagnosis",
+                            "additional_agents": ["security"], # 기본 진단 시 보안 포함
                             "owner": selected["owner"],
                             "repo": selected["repo"],
                             "accumulated_context": new_context
@@ -465,14 +483,23 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
         }
     
     # === 5단계: 세션 컨텍스트 구성 ===
+    # last_mentioned_repo 우선, 없으면 state의 owner/repo 사용
+    context_owner = state["owner"]
+    context_repo = state["repo"]
+    
+    if has_existing_repo:
+        context_owner = last_mentioned["owner"]
+        context_repo = last_mentioned["repo"]
+        logger.info(f"Using session repo for context: {context_owner}/{context_repo}")
+    
     session_context = {
-        "owner": state["owner"],
-        "repo": state["repo"],
+        "owner": context_owner,
+        "repo": context_repo,
         "ref": state.get("ref", "main"),
         "conversation_history": conversation_history,
         "accumulated_context": accumulated_context,
         "pronoun_detected": pronoun_detected,
-        "detected_repo": f"{detected_owner}/{detected_repo}" if detected_owner else None
+        "detected_repo": f"{detected_owner}/{detected_repo}" if detected_owner else f"{context_owner}/{context_repo}" if context_owner and context_repo else None
     }
     
     # === 6단계: LLM 의도 파싱 ===
@@ -488,6 +515,7 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     if needs_clarification:
         logger.info(f"Clarification needed: {clarification_questions}")
     
+    # 결과 구성
     result = {
         "supervisor_intent": intent.dict(),
         "needs_clarification": needs_clarification,
@@ -520,6 +548,14 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
         result["owner"] = detected_owner
         result["repo"] = detected_repo
         logger.info(f"Using pre-detected repo: {detected_owner}/{detected_repo}")
+        
+    # [사용자 규칙] 진단 요청 시 보안 분석도 함께 수행
+    if result.get("target_agent") == "diagnosis":
+        additional = result.get("additional_agents") or []
+        if "security" not in additional:
+            additional.append("security")
+            result["additional_agents"] = additional
+            logger.info("Added security agent to diagnosis request (Global Rule)")
     
     return result
 
@@ -1297,6 +1333,20 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
         execution_time_ms=0  # TraceManager 연동 시 측정 가능
     )
     
+    # accumulated_context의 last_mentioned_repo 등을 세션에 저장
+    accumulated_ctx = state.get("accumulated_context", {})
+    if accumulated_ctx:
+        last_mentioned = accumulated_ctx.get("last_mentioned_repo")
+        if last_mentioned:
+            session.update_context("last_mentioned_repo", last_mentioned)
+            logger.info(f"Stored last_mentioned_repo in session: {last_mentioned.get('full_name')}")
+        
+        # user_profile도 저장 (경험 수준 등)
+        user_profile = accumulated_ctx.get("user_profile")
+        if user_profile:
+            session.update_context("user_profile", user_profile)
+            logger.info(f"Stored user_profile in session: {user_profile}")
+    
     session_store.update_session(session)
     logger.info(f"Session updated: {session_id}")
     
@@ -1506,6 +1556,14 @@ async def run_supervisor(
     
     graph = get_supervisor_graph()
     
+    # 세션 ID가 없으면 미리 생성 (LangGraph Checkpointer에 thread_id가 필요함)
+    if not session_id:
+        from backend.common.session import get_session_store
+        session_store = get_session_store()
+        session = session_store.create_session(owner=owner, repo=repo, ref=ref)
+        session_id = session.session_id
+        logger.info(f"Initialized new session in run_supervisor: {session_id}")
+    
     from typing import cast
     initial_state: SupervisorState = cast(SupervisorState, {
         "session_id": session_id,
@@ -1532,7 +1590,10 @@ async def run_supervisor(
         "trace_id": None
     })
     
-    final_state = await graph.ainvoke(initial_state)
+    # checkpointer 설정 (thread_id 필수)
+    config = {"configurable": {"thread_id": session_id}}
+    
+    final_state = await graph.ainvoke(initial_state, config=config)
     
     return {
         "session_id": final_state.get("session_id"),

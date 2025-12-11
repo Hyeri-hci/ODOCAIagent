@@ -139,11 +139,15 @@ class SupervisorIntentParserV2(IntentParserBase):
 
 1. task_type 결정:
    - "분석", "진단", "건강도", "점수" → diagnosis
-   - "온보딩", "가이드" → onboarding
+   - "온보딩", "가이드", "기여 방법", "기여하려면", "시작하려면", "어떻게 시작", "기여 시작" → onboarding
    - "보안", "취약점", "CVE" → security
-   - "첫 기여", "Good First Issue", "이슈 추천", "기여 체크리스트", "코드 구조", "커뮤니티 활동", "폴더 구조", "첫 PR" → contributor
+   - "Good First Issue", "이슈 추천", "좋은 이슈", "기여 체크리스트", "코드 구조", "커뮤니티 활동", "폴더 구조", "첫 PR" → contributor
    - "비교해줘", "알려줘", "설명해줘" → general_chat
    - 정보가 부족하면 → clarification
+   
+   **중요: onboarding vs contributor 구분**
+   - "기여 방법", "어떻게 시작", "시작 가이드" → onboarding (전반적인 가이드/플랜)
+   - "이슈 추천", "Good First Issue", "기여 체크리스트" → contributor (구체적인 이슈/체크리스트)
 
 2. additional_agents (복합 의도 감지):
    - 여러 작업을 요청하면 main task를 target_agent에, 나머지를 additional_agents에 포함
@@ -151,17 +155,25 @@ class SupervisorIntentParserV2(IntentParserBase):
    - 예: "분석하고 기여 방법도 알려줘" → target_agent="diagnosis", additional_agents=["onboarding"]
    - 단일 작업이면 → additional_agents=[]
 
-3. needs_clarification:
-   - 저장소가 명시되지 않고 세션에도 없으면 → true
-   - 요청이 모호하면 → true
-   - 예: "분석해줘" (어떤 저장소?)
-   - ⚠️ 단, 대명사가 감지되고 컨텍스트에 데이터가 있으면 → false
+3. needs_clarification (중요!):
+   **저장소 명확화 기준:**
+   - 메시지에 저장소가 명시되어 있거나 → false
+   - 세션 컨텍스트에 owner/repo가 있으면 (예: "Repository: facebook/react") → false
+   - 대명사("이", "저", "그", "해당")가 있고 세션에 저장소 정보가 있으면 → false (암묵적 참조)
+   - 메시지에도 없고 세션에도 없으면 → true (어떤 저장소인지 물어봐야 함)
    
    **온보딩/기여 요청 시 사용자 수준 확인:**
-   - task_type이 "onboarding"이고 사용자 경험 수준이 명시되지 않았으면 → needs_clarification = true
-   - clarification_questions에 다음 추가: "프로그래밍 경험 수준을 알려주세요: 1) 입문자 2) 중급자 3) 숙련자"
-   - 예: "온보딩 플랜 만들어줘" → 수준을 먼저 물어봄
-   - 예: "초보자 관점에서 온보딩 플랜 만들어줘" → 수준이 명시되어 바로 진행
+   - task_type이 "onboarding" 또는 "contributor"이고
+   - 사용자 경험 수준이 명시되지 않았고 (메시지에 "입문자", "초보자", "beginner" 등 없음)
+   - 세션에 user_profile.experience_level도 없으면
+   → needs_clarification = true
+   → clarification_questions에 추가: "프로그래밍 경험 수준을 알려주세요: 1) 입문자 2) 중급자 3) 숙련자"
+   
+   **예시:**
+   - "진단해줘" + 세션에 facebook/react 있음 → needs_clarification = false
+   - "이 저장소에 기여하려면?" + 세션에 microsoft/vscode 있음 → needs_clarification = false
+   - "온보딩 플랜 만들어줘" + 저장소 없음 → needs_clarification = true (저장소 물어봄)
+   - "facebook/react 온보딩 플랜" → needs_clarification = false (저장소 있음, 경험수준은 선택사항으로 기본값 사용)
 
 3. uses_previous_context:
    - "그거", "더 자세히", "다시", "아까" 등 → true
