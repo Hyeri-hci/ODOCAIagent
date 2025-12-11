@@ -68,6 +68,7 @@ similarity_search_prompt = ChatPromptTemplate.from_messages([
     ### 규칙 (Strict)
     1. **Query (검색어)**:
        - 기준 리포지토리의 이름(예: LangChain) 자체를 검색어로 쓰지 마십시오. (그 프로젝트를 찾는 게 아니라 '비슷한 것'을 찾는 것이므로)
+       - 쿼리로 비슷한 프로젝트 이런 내용를 쓰지 마십시오. similar projects(X) 이런 경우는 쿼리를 비워두세요
        - 대신 **그 프로젝트가 무엇인지 정의하는 기술적 명사구**를 만드십시오.
        - 예시 상황:
          - Context: LangChain (LLM framework)

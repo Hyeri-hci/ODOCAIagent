@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Dict, List
 import requests
 
-from config.setting import settings
+from backend.agents.recommend.config.setting import settings
 from .base import LLMClient, ChatRequest, ChatResponse, ChatMessage
 
 class OpenAILikeClient(LLMClient):

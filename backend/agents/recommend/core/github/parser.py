@@ -2,7 +2,7 @@
 
 from typing import Dict, List, Any, Union
 from datetime import datetime
-from core.github.schema import RepoSchema, ParsedRepo, ParsedIssue, ParsedPullRequest, ParsedCommit
+from backend.agents.recommend.core.github.schema import RepoSchema, ParsedRepo, ParsedIssue, ParsedPullRequest, ParsedCommit
 
 class GitHubParser:
     """

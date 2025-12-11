@@ -1,6 +1,6 @@
 import re
 from typing import Dict, Tuple, Optional
-from config.setting import settings
+from backend.agents.recommend.config.setting import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -73,10 +73,6 @@ def parse_github_query(query_json: Dict) -> Tuple[str, Optional[str], Optional[s
 
     # 3. 품질 조건 추가 로직
     q_parts = q.split()
-    other = query_json.get("other")
-    
-    # 💡 [로그] 추가적인 필터 조건
-    print(f"   - 'other' conditions received (LLM Filter Tool): {other}")
 
     min_conditions = {
         "stars": f"stars:>={settings.github.DEFAULT_MIN_STARS}",
@@ -118,4 +114,4 @@ def parse_github_query(query_json: Dict) -> Tuple[str, Optional[str], Optional[s
     print(f"   - Sort/Order: {sort}/{order}")
     print("-------------------------------------------------------")
 
-    return final_q, sort, order, other
+    return final_q, sort, order

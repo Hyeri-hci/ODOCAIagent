@@ -2,8 +2,8 @@
 
 import json
 from typing import Dict, Tuple, Optional
-from core.search.llm_query_generator import generate_github_query, correct_github_query
-from core.search.llm_query_parser import parse_github_query
+from backend.agents.recommend.core.search.llm_query_generator import generate_github_query, correct_github_query
+from backend.agents.recommend.core.search.llm_query_parser import parse_github_query
 
 async def search_query_generator(user_input: str) -> Dict:
     """
@@ -38,15 +38,14 @@ async def search_query_generator(user_input: str) -> Dict:
 
         # 2. JSON → API 파라미터 변환 + 최소 품질 적용
         try:
-            q, sort, order, other = parse_github_query(query_json)
+            q, sort, order = parse_github_query(query_json)
             
             # 파싱 및 검증 성공 -> 즉시 반환
             print(f"   [Step 2/{max_attempts}] Final API query constructed: q='{q[:30]}...'")
             return {
                 "q": q,
                 "sort": sort,
-                "order": order,
-                "other": other
+                "order": order
             }
             
         except Exception as e:
@@ -62,4 +61,4 @@ async def search_query_generator(user_input: str) -> Dict:
                 break # 최종 실패
 
     # 모든 시도 실패 시 최종 반환
-    return {"q": "", "sort": None, "order": None, "other": None}
+    return {"q": "", "sort": None, "order": None}

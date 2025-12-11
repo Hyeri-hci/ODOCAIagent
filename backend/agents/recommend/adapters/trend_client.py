@@ -27,7 +27,7 @@ class GitHubTrendClient:
         self, 
         language: Optional[str] = None, 
         period: TrendingPeriod = TrendingPeriod.WEEKLY,
-        limit: int = 25
+        limit: int = 10
     ) -> List[Dict[str, Any]]:
         """
         메인 메서드: API 우선 시도 -> 실패 시 크롤링

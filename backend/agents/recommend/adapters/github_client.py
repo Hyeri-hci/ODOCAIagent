@@ -4,8 +4,8 @@ from github import Github
 from github import GithubObject
 from github.Auth import Token
 from typing import List, Any
-from config.setting import settings
-from core.github.schema import GitHubSearchInput
+from backend.agents.recommend.config.setting import settings
+from backend.agents.recommend.core.github.schema import GitHubSearchInput
 
 class GitHubClient:
     """

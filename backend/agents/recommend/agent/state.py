@@ -9,7 +9,7 @@ class CandidateRepo(BaseModel):
     State의 'search_results' 리스트에 들어갈 객체입니다.
     """
     # --- 1. GitHub 기본 정보 (Metadata) ---
-    id: int = Field(..., description="GitHub Repository ID")
+    id: int = Field(0, description="GitHub Repository ID")
     name: str = Field(..., description="Repository Name (e.g., 'langchain')")
     owner: str = Field(..., description="Repository Owner")
 
@@ -71,6 +71,20 @@ class FocusedParsingResult(BaseModel):
     user_intent: SearchIntent = Field(description="사용자 요청의 핵심 의도 분류.")
     quantitative_filters: List[QuantitativeCondition] = Field(description="정량적 필터 조건의 리스트.")
 
+class FinalRecommendation(BaseModel):
+    """
+    최종 사용자 응답을 위한 스키마: 프로젝트 정보와 AI 분석 결과만 포함.
+    (CandidateRepo에서 최종 필터링/평가 후 생성됨)
+    """
+    name: str = Field(..., description="프로젝트 이름")
+    owner: str = Field(..., description="프로젝트 소유자")
+    url: str = Field(..., description="GitHub URL")
+    
+    simple_summary: str = Field(..., description="프로젝트의 간결한 한 줄 요약 (사용자 요청 기반)")
+    
+    ai_score: int = Field(0, description="LLM 평가 점수 (0-100)")
+    ai_reason: str = Field(..., description="LLM이 평가한 최종 추천 근거 (왜 이 프로젝트를 추천하는지)")
+
 class RecommendState(BaseModel):
     """추천 LangGraph 상태 모델."""
 
@@ -95,12 +109,16 @@ class RecommendState(BaseModel):
     # readme 요약
     readme_summary: Optional[Dict[str, Any]] = None
 
-    # RAG 검색용 결과 저장소
-    search_query: str = ""
+    # RAG 검색 결과 저장소
+    search_query: str = "" 
     search_keywords: List[str] = []
-    search_filters: Dict[str, Any] = {}
+    search_filters: Optional[Dict[str, Any]] = None
+
+    github_seach_query: Optional[Dict[str, Any]] = None
 
     search_results: List[CandidateRepo] = Field(default_factory=list)
+
+    final_results: List[FinalRecommendation] = Field(default_factory=list, description="최종 사용자에게 보여줄 추천 결과 목록")
     
     # 에러 및 복구
     error: Optional[str] = None

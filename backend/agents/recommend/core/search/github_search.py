@@ -1,7 +1,7 @@
 import logging
-from adapters.github_client import github_instance as client
-from core.github.parser import GitHubParser
-from core.github.schema import GitHubSearchInput
+from backend.agents.recommend.adapters.github_client import github_instance as client
+from backend.agents.recommend.core.github.parser import GitHubParser
+from backend.agents.recommend.core.github.schema import GitHubSearchInput
 from typing import List, Dict
 
 logger = logging.getLogger(__name__)

@@ -5,7 +5,7 @@ import asyncio
 from typing import Dict, Any, List, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate 
-from config.setting import settings 
+from backend.agents.recommend.config.setting import settings 
 
 logger = logging.getLogger(__name__)
 

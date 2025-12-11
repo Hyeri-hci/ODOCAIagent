@@ -4,8 +4,8 @@ import json
 import asyncio
 import logging
 from typing import Dict, List
-from adapters.llm_client.llm_client import ChatMessage, llm_chat
-from utils.date import DateUtilsUTC
+from backend.agents.recommend.adapters.llm_client.llm_client import ChatMessage, llm_chat
+from backend.agents.recommend.utils.date import DateUtilsUTC
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +40,6 @@ GitHub 검색 쿼리 변환기입니다. 사용자 요청을 분석하여 정확
 2. **임의 필터 창조 금지**:
     - 사용자가 숫자를 명시하지 않았다면 `stars`, `forks`, `pushed` 조건을 스스로 추가하지 마세요. (Clean Search)
 
-3. **토큰 분리**: `many_issues` 같은 추상적 조건은 `q`에 넣지 말고 `other`로 빼세요.
-
 4. **구분자 준수**: `q` 내부의 모든 조건은 반드시 **공백(Space)**으로 구분하세요.
 
 # 규칙 (Rules)
@@ -64,37 +62,13 @@ GitHub 검색 쿼리 변환기입니다. 사용자 요청을 분석하여 정확
 
 2. **지표 및 날짜 (`q`) - 우선순위 준수**:
     - **1순위 (구체적 기간)**: "1년 내", "지난달", "최근 3개월" 등 **수치**가 있으면 해당 기간을 계산하세요. (기준일: {today_date})
-      - 업데이트(pushed), 생성일(created)만 q 항목에 추가하세요. 나머지(prs, issues, commits)는 other에 적용시키세요.
+      - 업데이트(pushed), 생성일(created)만 q 항목에 추가하세요.
     - **2순위 (단순 최근)**: 수치 없이 그냥 "최근(recent)"이라고만 하면 **6개월 전** 날짜를 적용하세요.
     - **범위 연산자**: 이상(>=), 이하(<=), 초과(>), 미만(<), 특정 범위(..)
 
 3. **`other` 필드 작성 규칙 (Filter Tool용)**:
     - 검색 API(`q`)로 해결되지 않는 **이슈, PR, 커밋, 활동성** 관련 조건은 여기서 처리합니다.
     - **형식**: `{{action}}_{{target}}_{{duration/number}}` (Snake Case)
-    
-    **[사용 가능한 키워드 조합]**
-    - **Target**: `issues`, `prs`, `commits`
-    - **Action**: 
-      - `many`: 약 50개 이상 (활발한 프로젝트)
-      - `few`: 5개 이하 (안정적/적은 버그)
-      - `has`: 1개 이상 (존재 여부)
-    - **Suffix (선택)**:
-      - `_recently`: 최근 6개월 기준
-      - `_recently_1y`: 최근 1년 기준
-      - `_recently_3m`: 최근 3개월 기준
-      - `_{{숫자}}`: 구체적인 숫자 (예: `_30` -> 30개 이상)
-
-    **[매핑 예시 테이블]**
-    - "이슈 많은" -> `many_issues`
-    - "PR이 활발한" -> `many_prs`
-    - "커밋이 많은" -> `many_commits`
-    - "최근(1년) 커밋이 많은" -> `many_commits_recently_1y`
-    - "최근 활동이 있는" -> `has_commits_recently`
-    - "PR이 30개 이상인" -> `has_prs_30`
-    - "버그(이슈)가 적은" -> `few_issues`
-
-    - 여러 개일 경우 **공백**으로 연결 (예: `"few_issues many_commits"`).
-    - 없는 경우는 무조건 `null`.
 
 4. **정렬 (`sort`, `order`) - [상세 가이드]**:
     - **사용자의 의도가 명확할 때만 설정하세요.** (모호하면 `null` -> 정확도순 정렬)
@@ -120,29 +94,7 @@ Output:
   "other": null
 }}
 
-**Case 2: 초보자 + 기간 + 커밋 복합**
-Input: "초보자가 하기 좋고 최근 1년 내 커밋이 활발한 Python 프로젝트"
-Output:
-```json
-{{
-  "q": "language:python good-first-issues:>5",
-  "sort": null,
-  "order": null,
-  "other": "many_commits_recently_1y"
-}}
-
-**Case 3: 구체적 숫자 및 정렬**
-Input: "PR이 100개 넘게 쌓여있는 Django 프로젝트, 최신순으로"
-Output:
-```json
-{{
-  "q": "topic:django",
-  "sort": "updated",
-  "order": "desc",
-  "other": "has_prs_100"
-}}
-
-**Case 4: 정렬 및 기간**
+**Case 2: 정렬 및 기간**
 Input: "최근 한 달 내에 업데이트된 인기있는 Go 툴"
 Output:
 ```json
@@ -151,17 +103,6 @@ Output:
   "sort": "stars",
   "order": "desc",
   "other": null
-}}
-
-**Case 5: 특정 조건 없이 메타데이터만 요구 (중요)**
-Input: "PR이 10개 이상 쌓여있는 프로젝트"
-Output:
-```json
-{{
-  "q": "",
-  "sort": null,
-  "order": null,
-  "other": "has_prs_10"
 }}
 """
     
@@ -233,7 +174,7 @@ async def correct_github_query(original_request: str, failed_content: str, error
     1. **문법 수정**: 이전 응답에서 JSON 파싱 오류(따옴표, 이스케이프 오류 등)를 **반드시** 수정하세요.
     2. **의미 수정 (Semantic Correction)**: 이전 쿼리(`q` 필드)에 **핵심 키워드 필터(`topic:`, `language:`, `stars:`)**가 누락되었거나 일반 텍스트로 잘못 변환되었다면, **원래 사용자 요청의 의도**에 맞게 이들을 **`topic:` 필터로 복원**하세요.
        - 예시: 'topic:"machine learning" library'로 나와야 할 것이 'machine learning library'처럼 일반 키워드로만 남지 않도록 주의.
-    3. 모든 규칙(q 필드 작성 규칙, other 필드 등)은 원본 시스템 프롬프트를 따릅니다.
+    3. 모든 규칙은 원본 시스템 프롬프트를 따릅니다.
     4. JSON 객체만 반환하세요. 다른 설명은 절대 포함하지 마세요.
     """
     
@@ -250,7 +191,7 @@ async def correct_github_query(original_request: str, failed_content: str, error
         )
     except Exception as e:
         logger.error(f"[GitHubQueryCorrec] LLM Call Failed during correction: {e}")
-        return {"q": "", "sort": None, "order": None, "other": None} # 실패 시 최소 쿼리
+        return {"q": "", "sort": None, "order": None} # 실패 시 최소 쿼리
 
     content = response.content.strip()
     
@@ -268,4 +209,4 @@ async def correct_github_query(original_request: str, failed_content: str, error
         return query_dict
     except json.JSONDecodeError as e:
         logger.error(f"[GitHubQueryCorrec] Correction failed to produce valid JSON: {e}")
-        return {"q": "", "sort": None, "order": None, "other": None}
+        return {"q": "", "sort": None, "order": None}

@@ -6,7 +6,7 @@ from typing import Optional
 
 from .base import LLMClient
 from .openai_like import OpenAILikeClient
-from config.setting import settings
+from backend.agents.recommend.config.setting import settings
 
 _client: Optional[LLMClient] = None
 
