@@ -2,7 +2,7 @@
 Security Agent V2 사용 예제
 """
 import asyncio
-from agent.security_agent_v2 import SecurityAgentV2, quick_analysis
+from agent.security_agent import SecurityAgent, quick_analysis
 
 
 async def example_1_full_analysis():
@@ -11,7 +11,7 @@ async def example_1_full_analysis():
     print("Example 1: Full Security Analysis")
     print("="*70)
 
-    agent = SecurityAgentV2(execution_mode="intelligent")
+    agent = SecurityAgent(execution_mode="intelligent")
 
     result = await agent.analyze(
         user_request="facebook/react 레포지토리의 전체 보안 분석을 수행해줘",
@@ -31,7 +31,7 @@ async def example_2_dependency_only():
     print("Example 2: Extract Dependencies Only")
     print("="*70)
 
-    agent = SecurityAgentV2(execution_mode="auto")
+    agent = SecurityAgent(execution_mode="auto")
 
     result = await agent.analyze(
         user_request="torvalds/linux의 의존성만 추출해줘"
@@ -47,7 +47,7 @@ async def example_3_vulnerability_scan():
     print("Example 3: Vulnerability Scan")
     print("="*70)
 
-    agent = SecurityAgentV2(execution_mode="intelligent")
+    agent = SecurityAgent(execution_mode="intelligent")
 
     result = await agent.analyze(
         user_request="django/django에서 심각도가 HIGH 이상인 취약점을 찾아줘"
@@ -81,7 +81,7 @@ async def example_5_specific_files():
     print("Example 5: Analyze Specific Files")
     print("="*70)
 
-    agent = SecurityAgentV2()
+    agent = SecurityAgent()
 
     result = await agent.analyze(
         user_request="facebook/react의 package.json과 package-lock.json만 분석해줘"
@@ -97,7 +97,7 @@ async def example_6_custom_request():
     print("Example 6: Custom Request")
     print("="*70)
 
-    agent = SecurityAgentV2(
+    agent = SecurityAgent(
         execution_mode="intelligent",
         max_iterations=30,  # 복잡한 작업에 더 많은 반복 허용
         enable_reflection=True  # 메타인지 활성화
@@ -123,7 +123,7 @@ async def example_7_fast_mode():
     print("Example 7: Fast Mode (Rule-Based)")
     print("="*70)
 
-    agent = SecurityAgentV2(execution_mode="fast")
+    agent = SecurityAgent(execution_mode="fast")
 
     result = await agent.analyze_simple(
         primary_action="extract_dependencies",

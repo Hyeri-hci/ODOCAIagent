@@ -5,7 +5,7 @@ LLM-Based Dynamic Planner
 from typing import Dict, Any, List, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from .state_v2 import SecurityAnalysisStateV2, TaskIntent, ExecutionPlan
+from .state import SecurityAnalysisState, TaskIntent, ExecutionPlan
 import json
 import re
 
@@ -141,7 +141,7 @@ Parameters: {parameters}
 
     async def create_plan(
         self,
-        state: SecurityAnalysisStateV2
+        state: SecurityAnalysisState
     ) -> Dict[str, Any]:
         """
         동적 실행 계획 생성
@@ -255,7 +255,7 @@ Parameters: {parameters}
                 "suggestions": []
             }
 
-    def _create_default_plan(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
+    def _create_default_plan(self, state: SecurityAnalysisState) -> Dict[str, Any]:
         """기본 계획 생성 (LLM 실패시 폴백) - 4가지 시나리오 명확히 구분"""
         intent = state.get("parsed_intent")
         primary_action = intent["primary_action"] if intent else "analyze_all"
@@ -409,7 +409,7 @@ Parameters: {parameters}
 
     async def replan(
         self,
-        state: SecurityAnalysisStateV2,
+        state: SecurityAnalysisState,
         reason: str
     ) -> Dict[str, Any]:
         """

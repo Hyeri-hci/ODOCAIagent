@@ -130,9 +130,9 @@ class AgentV2Verifier:
         # 1.6 Main Agent 초기화
         test_name = "Security Agent V2 Initialization"
         try:
-            from agent.security_agent_v2 import SecurityAgentV2
+            from agent.security_agent import SecurityAgent
 
-            agent = SecurityAgentV2(execution_mode="fast")
+            agent = SecurityAgent(execution_mode="fast")
             assert agent.intent_parser is not None
             assert agent.planner is not None
             assert agent.executor is not None
@@ -313,9 +313,9 @@ class AgentV2Verifier:
         # 3.1 자율성 (Autonomy)
         test_name = "Autonomy - Self-Directed Execution"
         try:
-            from agent.security_agent_v2 import SecurityAgentV2
+            from agent.security_agent import SecurityAgent
 
-            agent = SecurityAgentV2(execution_mode="fast")
+            agent = SecurityAgent(execution_mode="fast")
 
             # 에이전트가 자체적으로 계획을 수립하는가?
             assert hasattr(agent, 'planner')
@@ -401,10 +401,10 @@ class AgentV2Verifier:
         # 3.4 목표 지향성 (Goal-Oriented)
         test_name = "Goal-Oriented - Task Completion"
         try:
-            from agent.security_agent_v2 import SecurityAgentV2
+            from agent.security_agent import SecurityAgent
             from agent.state_v2 import create_initial_state_v2
 
-            agent = SecurityAgentV2()
+            agent = SecurityAgent()
 
             # 완료 조건이 정의되어 있는가?
             state = create_initial_state_v2("test")
@@ -447,9 +447,9 @@ class AgentV2Verifier:
         # 3.6 LLM 통합 확인
         test_name = "LLM Integration"
         try:
-            from agent.security_agent_v2 import SecurityAgentV2
+            from agent.security_agent import SecurityAgent
 
-            agent = SecurityAgentV2()
+            agent = SecurityAgent()
 
             # LLM이 통합되어 있는가?
             assert agent.llm is not None

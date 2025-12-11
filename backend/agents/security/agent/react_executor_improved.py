@@ -6,7 +6,7 @@ ReAct Executor (Improved)
 from typing import Dict, Any, List, Optional, Callable
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from .state_v2 import SecurityAnalysisStateV2, update_thought, update_action, update_observation
+from .state import SecurityAnalysisState, update_thought, update_action, update_observation
 from datetime import datetime
 import json
 import re
@@ -200,7 +200,7 @@ class ReActExecutor:
 
     async def execute_react_cycle(
         self,
-        state: SecurityAnalysisStateV2
+        state: SecurityAnalysisState
     ) -> Dict[str, Any]:
         """
         ReAct 사이클 1회 실행 (개선)
@@ -304,7 +304,7 @@ class ReActExecutor:
 
     async def _act_with_fallback(
         self,
-        state: SecurityAnalysisStateV2,
+        state: SecurityAnalysisState,
         tool_name: str,
         parameters: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -352,7 +352,7 @@ class ReActExecutor:
 
         return result
 
-    async def _think(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
+    async def _think(self, state: SecurityAnalysisState) -> Dict[str, Any]:
         """사고 단계"""
         print("[ReAct] THINK phase...")
 
@@ -412,7 +412,7 @@ class ReActExecutor:
 
     async def _act(
         self,
-        state: SecurityAnalysisStateV2,
+        state: SecurityAnalysisState,
         tool_name: str,
         parameters: Dict[str, Any]
     ) -> Dict[str, Any]:
@@ -477,7 +477,7 @@ class ReActExecutor:
 
     async def _observe(
         self,
-        state: SecurityAnalysisStateV2,
+        state: SecurityAnalysisState,
         action_name: str,
         parameters: Dict[str, Any],
         action_result: Dict[str, Any]
@@ -531,7 +531,7 @@ class ReActExecutor:
 
         return observation_data
 
-    async def reflect(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
+    async def reflect(self, state: SecurityAnalysisState) -> Dict[str, Any]:
         """
         메타인지: 진행 상황 반성 및 전략 조정
 
@@ -586,7 +586,7 @@ class ReActExecutor:
                 "need_human_help": False
             }
 
-    def _fallback_think(self, state: SecurityAnalysisStateV2) -> Dict[str, Any]:
+    def _fallback_think(self, state: SecurityAnalysisState) -> Dict[str, Any]:
         """LLM 실패시 폴백 사고 (개선)"""
         print("[ReAct]   Using fallback thinking (rule-based)...")
 
@@ -666,7 +666,7 @@ class ReActExecutor:
             # JSON이 아닌 경우 텍스트로 반환
             return {"raw_response": content}
 
-    def should_continue(self, state: SecurityAnalysisStateV2) -> bool:
+    def should_continue(self, state: SecurityAnalysisState) -> bool:
         """
         계속 실행할지 판단 (개선)
 

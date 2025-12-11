@@ -7,7 +7,7 @@ import re
 from typing import Dict, Any, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
-from .state_v2 import TaskIntent
+from .state import TaskIntent
 
 
 class IntentParser:

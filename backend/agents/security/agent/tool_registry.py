@@ -3,7 +3,7 @@ Tool Registry - Fixed Version
 모든 도구를 등록하고 LLM이 사용할 수 있도록 관리 (Import 오류 수정)
 """
 from typing import Dict, Any, Callable, List
-from .state_v2 import SecurityAnalysisStateV2
+from .state import SecurityAnalysisState
 from ..vulnerability.nvd_client import NvdClient
 import requests
 import base64
@@ -105,7 +105,7 @@ def register_tool(name: str, description: str, category: str = "general"):
     "Fetch basic repository information (stars, forks, language, etc.)",
     "github"
 )
-async def fetch_repository_info(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def fetch_repository_info(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """레포지토리 기본 정보 가져오기"""
     owner = kwargs.get("owner") or state.get("owner")
     repo = kwargs.get("repo") or state.get("repository")
@@ -139,7 +139,7 @@ async def fetch_repository_info(state: SecurityAnalysisStateV2, **kwargs) -> Dic
     "Fetch content of a specific file from repository",
     "github"
 )
-async def fetch_file_content(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def fetch_file_content(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """특정 파일 내용 가져오기"""
     owner = kwargs.get("owner") or state.get("owner")
     repo = kwargs.get("repo") or state.get("repository")
@@ -168,7 +168,7 @@ async def fetch_file_content(state: SecurityAnalysisStateV2, **kwargs) -> Dict[s
     "Fetch directory structure of repository",
     "github"
 )
-async def fetch_directory_structure(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def fetch_directory_structure(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """디렉토리 구조 가져오기"""
     owner = kwargs.get("owner") or state.get("owner")
     repo = kwargs.get("repo") or state.get("repository")
@@ -199,7 +199,7 @@ async def fetch_directory_structure(state: SecurityAnalysisStateV2, **kwargs) ->
     "Detect dependency lock files in repository",
     "dependency"
 )
-async def detect_lock_files(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def detect_lock_files(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """의존성 락 파일 감지"""
     owner = kwargs.get("owner") or state.get("owner")
     repo = kwargs.get("repo") or state.get("repository")
@@ -241,7 +241,7 @@ async def detect_lock_files(state: SecurityAnalysisStateV2, **kwargs) -> Dict[st
     "Parse package.json to extract Node.js dependencies",
     "dependency"
 )
-async def parse_package_json(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def parse_package_json(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """package.json 파싱"""
     owner = kwargs.get("owner") or state.get("owner")
     repo = kwargs.get("repo") or state.get("repository")
@@ -278,7 +278,7 @@ async def parse_package_json(state: SecurityAnalysisStateV2, **kwargs) -> Dict[s
     "Parse requirements.txt to extract Python dependencies",
     "dependency"
 )
-async def parse_requirements_txt(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def parse_requirements_txt(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """requirements.txt 파싱"""
     owner = kwargs.get("owner") or state.get("owner")
     repo = kwargs.get("repo") or state.get("repository")
@@ -321,7 +321,7 @@ async def parse_requirements_txt(state: SecurityAnalysisStateV2, **kwargs) -> Di
     "Parse Pipfile to extract Python dependencies",
     "dependency"
 )
-async def parse_pipfile(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def parse_pipfile(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """Pipfile 파싱"""
     return {"success": True, "dependencies": {}, "total_count": 0, "ecosystem": "pipenv"}
 
@@ -331,7 +331,7 @@ async def parse_pipfile(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, A
     "Parse Gemfile to extract Ruby dependencies",
     "dependency"
 )
-async def parse_gemfile(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def parse_gemfile(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """Gemfile 파싱"""
     return {"success": True, "dependencies": {}, "total_count": 0, "ecosystem": "gem"}
 
@@ -341,7 +341,7 @@ async def parse_gemfile(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, A
     "Parse Cargo.toml to extract Rust dependencies",
     "dependency"
 )
-async def parse_cargo_toml(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def parse_cargo_toml(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """Cargo.toml 파싱"""
     return {"success": True, "dependencies": {}, "total_count": 0, "ecosystem": "cargo"}
 
@@ -351,7 +351,7 @@ async def parse_cargo_toml(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str
     "Parse all dependency files in repository (requirements.txt, package.json, pyproject.toml)",
     "dependency"
 )
-async def parse_dependencies(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def parse_dependencies(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """
     의존성 파일 파싱 (dependencies_core.py 사용)
 
@@ -439,7 +439,7 @@ async def parse_dependencies(state: SecurityAnalysisStateV2, **kwargs) -> Dict[s
     "Search CVE vulnerabilities by product and version",
     "vulnerability"
 )
-async def search_cve_by_cpe(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def search_cve_by_cpe(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """
     Product/Version으로 CVE 검색
 
@@ -484,7 +484,7 @@ async def search_cve_by_cpe(state: SecurityAnalysisStateV2, **kwargs) -> Dict[st
     "Fetch detailed information about a specific CVE",
     "vulnerability"
 )
-async def fetch_cve_details(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def fetch_cve_details(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """
     CVE ID로 상세 정보 조회
 
@@ -512,7 +512,7 @@ async def fetch_cve_details(state: SecurityAnalysisStateV2, **kwargs) -> Dict[st
     "Assess vulnerability severity",
     "vulnerability"
 )
-async def assess_severity(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def assess_severity(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """취약점 심각도 평가 (Mock)"""
     return {"success": True, "severity": "LOW", "score": 3.0}
 
@@ -522,7 +522,7 @@ async def assess_severity(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str,
     "Search vulnerabilities for all dependencies in state",
     "vulnerability"
 )
-async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def search_vulnerabilities(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """
     전체 의존성에 대한 취약점 검색 (nvd_client.py 사용)
 
@@ -660,7 +660,7 @@ async def search_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Di
     "Check license compatibility",
     "assessment"
 )
-async def check_license_compatibility(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def check_license_compatibility(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """라이센스 호환성 체크 (Mock)"""
     return {"success": True, "compatible": True, "violations": []}
 
@@ -670,7 +670,7 @@ async def check_license_compatibility(state: SecurityAnalysisStateV2, **kwargs) 
     "Calculate overall security score based on vulnerability severity",
     "assessment"
 )
-async def calculate_security_score(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def calculate_security_score(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """
     보안 점수 계산
 
@@ -750,7 +750,7 @@ async def calculate_security_score(state: SecurityAnalysisStateV2, **kwargs) -> 
     "Generate comprehensive security analysis report",
     "report"
 )
-async def generate_security_report(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def generate_security_report(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """보안 분석 보고서 생성"""
     report = f"""
 # Security Analysis Report
@@ -785,7 +785,7 @@ async def generate_security_report(state: SecurityAnalysisStateV2, **kwargs) -> 
     "Generate brief summary",
     "report"
 )
-async def generate_summary(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def generate_summary(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """요약 생성"""
     summary = f"""Security Analysis Summary: {state.get('owner')}/{state.get('repository')}
 Dependencies: {state.get('dependency_count', 0)}
@@ -802,7 +802,7 @@ Grade: {state.get('security_grade', 'N/A')}"""
     "Parse dependencies from a specific file (package.json, requirements.txt, etc.)",
     "dependency"
 )
-async def parse_file_dependencies(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def parse_file_dependencies(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """
     특정 파일의 의존성만 파싱 (CPE/NVD 조회 하지 않음)
 
@@ -866,7 +866,7 @@ async def parse_file_dependencies(state: SecurityAnalysisStateV2, **kwargs) -> D
     "Search vulnerabilities for dependencies in a specific file",
     "vulnerability"
 )
-async def search_file_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def search_file_vulnerabilities(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """
     특정 파일의 의존성에 대한 취약점 조회
 
@@ -911,7 +911,7 @@ async def search_file_vulnerabilities(state: SecurityAnalysisStateV2, **kwargs) 
     "Complete dependency analysis (without vulnerability scanning)",
     "dependency"
 )
-async def analyze_dependencies_full(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def analyze_dependencies_full(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """전체 의존성 분석"""
     # 1. 락 파일 감지
     lock_result = await detect_lock_files(state)
@@ -951,7 +951,7 @@ async def analyze_dependencies_full(state: SecurityAnalysisStateV2, **kwargs) ->
     "Complete vulnerability scan for all dependencies",
     "vulnerability"
 )
-async def scan_vulnerabilities_full(state: SecurityAnalysisStateV2, **kwargs) -> Dict[str, Any]:
+async def scan_vulnerabilities_full(state: SecurityAnalysisState, **kwargs) -> Dict[str, Any]:
     """
     전체 의존성에 대한 취약점 스캔
 
