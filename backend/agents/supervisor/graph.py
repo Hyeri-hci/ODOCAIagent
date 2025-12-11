@@ -138,6 +138,25 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     conversation_history = state.get("conversation_history", [])
     accumulated_context = dict(state.get("accumulated_context", {}))
     
+    # === user_message가 없으면 기본 진단으로 라우팅 ===
+    if not user_message.strip():
+        logger.info("No user message provided, defaulting to diagnosis")
+        return {
+            "supervisor_intent": {
+                "task_type": "diagnosis",
+                "target_agent": "diagnosis",
+                "needs_clarification": False,
+                "confidence": 1.0,
+                "reasoning": "No user message, defaulting to diagnosis"
+            },
+            "needs_clarification": False,
+            "clarification_questions": [],
+            "target_agent": "diagnosis",
+            "detected_intent": "diagnose_repo",
+            "intent_confidence": 1.0,
+            "decision_reason": "No user message provided"
+        }
+    
     # === 0단계: force_diagnosis 체크 ===
     # /api/analyze/stream에서도 키워드 기반으로 적절한 에이전트 라우팅
     if user_context.get("force_diagnosis"):
@@ -858,6 +877,16 @@ async def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
     """일반 채팅 응답"""
     logger.info("Generating chat response")
     
+    user_message = state.get("user_message") or ""
+    
+    # user_message가 비어있으면 기본 응답
+    if not user_message.strip():
+        answer = "안녕하세요! 저장소 분석이나 질문이 있으시면 말씀해주세요."
+        return {
+            "agent_result": {"type": "chat", "response": answer},
+            "final_answer": answer
+        }
+    
     try:
         from backend.llm.factory import fetch_llm_client
         from backend.llm.base import ChatRequest, ChatMessage
@@ -868,7 +897,7 @@ async def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
         
         request = ChatRequest(
             messages=[
-                ChatMessage(role="user", content=state["user_message"])
+                ChatMessage(role="user", content=user_message)
             ]
         )
         
@@ -877,7 +906,7 @@ async def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
     except Exception as e:
         logger.warning(f"LLM call failed, using fallback: {e}")
         # Fallback 응답
-        answer = f"질문을 받았습니다: {state['user_message']}\n\n저장소 정보가 필요한 경우 owner와 repo를 지정해주세요."
+        answer = f"질문을 받았습니다: {user_message}\n\n저장소 정보가 필요한 경우 owner와 repo를 지정해주세요."
     
     return {
         "agent_result": {"type": "chat", "response": answer},

@@ -121,7 +121,7 @@ class SupervisorState(BaseModel):
     
     # === 의도 분석 ===
     supervisor_intent: Optional[Dict[str, Any]] = Field(default=None, description="분석된 의도")
-    target_agent: Optional[Literal["diagnosis", "onboarding", "security", "chat", "none"]] = Field(
+    target_agent: Optional[Literal["diagnosis", "onboarding", "security", "recommend", "contributor", "chat", "none"]] = Field(
         default=None, description="대상 에이전트"
     )
     detected_intent: Optional[str] = Field(default=None, description="감지된 의도")
