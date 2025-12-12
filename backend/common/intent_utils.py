@@ -157,6 +157,16 @@ def summarize_session_context(session_context: Dict[str, Any]) -> str:
     if last_topic:
         summary_parts.append(f"Last topic: {last_topic}")
     
+    # 마지막 의도 (대화 연속성 지원)
+    last_intent = accumulated.get("last_intent")
+    if last_intent:
+        task_type = last_intent.get("task_type", "unknown")
+        needs_clarification = last_intent.get("needs_clarification", False)
+        if needs_clarification:
+            summary_parts.append(f"🔄 Last intent: {task_type} (clarification 요청 중)")
+        else:
+            summary_parts.append(f"🔄 Last intent: {task_type}")
+    
     return "\n".join(summary_parts) if summary_parts else "없음"
 
 

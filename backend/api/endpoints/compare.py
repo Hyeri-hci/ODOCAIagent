@@ -92,7 +92,8 @@ async def compare_repositories(request: CompareRequest) -> CompareResponse:
         initial_state_dict["detected_intent"] = "compare"
         initial_state_dict["compare_repos"] = repos
         
-        result = graph.invoke(SupervisorState(**initial_state_dict), config=config)
+        # 비동기 노드를 사용하므로 ainvoke 사용 필수
+        result = await graph.ainvoke(SupervisorState(**initial_state_dict), config=config)
         
         comparison_data = {
             "repositories": {},

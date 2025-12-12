@@ -40,6 +40,14 @@ class DependencyInfo:
     version: Optional[str]
     source: str  # requirements.txt, package.json 등
     dep_type: Literal["runtime", "dev", "optional"]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "version": self.version,
+            "source": self.source,
+            "dep_type": self.dep_type,
+        }
 
 
 @dataclass
@@ -57,6 +65,16 @@ class DependenciesSnapshot:
     @property
     def runtime_count(self) -> int:
         return len([d for d in self.dependencies if d.dep_type == "runtime"])
+    
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "repo_id": self.repo_id,
+            "dependencies": [d.to_dict() for d in self.dependencies],
+            "analyzed_files": self.analyzed_files,
+            "parse_errors": self.parse_errors,
+            "total_count": self.total_count,
+            "runtime_count": self.runtime_count,
+        }
 
 # Alias for backward compatibility
 DependencySnapshot = DependenciesSnapshot

@@ -95,18 +95,27 @@ class KananaWrapper:
         
         for attempt in range(max_retries):
             try:
-                response_text = self._call_llm(system_prompt, user_prompt, temperature=0.5)
+                # 재시도 시 temperature 점진적으로 낮추기 (0.5 -> 0.3 -> 0.1)
+                current_temp = max(0.1, 0.5 - (attempt * 0.2))
+                response_text = self._call_llm(system_prompt, user_prompt, temperature=current_temp)
                 
-                # Clean up markdown code blocks
+                # Clean up markdown code blocks (강화된 클리닝)
                 cleaned_text = response_text.strip()
+                
+                # 마크다운 코드 블록 제거
                 if cleaned_text.startswith("```json"):
                     cleaned_text = cleaned_text[7:]
-                if cleaned_text.startswith("```"):
+                elif cleaned_text.startswith("```"):
                     cleaned_text = cleaned_text[3:]
                 if cleaned_text.endswith("```"):
                     cleaned_text = cleaned_text[:-3]
                 cleaned_text = cleaned_text.strip()
                 
+                # 추가 클리닝: JSON 배열 시작/끝 찾기
+                start_idx = cleaned_text.find('[')
+                end_idx = cleaned_text.rfind(']')
+                if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+                    cleaned_text = cleaned_text[start_idx:end_idx+1]
                 
                 plan = json.loads(cleaned_text)
                 

@@ -876,7 +876,7 @@ async def analyze_repository_stream_get(
                 ("structure", 55, "구조 분석 중..."),
                 ("structure", 65, "의존성 분석 중..."),
                 ("scoring", 75, "분석 결과 종합 중..."),
-                ("scoring", 82, "AI가 플랜 생성 중..."),
+                ("scoring", 82, "AI가 결과 요약 중..."),
             ]
             
             for step, pct, msg in progress_updates:

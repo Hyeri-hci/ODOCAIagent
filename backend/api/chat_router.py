@@ -9,6 +9,7 @@ from typing import Optional, List, Dict, Any
 import logging
 import asyncio
 import json
+from dataclasses import is_dataclass, asdict
 
 from backend.agents.supervisor.graph import run_supervisor
 from backend.common.session import get_session_store
@@ -17,6 +18,30 @@ from backend.common.async_utils import retry_with_backoff, GracefulDegradation
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
+
+
+# === Custom JSON Encoder ===
+
+class DataclassJSONEncoder(json.JSONEncoder):
+    """Dataclass 객체를 JSON으로 직렬화하는 인코더"""
+    def default(self, obj):
+        if is_dataclass(obj) and not isinstance(obj, type):
+            # dataclass 인스턴스면 to_dict() 있으면 사용, 없으면 asdict()
+            if hasattr(obj, 'to_dict'):
+                return obj.to_dict()
+            return asdict(obj)
+        # set을 list로
+        if isinstance(obj, set):
+            return list(obj)
+        # bytes를 str로
+        if isinstance(obj, bytes):
+            return obj.decode('utf-8', errors='replace')
+        return super().default(obj)
+
+
+def safe_json_dumps(obj: Any) -> str:
+    """안전한 JSON 직렬화 (dataclass 지원)"""
+    return json.dumps(obj, cls=DataclassJSONEncoder, ensure_ascii=False)
 
 
 # === Request/Response Models ===
@@ -209,42 +234,81 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                 logger.warning(f"Empty message in streaming request")
                 yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
                 error_occurred = True
-            elif not request.owner or not request.repo:
-                error_msg = "저장소 정보(owner, repo)가 필요합니다"
-                logger.warning(f"Missing repo info: owner={request.owner}, repo={request.repo}")
-                yield f"data: {json.dumps({'type': 'error', 'message': error_msg})}\n\n"
-                error_occurred = True
             else:
+                # owner/repo가 unknown이어도 supervisor가 메시지에서 URL 감지 또는 clarification 처리
+                owner = request.owner if request.owner and request.owner != "unknown" else ""
+                repo = request.repo if request.repo and request.repo != "unknown" else ""
+                
                 # Supervisor 실행
                 try:
-                    logger.info(f"Starting streaming supervisor: message='{request.message[:50]}...', owner={request.owner}, repo={request.repo}")
+                    logger.info(f"Starting streaming supervisor: message='{request.message[:50]}...', owner={owner or 'None'}, repo={repo or 'None'}")
+                    
+                    # 의도 분석 단계 이벤트
+                    yield f"data: {json.dumps({'type': 'processing', 'step': 'parse_intent', 'message': '의도 분석 중...'})}\n\n"
                     
                     result = await run_supervisor(
                         user_message=request.message,
                         session_id=request.session_id,
-                        owner=request.owner,
-                        repo=request.repo
+                        owner=owner,
+                        repo=repo
                     )
                     
                     # 진행 이벤트 (단계별)
                     if result.get("awaiting_clarification"):
-                        yield f"data: {json.dumps({'type': 'clarification', 'message': result.get('final_answer', '')})}\n\n"
+                        yield f"data: {json.dumps({'type': 'clarification', 'message': result.get('final_answer', ''), 'session_id': result.get('session_id', '')})}\n\n"
                     else:
-                        yield f"data: {json.dumps({'type': 'processing', 'agent': 'supervisor'})}\n\n"
+                        # target_agent에 따라 적절한 step 메시지 전송
+                        target_agent = result.get("target_agent")
+                        step_mapping = {
+                            "diagnosis": ("run_diagnosis_agent", "프로젝트 진단 중..."),
+                            "onboarding": ("run_onboarding_agent", "온보딩 플랜 생성 중..."),
+                            "security": ("run_security_agent", "보안 취약점 분석 중..."),
+                            "contributor": ("run_contributor_agent", "기여 가이드 생성 중..."),
+                            "recommend": ("run_recommend_agent", "추천 생성 중..."),
+                        }
+                        step_info = step_mapping.get(target_agent, ("finalize_answer", "응답 생성 중..."))
+                        yield f"data: {json.dumps({'type': 'processing', 'step': step_info[0], 'message': step_info[1]})}\n\n"
+                        
+                        # 대용량 저장소 경고가 있으면 먼저 전송
+                        large_repo_warning = result.get("large_repo_warning")
+                        if large_repo_warning:
+                            yield f"data: {json.dumps({'type': 'warning', 'message': large_repo_warning})}\n\n"
                         
                         # 최종 응답
+                        # 진단 결과는 diagnosis_result 우선, 그 외는 agent_result
+                        target_agent_for_result = result.get("target_agent")
+                        if target_agent_for_result == "diagnosis":
+                            main_agent_result = result.get("diagnosis_result") or result.get("agent_result")
+                        else:
+                            main_agent_result = result.get("agent_result")
+                        
                         response_data = {
                             "type": "answer",
                             "session_id": result.get("session_id", "unknown"),
                             "answer": result.get("final_answer", ""),
                             "suggestions": _generate_suggestions(result),
+                            # 저장소 정보 (프론트엔드 동기화용)
+                            "repo_info": {
+                                "owner": result.get("owner"),
+                                "repo": result.get("repo"),
+                            } if result.get("owner") and result.get("repo") else None,
                             "context": {
-                                "target_agent": result.get("target_agent"),
-                                "agent_result_summary": _summarize_agent_result(result.get("agent_result")),
-                                "agent_result": result.get("agent_result")
+                                "target_agent": target_agent_for_result,
+                                "agent_result_summary": _summarize_agent_result(main_agent_result),
+                                "agent_result": main_agent_result,
+                                # 멀티 에이전트 결과 (진단+보안 동시 실행 시)
+                                "multi_agent_results": result.get("multi_agent_results", {}),
+                                # 보안 분석 결과 (단독 필드)
+                                "security_result": result.get("security_result") or result.get("multi_agent_results", {}).get("security"),
+                                # 온보딩 결과 (단독 필드)
+                                "onboarding_result": result.get("onboarding_result") or result.get("multi_agent_results", {}).get("onboarding"),
+                                # 구조 시각화 결과
+                                "structure_visualization": result.get("structure_visualization"),
+                                # 대용량 저장소 경고
+                                "large_repo_warning": large_repo_warning,
                             }
                         }
-                        yield f"data: {json.dumps(response_data)}\n\n"
+                        yield f"data: {safe_json_dumps(response_data)}\n\n"
                     
                 except Exception as e:
                     logger.error(f"Supervisor execution failed in stream: {e}", exc_info=True)
@@ -354,7 +418,12 @@ def _generate_suggestions(result: Dict[str, Any]) -> List[str]:
         
         suggestions = []
         target_agent = result.get("target_agent")
-        agent_result = result.get("agent_result")
+        
+        # 진단 결과는 diagnosis_result 우선 사용
+        if target_agent == "diagnosis":
+            agent_result = result.get("diagnosis_result") or result.get("agent_result")
+        else:
+            agent_result = result.get("agent_result")
         
         # Diagnosis 결과 기반 추천
         if target_agent == "diagnosis" and isinstance(agent_result, dict):

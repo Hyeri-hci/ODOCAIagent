@@ -202,6 +202,16 @@ def generate_mermaid_diagram(tree: Dict[str, Any], max_items: int = 30) -> str:
     node_id = 0
     item_count = 0
     
+    def sanitize_label(text: str) -> str:
+        """Mermaid 레이블에서 특수 문자 이스케이프"""
+        # 따옴표, 괄호 등 이스케이프
+        text = text.replace('"', '\\"')
+        text = text.replace('[', '(')
+        text = text.replace(']', ')')
+        text = text.replace('<', '(')
+        text = text.replace('>', ')')
+        return text
+    
     def add_node(node: Dict[str, Any], parent_id: Optional[int] = None) -> int:
         nonlocal node_id, item_count
         
@@ -214,31 +224,36 @@ def generate_mermaid_diagram(tree: Dict[str, Any], max_items: int = 30) -> str:
         
         name = node.get("name", "root")
         node_type = node.get("type", "directory")
+        safe_name = sanitize_label(name)
         
-        # 노드 스타일
+        # 노드 스타일 - 따옴표로 레이블 감싸기
         if node_type == "directory":
-            nodes.append(f"    N{current_id}[/{name}/]")
+            nodes.append(f'    N{current_id}["{safe_name}"]')
         else:
             ext = "." + name.split(".")[-1].lower() if "." in name else ""
             icon = FILE_ICONS.get(ext, "FILE")
-            nodes.append(f"    N{current_id}[{icon}: {name}]")
+            nodes.append(f'    N{current_id}["{icon}: {safe_name}"]')
         
-        # 엣지
-        if parent_id is not None:
+        # 엣지 - parent_id가 유효할 때만 추가
+        if parent_id is not None and parent_id >= 0:
             edges.append(f"    N{parent_id} --> N{current_id}")
         
-        # 자식 노드
-        for child_node in node.get("children", {}).values():
-            add_node(child_node, current_id)
+        # 자식 노드 - max_items 도달하지 않았을 때만
+        if item_count < max_items:
+            for child_node in node.get("children", {}).values():
+                if item_count >= max_items:
+                    break
+                add_node(child_node, current_id)
         
         return current_id
     
     add_node(tree)
     
-    diagram = "```mermaid\nflowchart TD\n"
+    # 코드블록 마커 없이 순수 Mermaid 코드만 반환
+    diagram = "flowchart TD\n"
     diagram += "\n".join(nodes) + "\n"
-    diagram += "\n".join(edges) + "\n"
-    diagram += "```"
+    if edges:
+        diagram += "\n".join(edges)
     
     return diagram
 
@@ -356,6 +371,14 @@ def format_structure_as_markdown(visualization: Dict[str, Any]) -> str:
     md += "```\n"
     md += visualization.get("ascii_tree", "")
     md += "```\n\n"
+    
+    # Mermaid 다이어그램 (시각적 표시)
+    mermaid_diagram = visualization.get("mermaid_diagram", "")
+    if mermaid_diagram:
+        md += "## 구조 다이어그램\n\n"
+        md += "```mermaid\n"
+        md += mermaid_diagram
+        md += "\n```\n\n"
     
     # 파일 확장자 통계
     ext_counts = analysis.get("file_extension_counts", {})
