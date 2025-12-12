@@ -91,6 +91,9 @@ class RecommendState(BaseModel):
 
     # 진행 상태
     step: int = 0
+    
+    # Supervisor에서 이미 intent를 파싱한 경우 건너뛰기
+    skip_intent_parsing: bool = Field(False, description="True면 내부 LLM intent parsing 건너뛰기 (Supervisor에서 이미 파싱됨)")
 
     # 사용자의 의도
     user_intent: str = Field("", description="LLM이 분석한 사용자의 구체적인 의도")

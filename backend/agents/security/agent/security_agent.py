@@ -135,7 +135,7 @@ class SecurityAgent:
         )
 
     async def _parse_intent_node(self, state: SecurityAnalysisState) -> Dict[str, Any]:
-        """의도 파싱 노드"""
+        """의도 파싱 노드 - Supervisor가 이미 라우팅한 경우 최적화"""
         print("\n" + "="*50)
         print("[Node: 의도 파악/Parse Intent]")
         print("="*50)
@@ -143,15 +143,37 @@ class SecurityAgent:
         user_request = state.get("user_request", "")
         print(f"User Request: {user_request}")
 
-        # 자연어 요청 파싱
-        intent = await self.intent_parser.parse_intent(user_request)
-        parameters = await self.intent_parser.extract_parameters(user_request)
-
-        # 레포지토리 정보 추출
-        owner, repo = self.intent_parser.parse_repository_info(user_request)
-
-        # 복잡도 평가
-        complexity = await self.intent_parser.assess_complexity(user_request)
+        # Supervisor로부터 전달받은 정보가 있는지 확인
+        supervisor_owner = state.get("owner")
+        supervisor_repo = state.get("repository") or state.get("repo")
+        supervisor_intent = state.get("supervisor_intent")  # supervisor에서 전달한 의도 정보
+        
+        # Supervisor가 이미 라우팅한 경우 (owner/repo가 있음) - 간소화된 파싱
+        if supervisor_owner and supervisor_repo:
+            print(f"[Optimized] Using supervisor-provided info: {supervisor_owner}/{supervisor_repo}")
+            
+            # LLM 호출 없이 기본 의도 설정 (보안 분석 요청으로 라우팅됨)
+            intent = {
+                "primary_action": supervisor_intent or "scan_vulnerabilities",
+                "scope": "full_repository",
+                "secondary_actions": [],
+                "risk_focus": [],
+                "output_format": "detailed_report",  # planner에서 필요
+                "target_files": [],
+                "conditions": [],
+                "parameters": {}
+            }
+            
+            # 복잡도는 기본값 사용
+            complexity = "moderate"
+            owner, repo = supervisor_owner, supervisor_repo
+            parameters = {}
+        else:
+            # Supervisor 정보 없음 - 전체 파싱 수행
+            intent = await self.intent_parser.parse_intent(user_request)
+            parameters = await self.intent_parser.extract_parameters(user_request)
+            owner, repo = self.intent_parser.parse_repository_info(user_request)
+            complexity = await self.intent_parser.assess_complexity(user_request)
 
         print(f"Parsed Intent: {intent['primary_action']}")
         print(f"Scope: {intent['scope']}")

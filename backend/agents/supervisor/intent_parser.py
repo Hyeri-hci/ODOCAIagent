@@ -122,9 +122,9 @@ class SupervisorIntentParserV2(IntentParserBase):
 사용자의 의도를 파악하여 다음 JSON 형식으로 반환하세요:
 
 {{
-    "task_type": "diagnosis" | "onboarding" | "security" | "contributor" | "general_chat" | "clarification",
-    "target_agent": "diagnosis" | "onboarding" | "security" | "contributor" | "chat" | "none",
-    "additional_agents": ["diagnosis", "security", "onboarding", "contributor"],
+    "task_type": "diagnosis" | "onboarding" | "security" | "recommend" | "contributor" | "general_chat" | "clarification",
+    "target_agent": "diagnosis" | "onboarding" | "security" | "recommend" | "contributor" | "chat" | "none",
+    "additional_agents": ["diagnosis", "security", "onboarding", "contributor", "recommend"],
     "needs_clarification": true | false,
     "clarification_questions": ["질문1", "질문2"],
     "uses_previous_context": true | false,
@@ -138,22 +138,39 @@ class SupervisorIntentParserV2(IntentParserBase):
 === 판단 기준 ===
 
 1. task_type 결정:
-   - "분석", "진단", "건강도", "점수" → diagnosis
-   - "온보딩", "가이드", "기여 방법", "기여하려면", "시작하려면", "어떻게 시작", "기여 시작" → onboarding
-   - "보안", "취약점", "CVE" → security
-   - "Good First Issue", "이슈 추천", "좋은 이슈", "기여 체크리스트", "코드 구조", "커뮤니티 활동", "폴더 구조", "첫 PR" → contributor
-   - "비교해줘", "알려줘", "설명해줘" → general_chat
+   - "분석", "분석해줘", "전체 분석", "진단", "건강도", "점수", "상태 확인", "건강 상태" → diagnosis
+   - "온보딩", "가이드", "기여 방법", "기여하려면", "시작하려면", "어떻게 시작", "기여 시작", "학습 플랜" → onboarding
+   - "보안", "취약점", "CVE", "취약점 분석", "보안 분석" → security
+   - "추천", "추천해줘", "비슷한 프로젝트", "유사 프로젝트", "대안", "다른 프로젝트", "비슷한 저장소", "similar" → recommend
+   - **"프로젝트 찾", "프로젝트로 알려", "오픈소스 프로젝트", "프로젝트 알려줘", "찾고 있어", "찾아줘" + "프로젝트" → recommend (중요!)**
+   - "Good First Issue", "이슈 추천", "좋은 이슈", "기여 체크리스트", "첫 PR" → contributor
+   - "커뮤니티", "커뮤니티 활동" → contributor (community_analysis 기능)
+   - "비교해줘", "알려줘", "설명해줘", "뭐야", "무엇인지" → general_chat (단, "프로젝트"와 함께 쓰이면 recommend!)
    - 정보가 부족하면 → clarification
    
-   **중요: onboarding vs contributor 구분**
-   - "기여 방법", "어떻게 시작", "시작 가이드" → onboarding (전반적인 가이드/플랜)
-   - "이슈 추천", "Good First Issue", "기여 체크리스트" → contributor (구체적인 이슈/체크리스트)
+   **!!!!! 매우 중요: recommend vs general_chat 구분 !!!!!**
+   - "오픈소스 프로젝트로 알려줘" → recommend (general_chat 아님!)
+   - "프로젝트 찾아줘", "프로젝트 추천해줘" → recommend
+   - "오픈소스", "프로젝트"가 포함된 요청 → recommend
+   - 단순한 "알려줘", "설명해줘"만 있으면 → general_chat
+   
+   **중요: "코드 구조", "폴더 구조", "구조 보기", "트리 구조" 요청 처리**
+   - 세션 컨텍스트에 diagnosis_result가 있으면 → general_chat (이전 결과 참조)
+     - uses_previous_context = true
+     - referenced_data = ["diagnosis_result", "structure_visualization"]
+   - 세션에 diagnosis_result가 없으면 → contributor (새로 가져옴)
+   
+   **중요: diagnosis vs contributor 구분**
+   - "분석해줘", "전체 분석", "진단해줘", "건강도", "상태 확인" → diagnosis (저장소 전체 진단)
+   - "첫 기여", "이슈 추천", "체크리스트" → contributor (기여자 지원)
 
 2. additional_agents (복합 의도 감지):
-   - 여러 작업을 요청하면 main task를 target_agent에, 나머지를 additional_agents에 포함
+   - **기본 규칙: 사용자가 명시적으로 여러 작업을 요청할 때만 추가**
    - 예: "진단하고 보안도 확인해줘" → target_agent="diagnosis", additional_agents=["security"]
    - 예: "분석하고 기여 방법도 알려줘" → target_agent="diagnosis", additional_agents=["onboarding"]
-   - 단일 작업이면 → additional_agents=[]
+   - **단순 분석/진단 요청은 additional_agents=[] (빈 배열)**
+   - 예: "분석해줘", "진단해줘" → target_agent="diagnosis", additional_agents=[]
+   - 보안 분석은 시스템이 자동으로 추가하므로 여기서 추가하지 않음
 
 3. needs_clarification (중요!):
    **저장소 명확화 기준:**
@@ -195,6 +212,29 @@ class SupervisorIntentParserV2(IntentParserBase):
    - "📌 Last mentioned repo: owner/repo"가 있으면 → 해당 저장소 사용
    - 메시지에 저장소 없음 + Last mentioned repo 없음 → 세션의 Repository 사용
    - 예: "진단해줘" + Last mentioned repo: microsoft/vscode → detected_repo="microsoft/vscode"
+
+7. **대화 연속성 (매우 중요!)**:
+   - 세션 컨텍스트의 "Last intent"가 있으면 대화의 연속성을 고려하세요
+   - **이전에 clarification을 요청했고 사용자가 그에 대해 대답하고 있다면:**
+     - 사용자의 응답이 이전 질문의 답변으로 보이면 → 원래 task_type 유지
+     - 예: 이전 intent가 recommend이고 clarification 질문 후 "오픈소스로 찾고 싶어"라고 답변
+       → task_type = "recommend" (general_chat 아님!)
+   - **프로젝트 찾기/추천 관련 키워드가 있으면 recommend:**
+     - "프로젝트 찾고 있어", "오픈소스 프로젝트", "프로젝트 찾아줘", "찾고 싶어" → recommend
+     - 특정 기술/분야 언급 + "프로젝트" → recommend
+   - **일반적인 대화가 아닌 작업 요청은 general_chat이 아님:**
+     - "~해줘", "~찾아줘", "~추천해줘" 같은 요청은 해당 에이전트로 라우팅
+
+=== 대화 연속성 예시 ===
+
+입력: "그런 건 따로 없고, 오픈소스 프로젝트로 찾고 싶어"
+컨텍스트: Last intent = recommend (clarification 요청 후)
+→ {{"task_type": "recommend", "target_agent": "recommend", "needs_clarification": false}}
+(NOT general_chat!)
+
+입력: "자율주행 딥러닝 프로젝트 찾아줘"
+컨텍스트: 새 세션
+→ {{"task_type": "recommend", "target_agent": "recommend"}}
 
 === 대명사 처리 예시 ===
 

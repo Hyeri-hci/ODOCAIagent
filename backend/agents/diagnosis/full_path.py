@@ -100,7 +100,11 @@ async def execute_full_path(
             "total_commits_30d": activity_dict.get("total_commits_in_window", 0),
             "unique_contributors": activity_dict.get("unique_authors", 0) or activity_dict.get("unique_contributors", 0),
             "issue_close_rate": activity_dict.get("issue_closure_ratio", 0) or activity_dict.get("issue_close_rate", 0),
+            "issue_close_rate_pct": f"{(activity_dict.get('issue_closure_ratio', 0) or activity_dict.get('issue_close_rate', 0)) * 100:.1f}%",
             "median_pr_merge_days": activity_dict.get("median_pr_merge_days"),
+            "median_pr_merge_days_text": f"{activity_dict.get('median_pr_merge_days', 0):.1f}일" if activity_dict.get('median_pr_merge_days') else "N/A",
+            "median_issue_close_days": activity_dict.get("median_issue_close_days"),
+            "median_issue_close_days_text": f"{activity_dict.get('median_issue_close_days', 0):.1f}일" if activity_dict.get('median_issue_close_days') else "N/A",
             
             # 상세 분석 (데이터클래스는 asdict 사용)
             "documentation": docs_result.__dict__ if hasattr(docs_result, '__dict__') else docs_result,

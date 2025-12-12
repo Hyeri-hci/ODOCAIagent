@@ -1,6 +1,5 @@
 # core/qdrant/schemas.py
-
-from backend.agents.recommend.config.setting import settings 
+# Qdrant 컬렉션 필드명 정의 (순환 참조 방지를 위해 settings import 제거)
 
 class RepoSchema:
     """Repository Description 컬렉션 정의"""

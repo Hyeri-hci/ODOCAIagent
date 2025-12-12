@@ -2,17 +2,28 @@
 
 from pathlib import Path
 import os
+import logging
 from typing import List, Optional, ClassVar
 from pydantic import Field
 from pydantic_settings import BaseSettings
 from pydantic import PrivateAttr, field_validator
-from langchain_upstage import UpstageEmbeddings
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
+
+# Optional import - langchain_upstage 없으면 fallback 사용
+try:
+    from langchain_upstage import UpstageEmbeddings
+    UPSTAGE_AVAILABLE = True
+except ImportError:
+    UPSTAGE_AVAILABLE = False
+    UpstageEmbeddings = None
+    logger.warning("langchain_upstage not installed. Recommend agent features will be limited.")
 
 # ==========================
 # 루트 디렉토리 기준으로 .env 로드
 # ==========================
-BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent.parent
 load_dotenv(BASE_DIR / ".env")
 
 # ==========================
@@ -36,7 +47,7 @@ class BasePaths(BaseSettings):
 # GitHub 설정 (토큰 순환 로직 개선)
 # ==========================
 class GitHubSettings(BaseSettings):
-    tokens: List[str]
+    tokens: List[str] = []
     graphql_url: str = "https://api.github.com/graphql"
     search_url: str = "https://api.github.com/search/repositories"
     base_search_query: str = 'pushed:>=2023-01-01 stars:>=50 forks:>=5'
@@ -48,15 +59,24 @@ class GitHubSettings(BaseSettings):
     _token_index: int = 0  # 순환용
 
     def __init__(self, **data):
-        tokens = [
-            os.getenv("GITHUB_TOKEN_1"),
-            os.getenv("GITHUB_TOKEN_2"),
-            os.getenv("GITHUB_TOKEN_3"),
-            os.getenv("GITHUB_TOKEN_4"),
-        ]
-        tokens = [t for t in tokens if t]
+        # 기존 GITHUB_TOKEN 우선, 그 다음 GITHUB_TOKEN_1~4 시도
+        tokens = []
+        
+        # 1. 메인 GITHUB_TOKEN 확인
+        main_token = os.getenv("GITHUB_TOKEN")
+        if main_token:
+            tokens.append(main_token)
+        
+        # 2. 추가 토큰들 확인 (순환용)
+        for i in range(1, 5):
+            token = os.getenv(f"GITHUB_TOKEN_{i}")
+            if token:
+                tokens.append(token)
+        
         if not tokens:
-            raise ValueError("No GitHub tokens found in .env")
+            logger.warning("No GitHub tokens found in .env. Recommend agent will have limited functionality.")
+            tokens = [""]  # 빈 토큰으로 fallback (일부 기능 제한)
+        
         data["tokens"] = tokens
         super().__init__(**data)
 
@@ -72,7 +92,7 @@ class GitHubSettings(BaseSettings):
 class QdrantSettings(BaseSettings):
     # 1. Field(alias="...")를 쓰면 해당 환경변수를 자동으로 찾아 매핑합니다.
     # Qdrant는 기본 포트 6333을 사용합니다.
-    host: str = os.getenv("QDRANT_HOST")
+    host: str = os.getenv("QDRANT_HOST", "localhost").strip('"')
     
     # 2. 타입이 int로 지정되어 있으므로, 문자열로 들어와도 자동으로 숫자로 변환해줍니다.
     port: int = Field(default=6333, alias="QDRANT_PORT")
@@ -121,14 +141,15 @@ class UpstageSettings(BaseSettings):
         valid_keys = [k for k in found_keys if k]
         
         if not valid_keys:
-            raise ValueError("No upstage tokens found in .env (UPSTAGE_API_1, UPSTAGE_API_2 ...)")
+            logger.warning("No upstage tokens found in .env (UPSTAGE_API_2~5). Recommend agent embedding will use fallback.")
+            return []  # 빈 리스트 반환 (fallback 사용)
         
         return valid_keys
 
     # 2. 다음 토큰 반환 (Round-Robin)
     def get_next_api(self) -> str:
         if not self.api_keys:
-            raise ValueError("API keys list is empty.")
+            raise ValueError("API keys list is empty. langchain_upstage features not available.")
             
         current_key = self.api_keys[self._api_index]
         # 인덱스 순환 업데이트
@@ -139,6 +160,8 @@ class UpstageSettings(BaseSettings):
     @property
     def passage_model(self):
         # self.api_key가 아니라 self.get_next_api()를 호출해야 함
+        if not UPSTAGE_AVAILABLE:
+            raise ImportError("langchain_upstage is not installed. Recommend agent requires this package.")
         return UpstageEmbeddings(
             api_key=self.get_next_api(),
             model=self.passage_model_name,
@@ -147,6 +170,8 @@ class UpstageSettings(BaseSettings):
 
     @property
     def query_model(self):
+        if not UPSTAGE_AVAILABLE:
+            raise ImportError("langchain_upstage is not installed. Recommend agent requires this package.")
         return UpstageEmbeddings(
             api_key=self.get_next_api(),
             model=self.query_model_name,
@@ -158,9 +183,10 @@ class UpstageSettings(BaseSettings):
 # ==========================
 class LLMSettings(BaseSettings):
     provider: str = os.getenv("LLM_PROVIDER", "openai_compatible")
-    api_base: str = os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
+    # LLM_BASE_URL과 LLM_API_BASE 둘 다 지원 (common/config.py와 호환)
+    api_base: str = os.getenv("LLM_BASE_URL") or os.getenv("LLM_API_BASE", "http://localhost:8000/v1")
     api_key: Optional[str] = os.getenv("LLM_API_KEY")
-    model_name: str = os.getenv("LLM_MODEL_NAME", "kakaocorp/kanana-1.5-8b-instruct-2505")
+    model_name: str = os.getenv("LLM_MODEL", os.getenv("LLM_MODEL_NAME", "gpt-4"))
     max_tokens: int = 1024
     temperature: float = 0.2
     top_p: float = 0.9

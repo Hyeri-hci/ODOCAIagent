@@ -159,16 +159,21 @@ Parameters: {parameters}
             print("[Planner] No parsed intent, using default plan")
             return self._create_default_plan(state)
 
+        # intent가 딕셔너리가 아닌 경우 처리
+        if not isinstance(intent, dict):
+            print(f"[Planner] Invalid intent type: {type(intent)}, using default plan")
+            return self._create_default_plan(state)
+
         try:
             # LLM을 사용하여 계획 생성
             chain = self.planning_prompt | self.llm
             response = await chain.ainvoke({
-                "primary_action": intent["primary_action"],
-                "scope": intent["scope"],
-                "target_files": intent.get("target_files", []),
-                "conditions": intent.get("conditions", []),
-                "output_format": intent["output_format"],
-                "parameters": intent.get("parameters", {}),
+                "primary_action": intent.get("primary_action") or "scan_vulnerabilities",
+                "scope": intent.get("scope") or "full_repository",
+                "target_files": intent.get("target_files") or [],
+                "conditions": intent.get("conditions") or [],
+                "output_format": intent.get("output_format") or "detailed_report",
+                "parameters": intent.get("parameters") or {},
                 "user_request": state.get("user_request", "")
             })
 

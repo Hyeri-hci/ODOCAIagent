@@ -199,13 +199,23 @@ class IntentParser:
         Returns:
             (owner, repo) 튜플
         """
-        # 패턴: owner/repo 형식
-        pattern = r'([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)'
-        match = re.search(pattern, user_request)
-
+        # 우선순위 1: GitHub URL 패턴 (https://github.com/owner/repo)
+        github_url_pattern = r'github\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)'
+        url_match = re.search(github_url_pattern, user_request)
+        if url_match:
+            return url_match.group(1), url_match.group(2).rstrip('/')
+        
+        # 우선순위 2: 단순 owner/repo 형식 (github 도메인 포함하지 않는 경우)
+        # .com, .org 등 도메인 뒤의 패턴은 제외
+        simple_pattern = r'(?<!\.com/)(?<!\.org/)(?<!\.)([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)'
+        match = re.search(simple_pattern, user_request)
+        
         if match:
-            return match.group(1), match.group(2)
-
+            owner, repo = match.group(1), match.group(2)
+            # github, com, org 등 도메인 관련 단어는 제외
+            if owner.lower() not in ['github', 'com', 'org', 'www', 'http', 'https']:
+                return owner, repo.rstrip('/')
+        
         return None, None
 
     async def assess_complexity(self, user_request: str) -> str:

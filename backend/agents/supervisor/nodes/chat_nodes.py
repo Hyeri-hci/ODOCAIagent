@@ -51,108 +51,71 @@ ODOC은 오픈소스 프로젝트의 건강 상태를 분석하는 시스템입�
 """
 
 
-def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
-    """채팅 응답 생성."""
+async def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
+    """채팅 응답 생성. 복잡한 질문은 ReAct, 단순은 기존 방식."""
     from backend.llm.factory import fetch_llm_client
     from backend.llm.base import ChatRequest, ChatMessage
-    from backend.common.config import LLM_MODEL_NAME
+    from backend.common.config import LLM_MODEL_NAME, LLM_API_BASE, LLM_API_KEY, LLM_TEMPERATURE
     from backend.common.cache_manager import analysis_cache
+    from langchain_openai import ChatOpenAI
+    from .react_chat_agent import ReactChatAgent, needs_react_response
+    from .chat_tools import get_chat_tools
     import re
 
     intent = state.detected_intent
     message = state.chat_message or ""
     context = state.chat_context or {}
     
-    # diagnosis 우선순위: 1) state.diagnosis_result → 2) chat_context.analysisResult
-    diagnosis = state.diagnosis_result or {}
-    if not diagnosis and context.get("analysisResult"):
-        # 프론트엔드에서 전달한 analysisResult 사용 (캐시 미스 시 폴백)
-        diagnosis = context.get("analysisResult")
-        logger.info("Using analysisResult from chat_context as diagnosis fallback")
-    
-    candidate_issues = list(state.candidate_issues)
-
-    # repo_url에서 owner/repo 파싱 (chat_context에서 우선 사용)
-    def parse_github_url(url: str):
-        """GitHub URL에서 owner, repo 추출."""
-        if not url:
-            return None, None
-        match = re.match(r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
-        if match:
-            return match.group(1), match.group(2)
-        return None, None
-
-    # chat_context의 repo_url을 우선 사용
+    # owner/repo 설정
     context_repo_url = context.get("repo_url") or context.get("repoUrl")
-    logger.info(f"Chat context repo_url={context_repo_url}, state.owner={state.owner}, state.repo={state.repo}")
-    
-    # 메시지에서 다른 저장소 이름 언급 감지
-    def extract_repo_from_message(msg: str):
-        """메시지에서 저장소 이름 추출 (e.g., 'OSSDoctor에서 기여하는 법')"""
-        import re as re_module
-        patterns = [
-            r"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?:에서|에|의|을|를)",  # owner/repo 형식
-            r"([A-Za-z][A-Za-z0-9_.-]{2,})(?:에서|에|의|을|를|는|로)",  # repo 이름만 (최소 3글자, 알파벳으로 시작)
-        ]
-        for pattern in patterns:
-            match = re_module.search(pattern, msg)
-            if match:
-                repo_name = match.group(1)
-                logger.info(f"Extracted repo name from message: {repo_name}")
-                return repo_name
-        return None
-    
-    mentioned_repo = extract_repo_from_message(message) if message else None
-    
     if context_repo_url:
-        chat_owner, chat_repo = parse_github_url(context_repo_url)
-        logger.info(f"Parsed from context: {chat_owner}/{chat_repo}")
+        chat_owner, chat_repo = _parse_github_url(context_repo_url)
     else:
         chat_owner, chat_repo = state.owner, state.repo
-        logger.info(f"Using state fallback: {chat_owner}/{chat_repo}")
-
-    # 메시지에서 언급된 저장소와 현재 컨텍스트 저장소가 다른 경우, 캐시에서 해당 저장소 찾기
-    if mentioned_repo and chat_repo and mentioned_repo.lower() != chat_repo.lower():
-        # mentioned_repo가 owner/repo 형식인지 확인
-        if "/" in mentioned_repo:
-            m_owner, m_repo = mentioned_repo.split("/", 1)
-        else:
-            m_owner, m_repo = None, mentioned_repo
-        
-        # 캐시에서 해당 저장소 찾기 (전체 캐시 검색)
-        cached_for_mentioned = None
-        if m_owner:
-            cached_for_mentioned = analysis_cache.get_analysis(m_owner, m_repo, "main")
-        else:
-            # owner가 없으면 repo 이름으로 검색 (간단한 휴리스틱: 전체 캐시에서 repo 이름 매칭)
-            all_cached = analysis_cache._analyses if hasattr(analysis_cache, '_analyses') else {}
-            for key, cached_data in all_cached.items():
-                if m_repo.lower() in key.lower():
-                    cached_for_mentioned = cached_data.get('data')
-                    parts = key.split('/')
-                    if len(parts) >= 2:
-                        m_owner = parts[0]
-                        m_repo = parts[1].split('@')[0]  # Remove @branch
-                    break
-        
-        if cached_for_mentioned:
-            logger.info(f"Found mentioned repo in cache: {m_owner}/{m_repo}, switching context")
-            chat_owner, chat_repo = m_owner, m_repo
-            diagnosis = cached_for_mentioned
-            candidate_issues = cached_for_mentioned.get("recommended_issues", []) or []
-
-    # 캐시에서 진단 결과 로드 (chat_context 기반 owner/repo 사용)
+    
+    logger.info(f"Chat response: intent={intent}, message={message[:50] if message else ''}, repo={chat_owner}/{chat_repo}")
+    
+    # diagnosis 로드
+    diagnosis = state.diagnosis_result or {}
+    if not diagnosis and context.get("analysisResult"):
+        diagnosis = context.get("analysisResult")
+    
     if not diagnosis and chat_owner and chat_owner != "unknown":
         cached = analysis_cache.get_analysis(chat_owner, chat_repo, "main")
         if cached:
             diagnosis = cached
-            logger.info(f"Chat loaded cached diagnosis for {chat_owner}/{chat_repo}")
-            candidate_issues = cached.get("recommended_issues", []) or []
 
-    logger.info(f"Chat response: intent={intent}, message={message[:50] if message else ''}, has_diagnosis={bool(diagnosis)}, repo={chat_owner}/{chat_repo}")
-
+    # ReAct 응답 필요 여부 판단
+    needs_react = needs_react_response(message, context)
+    logger.info(f"[Chat] message='{message}', needs_react={needs_react}")
+    
+    if needs_react:
+        logger.info("[Chat] Using ReAct agent for complex question")
+        try:
+            llm = ChatOpenAI(
+                model=LLM_MODEL_NAME,
+                api_key=LLM_API_KEY,
+                base_url=LLM_API_BASE,
+                temperature=LLM_TEMPERATURE
+            )
+            
+            agent = ReactChatAgent(
+                llm=llm,
+                tools=get_chat_tools(),
+                owner=chat_owner or "unknown",
+                repo=chat_repo or "unknown",
+                max_iterations=5
+            )
+            
+            chat_response = await agent.generate_response(message, context)
+            return {"chat_response": chat_response, "step": state.step + 1}
+        except Exception as e:
+            logger.warning(f"ReAct failed, falling back: {e}")
+    
+    # 기존 방식 (단순 질문)
     try:
         client = fetch_llm_client()
+        candidate_issues = list(state.candidate_issues)
 
         if intent == "explain" and (context or diagnosis):
             system_prompt = _build_explain_prompt(context, diagnosis)
@@ -175,12 +138,23 @@ def chat_response_node(state: SupervisorState) -> Dict[str, Any]:
 
     except Exception as e:
         logger.warning(f"LLM chat failed: {e}")
-        chat_response = _generate_fallback(intent, message, context, diagnosis, candidate_issues)
+        chat_response = _generate_fallback(intent, message, context, diagnosis, list(state.candidate_issues))
 
     return {
         "chat_response": chat_response,
         "step": state.step + 1,
     }
+
+
+def _parse_github_url(url: str):
+    """GitHub URL에서 owner, repo 추출."""
+    import re as re_module
+    if not url:
+        return None, None
+    match = re_module.match(r"(?:https?://)?(?:www\.)?github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$", url)
+    if match:
+        return match.group(1), match.group(2)
+    return None, None
 
 
 def _build_explain_prompt(context: Dict, diagnosis: Dict) -> str:

@@ -1,16 +1,38 @@
 import logging
 from typing import List, Dict, Any, Optional
-from qdrant_client import QdrantClient, models
-from backend.agents.recommend.config.setting import settings
-from backend.agents.recommend.core.qdrant.schemas import RepoSchema, ReadmeSchema
 
 logger = logging.getLogger(__name__)
 
-REPO_COLLECTION_NAME = settings.qdrant.collection_desc
-README_COLLECTION_NAME = settings.qdrant.collection_readme
+# Optional import - qdrant-client 없으면 fallback 사용
+try:
+    from qdrant_client import QdrantClient, models
+    QDRANT_AVAILABLE = True
+except ImportError:
+    QDRANT_AVAILABLE = False
+    QdrantClient = None
+    models = None
+    logger.warning("qdrant-client not installed. Recommend agent will be disabled.")
+
+# Lazy import to avoid circular imports and missing module errors
+def _get_settings():
+    from backend.agents.recommend.config.setting import settings
+    return settings
+
+def _get_schemas():
+    from backend.agents.recommend.core.qdrant.schemas import RepoSchema, ReadmeSchema
+    return RepoSchema, ReadmeSchema
+
+def _get_collection_names():
+    settings = _get_settings()
+    return settings.qdrant.collection_desc, settings.qdrant.collection_readme
+
 
 class QdrantDBClient:
     def __init__(self):
+        if not QDRANT_AVAILABLE:
+            raise ImportError("qdrant-client is not installed. Please install it with: pip install qdrant-client")
+        
+        settings = _get_settings()
         self.host = settings.qdrant.host
         self.port = settings.qdrant.port
         self.client: Optional[QdrantClient] = None
@@ -27,8 +49,9 @@ class QdrantDBClient:
             self.client = None
 
     def _get_collection_name(self, collection_type: str) -> str:
-        if collection_type == 'desc': return REPO_COLLECTION_NAME
-        elif collection_type == 'readme': return README_COLLECTION_NAME
+        repo_collection, readme_collection = _get_collection_names()
+        if collection_type == 'desc': return repo_collection
+        elif collection_type == 'readme': return readme_collection
         raise ValueError(f"Invalid collection_type: {collection_type}")
 
     def get_repo_metadata(self, project_ids: List[int]) -> Dict[int, Dict[str, Any]]:
@@ -37,6 +60,10 @@ class QdrantDBClient:
             return {}
 
         try:
+            # Lazy import로 스키마 가져오기
+            RepoSchema, _ = _get_schemas()
+            repo_collection, _ = _get_collection_names()
+            
             # 중복 ID 제거
             unique_ids = list(set(project_ids))
             
@@ -49,7 +76,7 @@ class QdrantDBClient:
             
             # ID 개수만큼 Limit 설정하여 한 번에 가져오기
             results, _ = self.client.scroll(
-                collection_name=REPO_COLLECTION_NAME,
+                collection_name=repo_collection,
                 scroll_filter=repo_filter,
                 limit=len(unique_ids) + 10, # 넉넉하게
                 with_payload=True,
@@ -80,6 +107,9 @@ class QdrantDBClient:
             logger.error("[Qdrant] Client not connected.")
             return []
 
+        # Lazy import로 스키마 가져오기
+        RepoSchema, ReadmeSchema = _get_schemas()
+        
         target_col = self._get_collection_name(collection_type)
         
         try:

@@ -82,7 +82,18 @@ async def run_recommend(
     repo: str,
     ref: str = "main",
     user_message: Optional[str] = None,
+    skip_intent_parsing: bool = True,  # 기본적으로 Supervisor에서 이미 파싱됨
 ) -> Dict[str, Any]:
+    """추천 에이전트 실행
+    
+    Args:
+        owner: 저장소 소유자
+        repo: 저장소 이름
+        ref: 브랜치/태그
+        user_message: 사용자 메시지
+        skip_intent_parsing: True면 내부 LLM intent parsing 건너뛰기
+                           (Supervisor에서 이미 intent를 파싱한 경우)
+    """
     graph = get_recommend_graph()
     initial_state: RecommendState = {
         "owner": owner,
@@ -90,6 +101,8 @@ async def run_recommend(
         "repo_url": f"{owner}/{repo}",
         "ref": ref,
         "user_request": user_message,
+        "skip_intent_parsing": skip_intent_parsing,
+        "user_intent": "semantic_search",  # 기본값 설정
     }
     
     final_state = await graph.ainvoke(initial_state)

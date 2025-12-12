@@ -4,7 +4,7 @@ from qdrant_client import models
 from flashrank import Ranker, RerankRequest
 
 from backend.agents.recommend.adapters.qdrant_client import qdrant_client
-from backend.agents.recommend.adapters.embedding_client import embedding_client
+from backend.agents.recommend.adapters.embedding_client import get_embedding_client
 from backend.agents.recommend.core.qdrant.schemas import RepoSchema, ReadmeSchema
 
 logger = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ def build_qdrant_filter(filters: Dict[str, Any]) -> Optional[models.Filter]:
 class VectorSearch:
     def __init__(self):
         self.db_client = qdrant_client
-        self.embedding_client = embedding_client
+        self.embedding_client = get_embedding_client()  # lazy initialization
         
         # Reranker 모델 로딩 (최초 실행 시 다운로드 발생)
         # model_name을 명시하지 않으면 default(ms-marco-TinyBERT-L-2-v2) 사용
@@ -195,5 +195,19 @@ class VectorSearch:
             "final_recommendations": final_output
         }
 
-# 싱글톤 인스턴스
-vector_search_engine = VectorSearch()
+# 싱글톤 인스턴스 (lazy initialization)
+_vector_search_engine = None
+
+def get_vector_search_engine():
+    """VectorSearch 싱글톤 인스턴스 반환 (lazy initialization)"""
+    global _vector_search_engine
+    if _vector_search_engine is None:
+        _vector_search_engine = VectorSearch()
+    return _vector_search_engine
+
+# 하위 호환성을 위한 프로퍼티 (직접 접근 시에도 lazy init)
+class _VectorSearchProxy:
+    def __getattr__(self, name):
+        return getattr(get_vector_search_engine(), name)
+
+vector_search_engine = _VectorSearchProxy()

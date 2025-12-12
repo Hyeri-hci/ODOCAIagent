@@ -53,7 +53,19 @@ except Exception as e:
 async def parse_initial_request_node(state: RecommendState) -> Dict[str, Any]:
     """
     [첫 실행 노드] 사용자 요청을 분석하여 의도와 정량적 필터 조건만 추출하고 상태를 업데이트합니다.
+    
+    Supervisor에서 이미 intent를 파싱한 경우 (skip_intent_parsing=True),
+    LLM 호출을 건너뛰고 기본 semantic_search로 진행합니다.
     """
+    
+    # Supervisor에서 이미 파싱된 경우 건너뛰기
+    if state.skip_intent_parsing:
+        logger.info("⏭️ Skipping intent parsing (already parsed by Supervisor)")
+        # 이미 설정된 user_intent가 있으면 유지, 없으면 semantic_search
+        return {
+            "user_intent": state.user_intent if state.user_intent else "semantic_search",
+            "quantitative_filters": state.quantitative_filters or []
+        }
     
     user_request = state.user_request
     repo_url = state.repo_url
@@ -220,11 +232,11 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
     logger.info(f"🔎 Executing Vector Search for: '{state.search_query}'")
 
     try:
-        # 1. DB 검색 실행
+        # 1. DB 검색 실행 (30개 후보 확보 -> 온보딩 점수로 필터링/정렬 후 상위 6개 추천)
         result = vector_search_engine.search(
             query=state.search_query,
             filters=state.search_filters,
-            target_k=10
+            target_k=30
         )
         
         raw_recommendations = result.get("final_recommendations", [])
@@ -268,7 +280,9 @@ def vector_search_node(state: RecommendState) -> Dict[str, Any]:
         }
 
     except Exception as e:
+        import traceback
         logger.error(f"❌ Vector search failed: {e}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return {
             "error": str(e), 
             "failed_step": "vector_search_node", 
