@@ -1,9 +1,19 @@
 import React from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { GitBranch } from "lucide-react";
+import { StorageSettingsButton } from "../common/StorageSettings";
 
 export const Header = () => {
   const navigate = useNavigate();
+
+  const handleStorageClear = (clearedKeys) => {
+    console.log("Storage cleared:", clearedKeys);
+    // 필요시 페이지 새로고침 또는 상태 초기화
+    if (clearedKeys.includes("odoc_session_id")) {
+      // 세션이 삭제되면 알림
+      console.log("Session cleared - you may need to refresh");
+    }
+  };
 
   return (
     <header className="fixed top-0 left-0 right-0 bg-white/80 backdrop-blur-md shadow-sm z-50 border-b border-slate-100">
@@ -30,6 +40,8 @@ export const Header = () => {
             >
               분석 시작
             </button>
+            {/* 저장 데이터 관리 버튼 */}
+            <StorageSettingsButton onClearComplete={handleStorageClear} />
           </nav>
         </div>
       </div>

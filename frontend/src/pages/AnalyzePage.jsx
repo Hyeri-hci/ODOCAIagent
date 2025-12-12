@@ -107,28 +107,25 @@ const AnalyzePage = () => {
   // REST API 방식 분석 (fallback)
   const handleProfileSubmit = async (profileData) => {
     setUserProfile(profileData);
-    setStep("loading");
     setError(null);
 
-    // SSE 모드일 경우 AnalysisLoading에서 처리
-    if (USE_STREAM_MODE) {
-      return;
-    }
+    // 모든 경우 바로 채팅 화면으로 이동
+    // 채팅에서 SSE 요청을 시작하고 데이터 도착 시 보고서 패널 표시
+    console.log("[AnalyzePage] Going to chat directly:", profileData);
 
-    // 기존 REST API 방식
-    try {
-      const apiResponse = await analyzeRepository(profileData.repositoryUrl);
-      const transformedResult = transformApiResponse(
-        apiResponse,
-        profileData.repositoryUrl
-      );
-      setAnalysisResult(transformedResult);
-      setStep("chat");
-    } catch (err) {
-      console.error("분석 실패:", err);
-      setError(err.message || "분석 중 오류가 발생했습니다.");
-      setStep("profile");
-    }
+    const hasUrl =
+      profileData.repositoryUrl && !profileData.isNaturalLanguageQuery;
+
+    setAnalysisResult({
+      repositoryUrl: profileData.repositoryUrl || null,
+      initialMessage: profileData.message || profileData.userMessage || null,
+      // 사용자가 입력한 원본 메시지 (변환하지 않고 그대로 전달)
+      originalMessage: profileData.message || profileData.userMessage || null,
+      isNaturalLanguageQuery: !hasUrl,
+      // 채팅에서 SSE 스트림을 시작할지 여부
+      shouldStartAnalysis: hasUrl,
+    });
+    setStep("chat");
   };
 
   return (

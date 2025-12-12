@@ -154,3 +154,56 @@ export const sendReportPDF = async (analysisData, userEmail) => {
     throw error;
   }
 };
+
+/**
+ * 분석 리포트를 Markdown 파일로 내보내기
+ * @param {string} reportType - 리포트 유형 (diagnosis | onboarding | security)
+ * @param {string} owner - 저장소 소유자
+ * @param {string} repo - 저장소 이름
+ * @param {Object} data - 리포트 데이터
+ * @param {boolean} includeAiTrace - AI 판단 과정 포함 여부
+ * @returns {Promise<Blob>} - Markdown 파일 Blob
+ */
+export const exportReportMarkdown = async (
+  reportType,
+  owner,
+  repo,
+  data,
+  includeAiTrace = true
+) => {
+  try {
+    const response = await api.post(
+      "/api/export/report",
+      {
+        report_type: reportType,
+        owner,
+        repo,
+        data,
+        include_ai_trace: includeAiTrace,
+      },
+      {
+        responseType: "blob",
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error("리포트 내보내기 실패:", error);
+    throw error;
+  }
+};
+
+/**
+ * Blob 데이터를 파일로 다운로드
+ * @param {Blob} blob - 다운로드할 Blob
+ * @param {string} filename - 파일 이름
+ */
+export const downloadBlob = (blob, filename) => {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+};

@@ -111,14 +111,24 @@ export const transformApiResponse = (apiResponse, repositoryUrl) => {
     recommendedIssues:
       rawData.recommended_issues || analysis.recommended_issues || [],
 
-    // 온보딩 플랜
-    onboardingPlan: rawData.onboarding_plan || analysis.onboarding_plan || null,
+    // 온보딩 플랜 (plan 배열 직접 추출)
+    onboardingPlan:
+      (rawData.onboarding_plan?.plan || rawData.onboarding_plan) ||
+      (analysis.onboarding_plan?.plan || analysis.onboarding_plan) ||
+      null,
+    // 온보딩 요약 (별도 필드)
+    onboardingSummary: rawData.onboarding_plan?.summary || analysis.onboarding_plan?.summary || "",
 
     // AI 채팅 응답
     chatResponse: rawData.chat_response || analysis.chat_response || null,
 
-    // 보안 분석 결과
-    security: rawData.security || analysis.security || null,
+    // 보안 분석 결과 (multi_agent_results에서도 추출)
+    security:
+      rawData.security ||
+      analysis.security ||
+      rawData.multi_agent_results?.security?.results ||
+      rawData.multi_agent_results?.security ||
+      null,
 
     // 유사 프로젝트 추천
     similarProjects:

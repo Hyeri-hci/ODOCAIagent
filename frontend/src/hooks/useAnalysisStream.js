@@ -11,6 +11,7 @@ export const useAnalysisStream = ({
   parseGitHubUrl,
   transformApiResponse,
   setSessionId,
+  setSessionRepo, // 저장소 정보 동기화용
   setSuggestions,
   setAnalysisResult,
   setIsGeneratingPlan,
@@ -36,10 +37,14 @@ export const useAnalysisStream = ({
     let { owner, repo } = parseGitHubUrl(repoUrl);
 
     // analysisResult에서 추출 실패 시, sessionRepo에서 복원 시도
-    if ((!owner || !repo) && sessionRepo) {
+    // 단, 추천/검색 요청에서는 sessionRepo를 사용하지 않음 (이전 repo와 무관한 새 검색)
+    const isRecommendRequest = /(?:찾아줘|찾고|추천|프로젝트.*찾|유사.*프로젝트|similar|recommend)/i.test(userMessage);
+    if ((!owner || !repo) && sessionRepo && !isRecommendRequest) {
       owner = sessionRepo.owner;
       repo = sessionRepo.repo;
       console.log("[Stream] Using sessionRepo fallback:", owner, repo);
+    } else if (isRecommendRequest && sessionRepo) {
+      console.log("[Stream] Recommend request detected, skipping sessionRepo fallback");
     }
 
     // 그래도 없으면 메시지에서 추출 시도
@@ -76,7 +81,9 @@ export const useAnalysisStream = ({
         switch (eventType) {
           case "start":
             console.log("스트리밍 시작:", data);
-            if (data.session_id) {
+            // 'new'는 유효한 세션 ID가 아니므로 저장하지 않음
+            // 실제 세션 ID는 'answer' 이벤트에서 받음
+            if (data.session_id && data.session_id !== "new") {
               setSessionId(data.session_id);
             }
             break;
@@ -106,7 +113,19 @@ export const useAnalysisStream = ({
                 update_session: 95,
               };
               setNodeProgress(stepProgress[data.step] || 50);
-              setProgressMessage(data.step);
+
+              // 에이전트 유형에 맞는 진행 메시지 설정
+              const stepMessages = {
+                load_session: "세션 로딩 중...",
+                parse_intent: "의도 분석 중...",
+                run_diagnosis_agent: "프로젝트 진단 중...",
+                run_onboarding_agent: "온보딩 플랜 생성 중...",
+                run_security_agent: "보안 취약점 분석 중...",
+                run_contributor_agent: "기여 가이드 생성 중...",
+                finalize_answer: "응답 생성 중...",
+                update_session: "세션 업데이트 중...",
+              };
+              setProgressMessage(stepMessages[data.step] || data.step);
             }
             break;
 
@@ -122,11 +141,25 @@ export const useAnalysisStream = ({
               setSessionId(data.session_id);
             }
 
+            // 다이어그램 데이터 추출 (contributor 에이전트 결과에서)
+            let diagramData = null;
+            if (
+              data.context?.target_agent === "contributor" &&
+              data.context?.agent_result
+            ) {
+              const features = data.context.agent_result.features || {};
+              if (features.structure_visualization) {
+                diagramData = features.structure_visualization;
+              }
+            }
+
             const aiResponse = {
               id: `ai_${Date.now()}`,
               role: "assistant",
               content: data.answer || "응답을 받지 못했습니다.",
               timestamp: new Date(),
+              // 다이어그램 데이터가 있으면 메시지에 첨부
+              ...(diagramData && { structureVisualization: diagramData }),
             };
             addMessage(aiResponse);
             setIsTyping(false);
@@ -135,19 +168,51 @@ export const useAnalysisStream = ({
               setSuggestions(data.suggestions);
             }
 
+            // 백엔드에서 저장소 정보가 업데이트되었으면 동기화
+            if (data.repo_info && data.repo_info.owner && data.repo_info.repo) {
+              console.log(
+                "[Stream] 백엔드에서 저장소 정보 수신:",
+                data.repo_info
+              );
+              if (setSessionRepo) {
+                setSessionRepo({
+                  owner: data.repo_info.owner,
+                  repo: data.repo_info.repo,
+                  full_name: `${data.repo_info.owner}/${data.repo_info.repo}`,
+                });
+              }
+            }
+
             if (data.context) {
               const { agent_result, target_agent } = data.context;
 
+              // repo_info에서 owner/repo 추출 (백엔드 동기화)
+              const backendOwner = data.repo_info?.owner;
+              const backendRepo = data.repo_info?.repo;
+
               if (target_agent === "diagnosis" && agent_result) {
                 console.log("진단 결과 받음 (스트리밍):", agent_result);
-                const { owner: resultOwner, repo: resultRepo } = parseGitHubUrl(
-                  analysisResult?.repositoryUrl
+                console.log(
+                  "repo_info:",
+                  data.repo_info,
+                  "owner:",
+                  owner,
+                  "repo:",
+                  repo
                 );
+
+                // repo_info > 로컬 변수 > analysisResult 순으로 fallback
+                const effectiveOwner =
+                  backendOwner || owner || agent_result.owner;
+                const effectiveRepo = backendRepo || repo || agent_result.repo;
+
                 const repoUrl =
-                  analysisResult?.repositoryUrl ||
-                  `https://github.com/${owner || resultOwner}/${
-                    repo || resultRepo
-                  }`;
+                  effectiveOwner && effectiveRepo
+                    ? `https://github.com/${effectiveOwner}/${effectiveRepo}`
+                    : analysisResult?.repositoryUrl || "";
+
+                console.log("생성된 repoUrl:", repoUrl);
+
                 const updatedResult = transformApiResponse(
                   { analysis: agent_result },
                   repoUrl
@@ -164,15 +229,55 @@ export const useAnalysisStream = ({
                 }
               }
 
+              // 진단과 함께 온 보안 결과 처리 (context.security_result)
+              const securityResultFromContext = data.context.security_result;
+              if (securityResultFromContext) {
+                console.log("보안 결과 받음 (context.security_result):", securityResultFromContext);
+
+                const securityResults = securityResultFromContext.results || securityResultFromContext;
+                const vulnerabilities = securityResults.vulnerabilities || {};
+
+                const securityData = {
+                  score: securityResults.security_score ?? securityResultFromContext.security_score,
+                  grade: securityResults.security_grade ?? securityResultFromContext.security_grade,
+                  risk_level: securityResults.risk_level ?? securityResultFromContext.risk_level ?? "unknown",
+                  vulnerability_count: vulnerabilities.total ?? securityResultFromContext.vulnerability_count ?? 0,
+                  critical: vulnerabilities.critical ?? securityResultFromContext.critical_count ?? 0,
+                  high: vulnerabilities.high ?? securityResultFromContext.high_count ?? 0,
+                  medium: vulnerabilities.medium ?? securityResultFromContext.medium_count ?? 0,
+                  low: vulnerabilities.low ?? securityResultFromContext.low_count ?? 0,
+                  summary: securityResultFromContext.report || "",
+                  vulnerabilities: vulnerabilities.details || [],
+                  recommendations: securityResultFromContext.recommendations || [],
+                };
+
+                console.log("변환된 보안 데이터 (from context):", securityData);
+
+                setAnalysisResult((prev) => ({
+                  ...prev,
+                  security: securityData,
+                  securityRequested: true,
+                }));
+              }
+
               if (target_agent === "onboarding" && agent_result) {
                 console.log("온보딩 플랜 생성됨 (스트리밍):", agent_result);
 
                 // 온보딩 결과에서 similar_projects도 추출
                 const similarProjects = agent_result.similar_projects || [];
 
+                // plan 배열 추출 (agent_result가 배열이면 그대로, 객체면 plan 필드에서 추출)
+                const onboardingPlanArray = Array.isArray(agent_result)
+                  ? agent_result
+                  : agent_result.plan || [];
+
                 setAnalysisResult((prev) => ({
                   ...prev,
-                  onboardingPlan: agent_result,
+                  // plan 배열만 저장 (OnboardingPlanSection이 배열을 기대)
+                  onboardingPlan: onboardingPlanArray,
+                  // 추가 정보도 별도 필드로 저장
+                  onboardingSummary: agent_result.summary || "",
+                  onboardingAgentAnalysis: agent_result.agent_analysis || null,
                   // 온보딩 결과에 포함된 유사 프로젝트도 함께 업데이트
                   ...(similarProjects.length > 0 && { similarProjects }),
                 }));
@@ -180,47 +285,55 @@ export const useAnalysisStream = ({
               }
 
               // 보안 분석 결과 처리
-              if (target_agent === "security" && agent_result) {
+              if (target_agent === "security") {
                 console.log("보안 분석 결과 받음 (스트리밍):", agent_result);
 
-                // 보안 결과를 프론트엔드 형식으로 변환
-                const securityResults = agent_result.results || agent_result;
-                const vulnerabilities = securityResults.vulnerabilities || {};
-
-                const securityData = {
-                  score:
-                    securityResults.security_score ??
-                    agent_result.security_score,
-                  grade:
-                    securityResults.security_grade ??
-                    agent_result.security_grade,
-                  risk_level:
-                    securityResults.risk_level ??
-                    agent_result.risk_level ??
-                    "unknown",
-                  vulnerability_count:
-                    vulnerabilities.total ??
-                    agent_result.vulnerability_count ??
-                    0,
-                  critical:
-                    vulnerabilities.critical ??
-                    agent_result.critical_count ??
-                    0,
-                  high: vulnerabilities.high ?? agent_result.high_count ?? 0,
-                  medium:
-                    vulnerabilities.medium ?? agent_result.medium_count ?? 0,
-                  low: vulnerabilities.low ?? agent_result.low_count ?? 0,
-                  summary: agent_result.report || "",
-                  vulnerabilities: vulnerabilities.details || [],
-                  recommendations: agent_result.recommendations || [],
-                };
-
-                console.log("변환된 보안 데이터:", securityData);
-
+                // 보안 에이전트가 호출되었음을 표시 (결과가 없어도)
                 setAnalysisResult((prev) => ({
                   ...prev,
-                  security: securityData,
+                  securityRequested: true,
                 }));
+
+                if (agent_result) {
+                  // 보안 결과를 프론트엔드 형식으로 변환
+                  const securityResults = agent_result.results || agent_result;
+                  const vulnerabilities = securityResults.vulnerabilities || {};
+
+                  const securityData = {
+                    score:
+                      securityResults.security_score ??
+                      agent_result.security_score,
+                    grade:
+                      securityResults.security_grade ??
+                      agent_result.security_grade,
+                    risk_level:
+                      securityResults.risk_level ??
+                      agent_result.risk_level ??
+                      "unknown",
+                    vulnerability_count:
+                      vulnerabilities.total ??
+                      agent_result.vulnerability_count ??
+                      0,
+                    critical:
+                      vulnerabilities.critical ??
+                      agent_result.critical_count ??
+                      0,
+                    high: vulnerabilities.high ?? agent_result.high_count ?? 0,
+                    medium:
+                      vulnerabilities.medium ?? agent_result.medium_count ?? 0,
+                    low: vulnerabilities.low ?? agent_result.low_count ?? 0,
+                    summary: agent_result.report || "",
+                    vulnerabilities: vulnerabilities.details || [],
+                    recommendations: agent_result.recommendations || [],
+                  };
+
+                  console.log("변환된 보안 데이터:", securityData);
+
+                  setAnalysisResult((prev) => ({
+                    ...prev,
+                    security: securityData,
+                  }));
+                }
               }
 
               // 기여자 가이드 결과 처리
@@ -249,9 +362,11 @@ export const useAnalysisStream = ({
               // 추천 에이전트 결과 처리
               if (target_agent === "recommend" && agent_result) {
                 console.log("추천 결과 받음 (스트리밍):", agent_result);
+                // recommendations 또는 similar_projects 키에서 데이터 추출
+                const recProjects = agent_result.recommendations || agent_result.similar_projects || [];
                 setAnalysisResult((prev) => ({
                   ...prev,
-                  similarProjects: agent_result.recommendations || [],
+                  similarProjects: recProjects,
                 }));
               }
 
@@ -272,6 +387,145 @@ export const useAnalysisStream = ({
                     data.context.agent_result_summary.similar_projects,
                 }));
               }
+
+              // 멀티 에이전트 결과 처리 (진단 + 보안 동시 실행 시)
+              if (data.context?.multi_agent_results) {
+                const multiResults = data.context.multi_agent_results;
+                console.log("멀티 에이전트 결과:", multiResults);
+
+                // 진단 결과가 multi_agent_results에 있고, 메인 agent_result에서 처리 안 된 경우
+                if (multiResults.diagnosis && target_agent !== "diagnosis") {
+                  console.log(
+                    "멀티에이전트에서 진단 결과 추출:",
+                    multiResults.diagnosis
+                  );
+                  const diagResult = multiResults.diagnosis;
+                  const effectiveOwner = backendOwner || diagResult.owner;
+                  const effectiveRepo = backendRepo || diagResult.repo;
+                  const repoUrl =
+                    effectiveOwner && effectiveRepo
+                      ? `https://github.com/${effectiveOwner}/${effectiveRepo}`
+                      : "";
+
+                  if (repoUrl) {
+                    const updatedResult = transformApiResponse(
+                      { analysis: diagResult },
+                      repoUrl
+                    );
+                    setAnalysisResult((prev) => ({
+                      ...prev,
+                      ...updatedResult,
+                      repositoryUrl: repoUrl,
+                    }));
+                  }
+                }
+
+                // 보안 결과가 multi_agent_results에 있으면 처리 (메인 target_agent가 security가 아닌 경우)
+                if (multiResults.security && target_agent !== "security") {
+                  console.log(
+                    "멀티에이전트에서 보안 결과 추출:",
+                    multiResults.security
+                  );
+                  const secResult = multiResults.security;
+                  const securityResults = secResult.results || secResult;
+                  const vulnerabilities = securityResults.vulnerabilities || {};
+
+                  const securityData = {
+                    score:
+                      securityResults.security_score ??
+                      secResult.security_score,
+                    grade:
+                      securityResults.security_grade ??
+                      secResult.security_grade,
+                    risk_level:
+                      securityResults.risk_level ??
+                      secResult.risk_level ??
+                      "unknown",
+                    vulnerability_count: vulnerabilities.total ?? 0,
+                    critical: vulnerabilities.critical ?? 0,
+                    high: vulnerabilities.high ?? 0,
+                    medium: vulnerabilities.medium ?? 0,
+                    low: vulnerabilities.low ?? 0,
+                    vulnerabilities: vulnerabilities.details || [],
+                    recommendations: secResult.recommendations || [],
+                  };
+
+                  setAnalysisResult((prev) => ({
+                    ...prev,
+                    security: securityData,
+                    securityRequested: true,
+                  }));
+                }
+              }
+
+              // security_result 직접 처리 (백엔드에서 별도 필드로 전달된 경우)
+              if (data.context?.security_result) {
+                console.log(
+                  "보안 결과 직접 수신:",
+                  data.context.security_result
+                );
+                const secResult = data.context.security_result;
+                // 백엔드 구조: security_score, security_grade, vulnerabilities: {total, critical, high, medium, low}
+                const vulnerabilities = secResult.vulnerabilities || {};
+
+                const securityData = {
+                  score: secResult.security_score ?? secResult.score ?? null,
+                  grade: secResult.security_grade ?? secResult.grade ?? "N/A",
+                  risk_level: secResult.risk_level ?? "low",
+                  vulnerability_count: vulnerabilities.total ?? 0,
+                  critical: vulnerabilities.critical ?? 0,
+                  high: vulnerabilities.high ?? 0,
+                  medium: vulnerabilities.medium ?? 0,
+                  low: vulnerabilities.low ?? 0,
+                  vulnerabilities:
+                    secResult.vulnerability_details ||
+                    vulnerabilities.details ||
+                    [],
+                  recommendations: secResult.recommendations || [],
+                  summary: `취약점 ${vulnerabilities.total || 0
+                    }개 발견 (Critical: ${vulnerabilities.critical || 0}, High: ${vulnerabilities.high || 0
+                    })`,
+                };
+
+                console.log("보안 데이터 파싱 완료:", securityData);
+
+                setAnalysisResult((prev) => ({
+                  ...prev,
+                  security: securityData,
+                  securityRequested: true,
+                }));
+              }
+
+              // structure_visualization 직접 처리 (context에서 전달된 경우)
+              if (data.context?.structure_visualization) {
+                console.log(
+                  "구조 시각화 직접 수신:",
+                  data.context.structure_visualization
+                );
+                setAnalysisResult((prev) => ({
+                  ...prev,
+                  structureVisualization: data.context.structure_visualization,
+                }));
+              }
+
+              // onboarding_result 직접 처리 (온보딩 플랜)
+              if (data.context?.onboarding_result) {
+                console.log(
+                  "온보딩 결과 직접 수신:",
+                  data.context.onboarding_result
+                );
+                const onboardingResult = data.context.onboarding_result;
+
+                // plan 배열만 저장 (OnboardingPlanSection이 배열을 기대)
+                const onboardingPlan = onboardingResult.plan || [];
+
+                setAnalysisResult((prev) => ({
+                  ...prev,
+                  onboardingPlan: onboardingPlan,
+                  onboardingSummary: onboardingResult.summary || "",
+                  onboardingResult: onboardingResult,
+                }));
+              }
             }
             break;
           }
@@ -282,6 +536,12 @@ export const useAnalysisStream = ({
             setIsStreaming(false);
             setStreamingMessage("");
 
+            // 세션 ID 저장 (clarification 후 세션 유지 필수!)
+            if (data.session_id && data.session_id !== "new") {
+              setSessionId(data.session_id);
+              console.log("[Clarification] 세션 ID 저장:", data.session_id);
+            }
+
             const clarificationResponse = {
               id: `ai_${Date.now()}`,
               role: "assistant",
@@ -291,6 +551,21 @@ export const useAnalysisStream = ({
             };
             addMessage(clarificationResponse);
             setIsTyping(false);
+            break;
+          }
+
+          case "warning": {
+            // 대용량 저장소 등 경고 메시지
+            console.log("경고 메시지:", data.message);
+
+            const warningResponse = {
+              id: `warning_${Date.now()}`,
+              role: "assistant",
+              content: `⚠️ ${data.message}`,
+              timestamp: new Date(),
+              isWarning: true,
+            };
+            addMessage(warningResponse);
             break;
           }
 
