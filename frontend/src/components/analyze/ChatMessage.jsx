@@ -1,6 +1,7 @@
 import React from "react";
 import ReactMarkdown from "react-markdown";
 import ReportGenerationMessage from "./ReportGenerationMessage";
+import DiagramThumbnail from "../common/DiagramThumbnail";
 
 /**
  * 채팅 메시지 컴포넌트
@@ -15,6 +16,10 @@ const ChatMessage = ({
 }) => {
   const isUser = message.role === "user";
   const isReportGeneration = message.type === "report_generation";
+
+  // 메시지에 다이어그램 데이터가 있는지 확인
+  const hasDiagram = message.diagram || message.structureVisualization;
+  const diagramData = message.diagram || message.structureVisualization;
 
   // 보고서 생성 메시지인 경우
   if (isReportGeneration) {
@@ -31,6 +36,7 @@ const ChatMessage = ({
             analysisResult={analysisResult}
             isCollapsed={isReportCollapsed}
             onToggleCollapse={onToggleReportCollapse}
+            progressMessage={message.progressMessage}
           />
         </div>
       </div>
@@ -103,6 +109,20 @@ const ChatMessage = ({
             >
               {message.content}
             </ReactMarkdown>
+
+            {/* 다이어그램 썸네일 (구조 시각화 데이터가 있는 경우) */}
+            {hasDiagram && (
+              <DiagramThumbnail
+                mermaidCode={diagramData?.mermaid_diagram}
+                asciiTree={diagramData?.ascii_tree}
+                title={
+                  diagramData?.owner
+                    ? `${diagramData.owner}/${diagramData.repo} 구조`
+                    : "코드 구조"
+                }
+                className="mt-3"
+              />
+            )}
 
             {/* 경험 수준 선택 버튼 (clarification 응답인 경우) */}
             {message.content.includes("프로그래밍 경험 수준을 알려주세요") &&

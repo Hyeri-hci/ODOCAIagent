@@ -165,14 +165,14 @@ const AnalysisHistoryNav = ({
           <ChevronRight className="w-4 h-4" />
         </button>
 
-        {/* 세션 히스토리 버튼 */}
+        {/* 대화 기록 버튼 */}
         <div className="relative">
           <button
             onClick={onToggleSessionHistory}
             className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 transition-colors"
           >
             <History className="w-4 h-4" />
-            세션 히스토리
+            대화 기록
           </button>
           {showSessionHistory && (
             <div className="absolute right-0 mt-2 w-80 bg-white rounded-xl shadow-2xl border border-gray-200 z-50 max-h-96 overflow-y-auto">

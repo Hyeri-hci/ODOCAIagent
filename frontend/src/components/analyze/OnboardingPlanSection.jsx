@@ -102,10 +102,9 @@ const DifficultyModal = ({ isOpen, onClose, onSelect, isGenerating }) => {
                 onClick={() => setSelectedDifficulty(option.id)}
                 className={`
                   w-full p-4 rounded-xl border-2 transition-all duration-200 text-left
-                  ${
-                    isSelected
-                      ? `${option.bgColor} border-2 ring-2 ring-offset-2 ring-indigo-500`
-                      : "bg-gray-50 border-gray-200 hover:bg-gray-100"
+                  ${isSelected
+                    ? `${option.bgColor} border-2 ring-2 ring-offset-2 ring-indigo-500`
+                    : "bg-gray-50 border-gray-200 hover:bg-gray-100"
                   }
                 `}
               >
@@ -155,10 +154,9 @@ const DifficultyModal = ({ isOpen, onClose, onSelect, isGenerating }) => {
             disabled={isGenerating}
             className={`
               flex-1 px-4 py-3 rounded-lg font-medium transition-colors
-              ${
-                isGenerating
-                  ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                  : "bg-gray-800 text-white hover:bg-gray-700"
+              ${isGenerating
+                ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                : "bg-gray-800 text-white hover:bg-gray-700"
               }
             `}
           >
@@ -261,10 +259,9 @@ const OnboardingPlanSection = ({
                 className={`
                   inline-flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium
                   transition-colors
-                  ${
-                    isGenerating
-                      ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                      : "bg-gray-800 text-white hover:bg-gray-700"
+                  ${isGenerating
+                    ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                    : "bg-gray-800 text-white hover:bg-gray-700"
                   }
                 `}
               >
@@ -413,9 +410,8 @@ const OnboardingPlanSection = ({
                   e.stopPropagation();
                   // 채팅에 메시지를 자동으로 보내서 새로운 온보딩 플랜 생성
                   if (onGeneratePlan) {
-                    onGeneratePlan(
-                      userProfile?.experienceLevel || "intermediate"
-                    );
+                    // 난이도 없이 기본 메시지 전송 (사용자가 원하면 직접 지정)
+                    onGeneratePlan();
                   }
                 }}
                 disabled={isGenerating}
@@ -575,8 +571,8 @@ const OnboardingPlanSection = ({
                                       typeof task === "string"
                                         ? task
                                         : task.title ||
-                                          task.description ||
-                                          JSON.stringify(task);
+                                        task.description ||
+                                        JSON.stringify(task);
                                     const taskUrl =
                                       typeof task === "object"
                                         ? task.url
@@ -585,11 +581,10 @@ const OnboardingPlanSection = ({
                                     return (
                                       <div
                                         key={taskIdx}
-                                        className={`flex items-start gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
-                                          isCompleted
+                                        className={`flex items-start gap-3 p-2 rounded-lg cursor-pointer transition-colors ${isCompleted
                                             ? "bg-green-50 border border-green-200"
                                             : "hover:bg-gray-50"
-                                        }`}
+                                          }`}
                                         onClick={() =>
                                           toggleTask(weekNum, taskIdx)
                                         }
@@ -602,11 +597,10 @@ const OnboardingPlanSection = ({
                                           )}
                                         </button>
                                         <span
-                                          className={`text-sm flex-1 ${
-                                            isCompleted
+                                          className={`text-sm flex-1 ${isCompleted
                                               ? "text-gray-500 line-through"
                                               : "text-gray-700"
-                                          }`}
+                                            }`}
                                         >
                                           {taskText}
                                         </span>

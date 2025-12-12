@@ -52,24 +52,41 @@ const UserProfileForm = ({ onSubmit, error, isLoading: externalLoading }) => {
 
     const extracted = extractGitHubUrl(inputValue);
 
+    // URL이 없어도 자연어 메시지로 제출 허용 (백엔드가 저장소 검색)
     if (!extracted) {
-      setValidationError(
-        "GitHub 저장소 URL이 포함되어 있지 않습니다. (예: https://github.com/owner/repo 또는 owner/repo)"
-      );
+      // 입력값이 비어있으면 에러
+      if (!inputValue.trim()) {
+        setValidationError("메시지를 입력해주세요.");
+        return;
+      }
+
+      // URL 없이 자연어 메시지로 제출
+      setIsSubmitting(true);
+      onSubmit({
+        repositoryUrl: null,  // URL 없음
+        message: inputValue.trim(),
+        userMessage: inputValue.trim(),
+        priority: priority,
+        isNaturalLanguageQuery: true,  // 자연어 쿼리 플래그
+      });
       return;
     }
 
     setIsSubmitting(true);
 
-    let message = "";
+    // URL을 제거한 텍스트 (UI 표시용)
+    let textWithoutUrl = "";
     if (extracted.isFullUrl) {
-      message = inputValue.replace(extracted.url, "").trim();
+      textWithoutUrl = inputValue.replace(extracted.url, "").trim();
     }
 
     onSubmit({
       repositoryUrl: extracted.url,
-      message: message,
-      userMessage: userMessage,
+      // 원본 메시지 그대로 전달 (백엔드에서 저장소 감지용)
+      message: inputValue.trim(),
+      userMessage: inputValue.trim(),
+      // URL 제거된 텍스트 (optional, UI용)
+      textWithoutUrl: textWithoutUrl,
       priority: priority,
     });
   };

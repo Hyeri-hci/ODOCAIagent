@@ -31,6 +31,7 @@ import { formatNumber } from "../../utils/formatNumber";
 import OnboardingPlanSection from "./OnboardingPlanSection";
 import ContributorGuideSection from "./ContributorGuideSection";
 import { AnalysisReportSkeleton } from "./SkeletonLoader";
+import ExportReportButton from "./ExportReportButton";
 
 // === 섹션별 가이드 정보 ===
 const SECTION_GUIDES = {
@@ -308,7 +309,17 @@ const AnalysisReportSection = ({
   }
 
   // 데이터가 없을 때 Empty State
-  if (!analysisResult || !analysisResult.summary) {
+  // summary 없어도 온보딩 플랜, 보안 결과, 추천 결과 등이 있으면 리포트 표시
+  const hasAnyContent = analysisResult && (
+    analysisResult.summary ||
+    (Array.isArray(analysisResult.onboardingPlan) && analysisResult.onboardingPlan.length > 0) ||
+    analysisResult.onboardingPlan?.plan?.length > 0 ||
+    analysisResult.security ||
+    analysisResult.recommendations?.length > 0 ||
+    analysisResult.similarProjects?.length > 0  // 추천 결과 포함
+  );
+
+  if (!hasAnyContent) {
     return (
       <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
         <div className="w-16 h-16 bg-gray-100 dark:bg-gray-700 rounded-xl flex items-center justify-center mx-auto mb-4">
@@ -325,8 +336,8 @@ const AnalysisReportSection = ({
     );
   }
 
-  const { summary, technicalDetails, rawAnalysis } = analysisResult;
-  const statusConfig = getStatusConfig(summary.score);
+  const { summary, technicalDetails, rawAnalysis } = analysisResult || {};
+  const statusConfig = getStatusConfig(summary?.score || 0);
 
   // 데이터 유효성 검사 함수
   const hasValidOverviewData = () => {
@@ -466,20 +477,31 @@ const AnalysisReportSection = ({
         );
 
       case "security":
-        if (!analysisResult.security) return null;
+        // 보안 결과가 있거나, 명시적으로 보안 분석이 요청된 경우 표시
+        // securityRequested는 analysisResult에 추가됨
+        if (!analysisResult.security && !analysisResult.securityRequested)
+          return null;
         return (
           <div key="security">
             <CollapsibleCard
               title="보안 분석"
               icon={<Shield className="w-5 h-5 text-gray-500" />}
-              subtitle={`취약점 ${analysisResult.security.vulnerability_count || 0
-                }개 발견`}
+              subtitle={
+                analysisResult.security
+                  ? `취약점 ${analysisResult.security.vulnerability_count || 0
+                  }개 발견`
+                  : "분석 완료"
+              }
               isExpanded={expandedSections.security}
               onToggle={() => toggleSection("security")}
               guideKey="security"
               onOpenGuide={handleOpenGuide}
             >
-              <SecuritySection security={analysisResult.security} />
+              {analysisResult.security ? (
+                <SecuritySection security={analysisResult.security} />
+              ) : (
+                <EmptySecuritySection />
+              )}
             </CollapsibleCard>
           </div>
         );
@@ -618,13 +640,31 @@ const AnalysisReportSection = ({
 
   return (
     <div className="relative space-y-3">
+      {/* 리포트 헤더 - 내보내기 버튼 */}
+      <div className="flex items-center justify-end mb-2">
+        <ExportReportButton analysisResult={analysisResult} />
+      </div>
+
       {/* 온보딩 가이드 (고정 - 항상 최상단) */}
-      {analysisResult.onboardingPlan?.length > 0 && (
-        <OnboardingPlanSection
-          plan={analysisResult.onboardingPlan}
-          userProfile={{ repositoryUrl: analysisResult.repositoryUrl }}
-        />
-      )}
+      {/* 배열인 경우: 직접 length 체크, 객체인 경우: plan 필드에서 추출 */}
+      {(Array.isArray(analysisResult.onboardingPlan)
+        ? analysisResult.onboardingPlan.length > 0
+        : analysisResult.onboardingPlan?.plan?.length > 0) && (
+          <OnboardingPlanSection
+            plan={
+              Array.isArray(analysisResult.onboardingPlan)
+                ? analysisResult.onboardingPlan
+                : analysisResult.onboardingPlan?.plan || []
+            }
+            userProfile={{ repositoryUrl: analysisResult.repositoryUrl }}
+            onGeneratePlan={() => {
+              if (onSendGuideMessage) {
+                // 난이도 없이 기본 메시지 전송, 사용자 메시지로 추가
+                onSendGuideMessage("온보딩 플랜을 다시 생성해줘", { asUserMessage: true });
+              }
+            }}
+          />
+        )}
 
       {/* 섹션 목록 */}
       <div className="space-y-4">
@@ -876,6 +916,26 @@ const ProjectSummary = ({ summary, interpretation, levelDescription }) => (
   </div>
 );
 
+// 빈 보안 섹션 (취약점 없음)
+const EmptySecuritySection = () => (
+  <div className="text-center py-8">
+    <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+      <Shield className="w-8 h-8 text-green-600" />
+    </div>
+    <h3 className="text-lg font-semibold text-gray-900 mb-2">
+      보안 취약점이 발견되지 않았습니다
+    </h3>
+    <p className="text-sm text-gray-500 max-w-md mx-auto">
+      의존성 패키지에서 알려진 보안 취약점(CVE)이 감지되지 않았습니다.
+      프로젝트가 안전한 상태입니다.
+    </p>
+    <div className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-green-50 text-green-700 rounded-full text-sm font-medium">
+      <CheckCircle className="w-4 h-4" />
+      안전함
+    </div>
+  </div>
+);
+
 // 보안 섹션
 const SecuritySection = ({ security }) => {
   const gradeConfig = {
@@ -887,8 +947,12 @@ const SecuritySection = ({ security }) => {
   };
   const grade = gradeConfig[security.grade] || gradeConfig.C;
 
+  // 취약점 상세 정보
+  const vulnerabilities = security.vulnerabilities || [];
+
   return (
     <div className="space-y-4">
+      {/* 점수 카드 */}
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-gray-50 rounded-xl p-4 text-center border border-gray-200">
           <div className="text-3xl font-black text-gray-900">
@@ -910,30 +974,92 @@ const SecuritySection = ({ security }) => {
         </div>
       </div>
 
+      {/* 심각도별 카운트 */}
       <div className="grid grid-cols-4 gap-3">
         {[
-          { label: "Critical", count: security.critical || 0, color: "red" },
-          { label: "High", count: security.high || 0, color: "orange" },
-          { label: "Medium", count: security.medium || 0, color: "yellow" },
-          { label: "Low", count: security.low || 0, color: "blue" },
+          { label: "Critical", count: security.critical || 0, bgColor: "bg-red-50", borderColor: "border-red-200", textColor: "text-red-600" },
+          { label: "High", count: security.high || 0, bgColor: "bg-orange-50", borderColor: "border-orange-200", textColor: "text-orange-600" },
+          { label: "Medium", count: security.medium || 0, bgColor: "bg-yellow-50", borderColor: "border-yellow-200", textColor: "text-yellow-600" },
+          { label: "Low", count: security.low || 0, bgColor: "bg-blue-50", borderColor: "border-blue-200", textColor: "text-blue-600" },
         ].map((item) => (
           <div
             key={item.label}
-            className={`text-center p-3 bg-${item.color}-50 rounded-lg border border-${item.color}-200`}
+            className={`text-center p-3 ${item.bgColor} rounded-lg border ${item.borderColor}`}
           >
-            <div className={`text-2xl font-bold text-${item.color}-600`}>
+            <div className={`text-2xl font-bold ${item.textColor}`}>
               {item.count}
             </div>
-            <div className={`text-xs text-${item.color}-700 font-medium`}>
+            <div className={`text-xs ${item.textColor} font-medium`}>
               {item.label}
             </div>
           </div>
         ))}
       </div>
 
+      {/* 요약 */}
       {security.summary && (
         <div className="text-sm text-gray-600 p-3 bg-blue-50 rounded-lg border border-blue-100">
           {security.summary}
+        </div>
+      )}
+
+      {/* CVE 상세 정보 */}
+      {vulnerabilities.length > 0 && (
+        <div className="space-y-2">
+          <h4 className="text-sm font-semibold text-gray-700">발견된 취약점</h4>
+          <div className="space-y-2 max-h-60 overflow-y-auto">
+            {vulnerabilities.map((vuln, idx) => (
+              <div
+                key={idx}
+                className="p-3 bg-gray-50 rounded-lg border border-gray-200"
+              >
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-gray-900">
+                    {vuln.cve_id || vuln.package || `취약점 #${idx + 1}`}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 text-xs font-medium rounded ${vuln.severity === "critical"
+                      ? "bg-red-100 text-red-700"
+                      : vuln.severity === "high"
+                        ? "bg-orange-100 text-orange-700"
+                        : vuln.severity === "medium"
+                          ? "bg-yellow-100 text-yellow-700"
+                          : "bg-blue-100 text-blue-700"
+                      }`}
+                  >
+                    {vuln.severity || "unknown"}
+                  </span>
+                </div>
+                {vuln.package && (
+                  <div className="text-xs text-gray-500 mt-1">
+                    패키지: {vuln.package}
+                  </div>
+                )}
+                {vuln.description && (
+                  <div className="text-xs text-gray-600 mt-1">
+                    {vuln.description}
+                  </div>
+                )}
+                {vuln.cve_id && (
+                  <a
+                    href={`https://nvd.nist.gov/vuln/detail/${vuln.cve_id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-indigo-600 hover:underline mt-1 inline-block"
+                  >
+                    NVD에서 보기
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 취약점 없음 메시지 */}
+      {security.vulnerability_count === 0 && (
+        <div className="text-center py-4 text-green-600 bg-green-50 rounded-lg">
+          취약점이 발견되지 않았습니다!
         </div>
       )}
     </div>
@@ -1208,7 +1334,7 @@ const SimilarProjectsSection = ({ projects }) => {
             href={project.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="block p-4 bg-violet-50/50 hover:bg-violet-100/50 rounded-xl border border-violet-200/60 transition-colors group"
+            className="block p-4 bg-violet-50/50 hover:bg-violet-100/50 rounded-xl border border-violet-200/60 transition-colors group min-h-[140px]"
           >
             <div className="flex items-start gap-3">
               <div className="w-10 h-10 bg-violet-100 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -1242,22 +1368,15 @@ const SimilarProjectsSection = ({ projects }) => {
                   )}
                 </div>
                 {project.reason && (
-                  <p className="text-xs text-violet-600 mt-2 line-clamp-2 bg-violet-100/50 px-2 py-1 rounded">
+                  <p className="text-xs text-violet-600 mt-2 max-h-16 overflow-y-auto bg-violet-100/50 px-2 py-1 rounded">
                     {project.reason}
                   </p>
                 )}
-                {project.similarity !== undefined && (
+                {/* 온보딩 점수 표시 (유사도 대신) */}
+                {project.onboarding_score !== undefined && (
                   <div className="flex items-center gap-2 mt-2">
-                    <div className="flex-1 h-1.5 bg-violet-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-violet-400 rounded-full"
-                        style={{
-                          width: `${Math.round(project.similarity * 100)}%`,
-                        }}
-                      />
-                    </div>
                     <span className="text-xs text-violet-500 font-medium">
-                      {Math.round(project.similarity * 100)}%
+                      온보딩 점수: {project.onboarding_score}점
                     </span>
                   </div>
                 )}

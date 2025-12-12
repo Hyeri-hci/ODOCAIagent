@@ -30,6 +30,7 @@ const ReportGenerationMessage = ({
   analysisResult,
   isCollapsed,
   onToggleCollapse,
+  progressMessage,
 }) => {
   const [expandedSection, setExpandedSection] = useState(null);
 
@@ -234,7 +235,8 @@ const ReportGenerationMessage = ({
             <p className="text-gray-400 text-xs">
               {isComplete
                 ? "모든 섹션 분석 완료"
-                : `${completedCount}/${sectionConfig.length} 섹션 완료`}
+                : progressMessage ||
+                  `${completedCount}/${sectionConfig.length} 섹션 완료`}
             </p>
           </div>
           <div className="text-right flex items-center gap-3">

@@ -31,21 +31,37 @@ const AnalysisChat = ({
 
   // 초기 메시지 생성 - 보고서 생성 카드 형태로
   const getInitialMessages = () => {
+    // 분석 대기 중이거나 자연어 쿼리일 때는 빈 메시지로 시작
+    if (
+      initialAnalysisResult?.isNaturalLanguageQuery ||
+      initialAnalysisResult?.shouldStartAnalysis
+    ) {
+      return [];
+    }
+
+    // 실제 데이터가 있는지 확인
+    const hasRealData =
+      initialAnalysisResult?.summary?.score > 0 ||
+      initialAnalysisResult?.technicalDetails?.stars > 0 ||
+      initialAnalysisResult?.technicalDetails?.forks > 0;
+
+    // 데이터가 없으면 빈 배열 반환
+    if (!hasRealData) {
+      return [];
+    }
+
     // 초기 보고서 생성 메시지 생성
     const initialSections = {};
 
     // 데이터가 실제로 있는 섹션만 complete로 설정
-    // summary는 score가 0보다 커야 유효
     if (initialAnalysisResult?.summary?.score > 0)
       initialSections.overview = "complete";
-    // technicalDetails는 stars나 forks 등 실제 데이터가 있어야 유효
     if (
       initialAnalysisResult?.technicalDetails?.stars > 0 ||
       initialAnalysisResult?.technicalDetails?.forks > 0 ||
       initialAnalysisResult?.technicalDetails?.documentationQuality > 0
     )
       initialSections.metrics = "complete";
-    // projectSummary는 빈 문자열이 아니어야 유효
     if (
       initialAnalysisResult?.projectSummary &&
       initialAnalysisResult.projectSummary.trim()
@@ -85,9 +101,8 @@ const AnalysisChat = ({
       {
         id: "initial_text",
         role: "assistant",
-        content: `**${
-          userProfile?.repositoryUrl || "저장소"
-        }** 분석이 완료되었습니다! 🎉\n\n위의 보고서 카드에서 각 섹션을 클릭하면 상세 정보를 확인할 수 있습니다. 궁금한 점이 있으시면 질문해주세요.`,
+        content: `**${userProfile?.repositoryUrl || "저장소"
+          }** 분석이 완료되었습니다!\n\n위의 보고서 카드에서 각 섹션을 클릭하면 상세 정보를 확인할 수 있습니다. 궁금한 점이 있으시면 질문해주세요.`,
         timestamp: new Date(),
       },
     ];
@@ -112,8 +127,13 @@ const AnalysisChat = ({
   const [selectedForCompare, setSelectedForCompare] = useState(new Set());
   const [suggestions, setSuggestions] = useState([]);
 
-  // 리포트 영역 표시 상태 (true: 리포트 표시, false: 채팅만 전체화면)
-  const [showReport, setShowReport] = useState(true);
+  // 리포트 영역 표시 상태 (데이터 있을 때만 표시)
+  const hasInitialData =
+    initialAnalysisResult?.summary?.score > 0 ||
+    initialAnalysisResult?.technicalDetails;
+  const [showReport, setShowReport] = useState(hasInitialData);
+  // 사용자가 의도적으로 리포트를 닫았는지 추적 (자동 열림 방지용)
+  const [userClosedReport, setUserClosedReport] = useState(false);
 
   const {
     sessionId,
@@ -127,16 +147,22 @@ const AnalysisChat = ({
     switchToSession,
   } = useSessionManagement();
 
-  const { streamingMessage, isStreaming, startStream, cancelStream } =
-    useAnalysisStream({
-      parseGitHubUrl,
-      transformApiResponse,
-      setSessionId,
-      setSuggestions,
-      setAnalysisResult,
-      setIsGeneratingPlan: () => {}, // noop
-      onAnalysisUpdate,
-    });
+  const {
+    streamingMessage,
+    isStreaming,
+    startStream,
+    cancelStream,
+    progressMessage,
+  } = useAnalysisStream({
+    parseGitHubUrl,
+    transformApiResponse,
+    setSessionId,
+    setSessionRepo, // 백엔드와 저장소 정보 동기화
+    setSuggestions,
+    setAnalysisResult,
+    setIsGeneratingPlan: () => { }, // noop
+    onAnalysisUpdate,
+  });
 
   const {
     analysisHistory,
@@ -154,6 +180,16 @@ const AnalysisChat = ({
   useEffect(() => {
     if (!analysisResult) return;
 
+    // 실제 데이터가 도착하면 보고서 패널 표시 (사용자가 의도적으로 닫지 않은 경우에만)
+    const hasData =
+      analysisResult.summary?.score > 0 ||
+      analysisResult.technicalDetails ||
+      analysisResult.security ||
+      analysisResult.similarProjects?.length > 0; // 추천 결과도 포함
+    if (hasData && !showReport && !userClosedReport) {
+      setShowReport(true);
+    }
+
     setMessages((prevMessages) => {
       return prevMessages.map((msg) => {
         if (msg.type === "report_generation") {
@@ -165,7 +201,9 @@ const AnalysisChat = ({
             updatedSections.metrics = "complete";
           if (analysisResult.projectSummary)
             updatedSections.projectSummary = "complete";
-          if (analysisResult.security) updatedSections.security = "complete";
+          // 보안: 결과가 있거나, 보안 요청이 완료된 경우
+          if (analysisResult.security || analysisResult.securityRequested)
+            updatedSections.security = "complete";
           if (analysisResult.risks?.length > 0)
             updatedSections.risks = "complete";
           if (analysisResult.recommendedIssues?.length > 0)
@@ -180,6 +218,7 @@ const AnalysisChat = ({
           return {
             ...msg,
             sections: updatedSections,
+            progressMessage, // 진행 메시지 추가
             isComplete:
               Object.values(updatedSections).filter((s) => s === "complete")
                 .length >= 3,
@@ -188,7 +227,7 @@ const AnalysisChat = ({
         return msg;
       });
     });
-  }, [analysisResult, setMessages]);
+  }, [analysisResult, analysisResult?.similarProjects?.length, progressMessage, setMessages]);
 
   // analysisResult의 repositoryUrl이 변경되면 세션 저장소 정보 업데이트
   useEffect(() => {
@@ -223,17 +262,41 @@ const AnalysisChat = ({
   };
 
   // 가이드 메시지 핸들러 - 물음표 클릭 시 채팅으로 가이드 전송
-  const handleSendGuideMessage = (guideMessage) => {
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: Date.now(),
-        role: "assistant",
-        type: "guide",
+  // options.asUserMessage === true 이면 사용자 메시지로 표시하고 스트리밍 요청 전송
+  const handleSendGuideMessage = (guideMessage, options = {}) => {
+    if (options.asUserMessage) {
+      // 사용자 메시지로 표시
+      const userMessage = {
+        id: `user_${Date.now()}`,
+        role: "user",
         content: guideMessage,
-        timestamp: new Date().toISOString(),
-      },
-    ]);
+        timestamp: new Date(),
+      };
+      addMessage(userMessage);
+
+      // 스트리밍 요청 전송
+      setIsTyping(true);
+      startStream(
+        guideMessage,
+        sessionId,
+        analysisResult,
+        addMessage,
+        setIsTyping,
+        sessionRepo
+      );
+    } else {
+      // 기존 동작: 어시스턴트 가이드 메시지로 표시
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now(),
+          role: "assistant",
+          type: "guide",
+          content: guideMessage,
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    }
     // 채팅창으로 스크롤
     setTimeout(() => scrollToBottom(), 100);
   };
@@ -257,6 +320,66 @@ const AnalysisChat = ({
       cancelStream();
     };
   }, [cancelStream]);
+
+  // 자연어 쿼리로 진입 시 초기 메시지 자동 전송
+  const hasAutoSentInitialMessage = useRef(false);
+  useEffect(() => {
+    if (hasAutoSentInitialMessage.current) return;
+
+    // Case 1: 자연어 쿼리 (URL 없음) - 초기 메시지 전송
+    if (
+      initialAnalysisResult?.isNaturalLanguageQuery &&
+      initialAnalysisResult?.initialMessage
+    ) {
+      hasAutoSentInitialMessage.current = true;
+      const initialMsg = initialAnalysisResult.initialMessage;
+      console.log("[AnalysisChat] 자연어 쿼리 자동 전송:", initialMsg);
+
+      setTimeout(() => {
+        const userMessage = {
+          id: `user_${Date.now()}`,
+          role: "user",
+          content: initialMsg,
+          timestamp: new Date(),
+        };
+        addMessage(userMessage);
+
+        startStream(initialMsg, null, sessionId, addMessage);
+      }, 300);
+      return;
+    }
+
+    // Case 2: URL 있음 - 자동 분석 시작
+    if (
+      initialAnalysisResult?.shouldStartAnalysis &&
+      initialAnalysisResult?.repositoryUrl
+    ) {
+      hasAutoSentInitialMessage.current = true;
+      const repoUrl = initialAnalysisResult.repositoryUrl;
+      // 사용자가 입력한 원본 메시지 사용 (없으면 기본 분석 요청)
+      const originalMessage =
+        initialAnalysisResult?.originalMessage || `${repoUrl} 분석해줘`;
+      console.log(
+        "[AnalysisChat] 자동 분석 시작:",
+        repoUrl,
+        "원본 메시지:",
+        originalMessage
+      );
+
+      // 시스템 메시지 대신 사용자 메시지로 분석 요청
+      setTimeout(() => {
+        const userMessage = {
+          id: `user_${Date.now()}`,
+          role: "user",
+          content: originalMessage,
+          timestamp: new Date(),
+        };
+        addMessage(userMessage);
+
+        startStream(originalMessage, repoUrl, sessionId, addMessage);
+      }, 300);
+    }
+  }, [initialAnalysisResult, sessionId, addMessage, startStream]);
 
   // History navigation handlers
   const handleGoBack = () => {
@@ -341,9 +464,8 @@ const AnalysisChat = ({
         const errorMessage = {
           id: `compare_error_${Date.now()}`,
           role: "assistant",
-          content: `비교 분석 중 오류가 발생했습니다: ${
-            response.error || "결과를 가져올 수 없습니다"
-          }`,
+          content: `비교 분석 중 오류가 발생했습니다: ${response.error || "결과를 가져올 수 없습니다"
+            }`,
           timestamp: new Date(),
         };
         addMessage(errorMessage);
@@ -661,9 +783,8 @@ const AnalysisChat = ({
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-start">
           {/* 왼쪽: 채팅 영역 - 리포트 숨김 시 전체 너비 */}
           <div
-            className={`${
-              showReport ? "md:col-span-2" : "md:col-span-5"
-            } bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col h-[calc(100vh-140px)] min-h-[500px] transition-all duration-300`}
+            className={`${showReport ? "md:col-span-2" : "md:col-span-5"
+              } bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col h-[calc(100vh-140px)] min-h-[500px] transition-all duration-300`}
           >
             {/* 채팅 헤더 */}
             <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100">
@@ -758,28 +879,59 @@ const AnalysisChat = ({
               ref={reportRef}
             >
               {/* 리포트 헤더 with 닫기 버튼 */}
-              <div className="flex items-center justify-between sticky top-0 bg-gray-50 dark:bg-gray-900 z-10">
-                <AnalysisHistoryNav
-                  analysisHistory={analysisHistory}
-                  currentHistoryIndex={currentHistoryIndex}
-                  canGoBack={canGoBack}
-                  canGoForward={canGoForward}
-                  onGoBack={handleGoBack}
-                  onGoForward={handleGoForward}
-                  showCompareSelector={showCompareSelector}
-                  setShowCompareSelector={setShowCompareSelector}
-                  isComparing={isComparing}
-                  selectedForCompare={selectedForCompare}
-                  onToggleCompareSelection={toggleCompareSelection}
-                  onCompareAnalysis={handleCompareAnalysis}
-                  setSelectedForCompare={setSelectedForCompare}
-                  getUniqueRepositories={getUniqueRepositories}
-                  showSessionHistory={showSessionHistory}
-                  onToggleSessionHistory={toggleSessionHistory}
-                  sessionList={sessionList}
-                  sessionId={sessionId}
-                  onSwitchToSession={switchToSession}
-                />
+              <div className="flex items-center justify-between sticky top-0 bg-gray-50 dark:bg-gray-900 z-10 pb-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                    📊 분석 리포트
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <AnalysisHistoryNav
+                    analysisHistory={analysisHistory}
+                    currentHistoryIndex={currentHistoryIndex}
+                    canGoBack={canGoBack}
+                    canGoForward={canGoForward}
+                    onGoBack={handleGoBack}
+                    onGoForward={handleGoForward}
+                    showCompareSelector={showCompareSelector}
+                    setShowCompareSelector={setShowCompareSelector}
+                    isComparing={isComparing}
+                    selectedForCompare={selectedForCompare}
+                    onToggleCompareSelection={toggleCompareSelection}
+                    onCompareAnalysis={handleCompareAnalysis}
+                    setSelectedForCompare={setSelectedForCompare}
+                    getUniqueRepositories={getUniqueRepositories}
+                    showSessionHistory={showSessionHistory}
+                    onToggleSessionHistory={toggleSessionHistory}
+                    sessionList={sessionList}
+                    sessionId={sessionId}
+                    onSwitchToSession={switchToSession}
+                  />
+                  {/* 리포트 닫기 버튼 */}
+                  <button
+                    onClick={() => {
+                      setShowReport(false);
+                      setUserClosedReport(true);
+                    }}
+                    className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-colors"
+                    title="리포트 닫기"
+                  >
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
+                    <span className="hidden lg:inline">닫기</span>
+                  </button>
+                </div>
               </div>
 
               <div className="mt-4">
@@ -793,29 +945,33 @@ const AnalysisChat = ({
           )}
         </div>
 
-        {/* 플로팅 리포트 버튼 - 리포트가 숨겨져 있을 때만 표시 */}
-        {!showReport && (
-          <button
-            onClick={() => setShowReport(true)}
-            className="hidden md:flex fixed bottom-6 right-6 items-center gap-2 px-4 py-2.5 bg-gray-900 dark:bg-gray-700 text-white text-sm rounded-lg shadow-md hover:bg-gray-800 dark:hover:bg-gray-600 transition-colors z-50"
-            title="분석 리포트 보기"
-          >
-            <svg
-              className="w-4 h-4"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
+        {/* 플로팅 리포트 버튼 - 리포트가 숨겨져 있고 데이터가 있을 때만 표시 */}
+        {!showReport &&
+          (analysisResult?.summary?.score > 0 ||
+            analysisResult?.security ||
+            analysisResult?.onboardingPlan?.length > 0 ||
+            analysisResult?.contributorGuide) && (
+            <button
+              onClick={() => setShowReport(true)}
+              className="hidden md:flex fixed bottom-6 right-6 items-center gap-2 px-4 py-2.5 bg-gray-900 dark:bg-gray-700 text-white text-sm rounded-lg shadow-md hover:bg-gray-800 dark:hover:bg-gray-600 transition-colors z-50"
+              title="분석 리포트 보기"
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-              />
-            </svg>
-            <span>리포트 보기</span>
-          </button>
-        )}
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
+              </svg>
+              <span>리포트 보기</span>
+            </button>
+          )}
       </div>
     </div>
   );
