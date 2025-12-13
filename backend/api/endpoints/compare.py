@@ -85,6 +85,7 @@ async def compare_repositories(request: CompareRequest) -> CompareResponse:
             owner=owner,
             repo=repo,
             user_context={"intent": "compare"},
+            user_message=f"Compare repositories: {', '.join(repos)}"
         )
         
         initial_state = init_state_from_input(inp)

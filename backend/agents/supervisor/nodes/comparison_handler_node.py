@@ -39,7 +39,10 @@ async def run_comparison_agent_node(state: SupervisorState) -> Dict[str, Any]:
         warnings = result.get("warnings", [])
         
         return {
-            "agent_result": result,
+            "agent_result": {
+                **result,
+                "type": "comparison"
+            },
             "final_answer": comparison_summary,
             "warnings": list(state.warnings) + warnings,
             "compare_results": result.get("compare_results", {}), # ComparisonOutput 구조에 따름

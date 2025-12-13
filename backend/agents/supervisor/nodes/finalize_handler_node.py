@@ -45,7 +45,7 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
     # 대명사 해결 정보 가져오기
     accumulated_context = state.get("accumulated_context", {})
     pronoun_info = accumulated_context.get("last_pronoun_reference", {})
-    user_message = state["user_message"]
+    user_message = state.get("user_message", "") or ""
     
     # 저장소 정보 요청 처리 (GitHub에서 저장소를 찾은 경우)
     if accumulated_context.get("found_repo_info"):
@@ -280,6 +280,30 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
                 "target_agent": state.get("target_agent"),
                 "intent_confidence": state.get("intent_confidence", 0)
             }
+        }
+    
+    elif result_type == "error":
+        error_code = agent_result.get("error_code", "UNKNOWN_ERROR")
+        error_msg = agent_result.get("error", "알 수 없는 오류가 발생했습니다.")
+        owner = agent_result.get("owner", state.get("owner"))
+        repo = agent_result.get("repo", state.get("repo"))
+        
+        answer = f"⚠️ **분석 중 오류가 발생했습니다**\n\n"
+        
+        if error_code == "REPO_NOT_FOUND":
+            answer += f"**{owner}/{repo}** 저장소를 찾을 수 없습니다.\n"
+            answer += "- 저장소 이름이 정확한지 확인해주세요.\n"
+            answer += "- Private 저장소라면 접근 권한이 필요할 수 있습니다.\n"
+        elif error_code == "GITHUB_API_ERROR":
+            answer += f"GitHub API 호출 중 문제가 발생했습니다.\n"
+            answer += f"오류 메시지: {error_msg}\n"
+        else:
+            answer += f"{error_msg}\n"
+            
+        return {
+            "final_answer": answer,
+            "error_code": error_code,
+            "error": error_msg
         }
     
     elif result_type == "quick_query":
@@ -718,6 +742,39 @@ Good First Issue를 찾으시려면 `이슈 추천해줘`라고 말해보세요!
             "final_answer": answer,
             "agent_result": agent_result,
             "contributor_guide": agent_result
+        }
+    
+    elif result_type == "comparison":
+        # 비교 분석 결과 포맷팅
+        summary = agent_result.get("comparison_summary", "")
+        comparison_data = agent_result.get("compare_results", {})
+        
+        # 랭킹 점수 로직 (compare_nodes.py 참조)
+        ranked_repos = []
+        for r_str, data in comparison_data.items():
+            health = data.get("health_score", 0)
+            onboard = data.get("onboarding_score", 0)
+            ranked_repos.append((r_str, health, onboard))
+        
+        # 건강도순 정렬
+        ranked_repos.sort(key=lambda x: x[1], reverse=True)
+        
+        answer = f"## ⚖️ 저장소 비교 분석 결과\n\n"
+        answer += f"{summary}\n\n" if summary else ""
+        
+        if ranked_repos:
+            answer += "### 🏆 종합 순위\n\n"
+            for i, (r_name, health, onboard) in enumerate(ranked_repos, 1):
+                medal = ["🥇", "🥈", "🥉"][i-1] if i <= 3 else f"{i}."
+                answer += f"{medal} **{r_name}**\n"
+                answer += f"   - 🏥 건강도: {health}점\n"
+                answer += f"   - 🔰 온보딩: {onboard}점\n\n"
+        
+        answer += "---\n📊 **상세 비교 데이터는 우측 리포트의 '비교' 탭에서 확인하세요.**"
+        
+        return {
+            "final_answer": answer,
+            "agent_result": agent_result
         }
     
     else:

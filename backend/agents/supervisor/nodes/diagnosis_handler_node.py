@@ -68,6 +68,8 @@ async def run_diagnosis_agent_node(state: SupervisorState) -> Dict[str, Any]:
     # 3. 캐시 미스 - 새로 진단 실행
     logger.info("Cache miss - running fresh diagnosis")
     
+    import asyncio
+    
     # 대용량 저장소 체크 (첫 분석일 때만)
     repo_size_info = await check_repo_size_and_warn(owner, repo)
     
@@ -76,6 +78,21 @@ async def run_diagnosis_agent_node(state: SupervisorState) -> Dict[str, Any]:
     if repo_size_info["is_large"]:
         warning_message = repo_size_info["warning_message"]
         logger.info(f"Large repo warning: {warning_message}")
+        
+        # 웹소켓으로 즉시 전송
+        session_id = state.get("session_id")
+        if session_id:
+            try:
+                from backend.api.websocket_router import manager
+                await manager.send_json(session_id, {
+                    "type": "warning",
+                    "message": warning_message
+                })
+                logger.info(f"Sent large repo warning to session {session_id}")
+            except ImportError:
+                logger.warning("Could not import websocket manager (circular import avoided)")
+            except Exception as e:
+                logger.warning(f"Failed to send warning over websocket: {e}")
     
     result = await run_diagnosis(
         owner=owner,

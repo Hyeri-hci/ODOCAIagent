@@ -14,6 +14,7 @@ from backend.core.activity_core import analyze_activity_optimized
 from backend.core.structure_core import analyze_structure
 from backend.core.dependencies_core import parse_dependencies
 from backend.core.scoring_core import compute_scores, compute_health_level, compute_onboarding_level
+from backend.common.errors import RepoNotFoundError, GitHubError
 from backend.llm.factory import fetch_llm_client
 from backend.llm.base import ChatRequest, ChatMessage
 
@@ -140,6 +141,26 @@ async def execute_full_path(
             "_cache_timestamp": time.time()  # 캐시 타임스탬프
         }
         
+    except RepoNotFoundError as e:
+        logger.warning(f"Repository not found: {owner}/{repo}")
+        return {
+            "type": "error",
+            "error_code": "REPO_NOT_FOUND",
+            "owner": owner,
+            "repo": repo,
+            "error": "저장소를 찾을 수 없습니다. (Private 저장소이거나 존재하지 않음)",
+            "execution_time_ms": int((time.time() - start_time) * 1000)
+        }
+    except GitHubError as e:
+        logger.warning(f"GitHub API error for {owner}/{repo}: {e}")
+        return {
+            "type": "error",
+            "error_code": "GITHUB_API_ERROR",
+            "owner": owner,
+            "repo": repo,
+            "error": f"GitHub API 오류: {str(e)}",
+            "execution_time_ms": int((time.time() - start_time) * 1000)
+        }
     except Exception as e:
         logger.error(f"Full path failed: {e}", exc_info=True)
         execution_time_ms = int((time.time() - start_time) * 1000)
