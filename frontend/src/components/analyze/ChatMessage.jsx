@@ -52,9 +52,8 @@ const ChatMessage = ({
       )}
 
       <div
-        className={`max-w-[80%] rounded-xl px-4 py-3 break-words overflow-hidden ${
-          isUser ? "bg-gray-800 text-white" : "bg-gray-100 text-gray-900"
-        }`}
+        className={`max-w-[80%] rounded-xl px-4 py-3 break-words overflow-hidden ${isUser ? "bg-gray-800 text-white" : "bg-gray-100 text-gray-900"
+          }`}
       >
         {isUser ? (
           <p className="whitespace-pre-wrap leading-relaxed break-words">
@@ -136,7 +135,7 @@ const ChatMessage = ({
                     className="w-full text-left px-4 py-3 bg-green-50 border-2 border-green-200 rounded-lg hover:bg-green-100 transition-colors"
                   >
                     <div className="font-semibold text-green-700">
-                      1️⃣ 입문자
+                      입문자
                     </div>
                     <div className="text-sm text-green-600">
                       프로그래밍을 막 시작했거나 이 기술 스택이 처음이에요
@@ -150,7 +149,7 @@ const ChatMessage = ({
                     }}
                     className="w-full text-left px-4 py-3 bg-blue-50 border-2 border-blue-200 rounded-lg hover:bg-blue-100 transition-colors"
                   >
-                    <div className="font-semibold text-blue-700">2️⃣ 중급자</div>
+                    <div className="font-semibold text-blue-700">중급자</div>
                     <div className="text-sm text-blue-600">
                       기본 개념은 알고 있고, 실제 프로젝트 경험을 쌓고 싶어요
                     </div>
@@ -164,7 +163,7 @@ const ChatMessage = ({
                     className="w-full text-left px-4 py-3 bg-purple-50 border-2 border-purple-200 rounded-lg hover:bg-purple-100 transition-colors"
                   >
                     <div className="font-semibold text-purple-700">
-                      3️⃣ 숙련자
+                      숙련자
                     </div>
                     <div className="text-sm text-purple-600">
                       경험이 많고, 핵심 기여나 아키텍처 이해를 원해요

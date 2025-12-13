@@ -54,38 +54,7 @@ const MessageInput = ({
         </button>
       </div>
 
-      {/* 제안된 질문 (동적) */}
-      {suggestions.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {suggestions.map((suggestion, index) => (
-            <SuggestedQuestion
-              key={index}
-              text={suggestion}
-              onClick={() => setInputValue(suggestion)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* 기본 추천 질문 (suggestions가 없을 때) */}
-      {suggestions.length === 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <SuggestedQuestion
-            text="어떻게 시작하나요?"
-            onClick={() => setInputValue("어떻게 시작하나요?")}
-          />
-          <SuggestedQuestion
-            text="보안 취약점은?"
-            onClick={() =>
-              setInputValue("보안 취약점에 대해 자세히 알려주세요")
-            }
-          />
-          <SuggestedQuestion
-            text="microsoft/vscode 분석"
-            onClick={() => setInputValue("microsoft/vscode")}
-          />
-        </div>
-      )}
+      {/* 추천 질문 비활성화 - 필요시 다시 활성화 */}
     </div>
   );
 };

@@ -38,13 +38,18 @@ export const useAnalysisStream = ({
 
     // analysisResult에서 추출 실패 시, sessionRepo에서 복원 시도
     // 단, 추천/검색 요청에서는 sessionRepo를 사용하지 않음 (이전 repo와 무관한 새 검색)
-    const isRecommendRequest = /(?:찾아줘|찾고|추천|프로젝트.*찾|유사.*프로젝트|similar|recommend)/i.test(userMessage);
+    const isRecommendRequest =
+      /(?:찾아줘|찾고|추천|프로젝트.*찾|유사.*프로젝트|similar|recommend)/i.test(
+        userMessage
+      );
     if ((!owner || !repo) && sessionRepo && !isRecommendRequest) {
       owner = sessionRepo.owner;
       repo = sessionRepo.repo;
       console.log("[Stream] Using sessionRepo fallback:", owner, repo);
     } else if (isRecommendRequest && sessionRepo) {
-      console.log("[Stream] Recommend request detected, skipping sessionRepo fallback");
+      console.log(
+        "[Stream] Recommend request detected, skipping sessionRepo fallback"
+      );
     }
 
     // 그래도 없으면 메시지에서 추출 시도
@@ -162,7 +167,7 @@ export const useAnalysisStream = ({
               ...(diagramData && { structureVisualization: diagramData }),
             };
             addMessage(aiResponse);
-            setIsTyping(false);
+            if (setIsTyping) setIsTyping(false);
 
             if (data.suggestions && data.suggestions.length > 0) {
               setSuggestions(data.suggestions);
@@ -232,23 +237,51 @@ export const useAnalysisStream = ({
               // 진단과 함께 온 보안 결과 처리 (context.security_result)
               const securityResultFromContext = data.context.security_result;
               if (securityResultFromContext) {
-                console.log("보안 결과 받음 (context.security_result):", securityResultFromContext);
+                console.log(
+                  "보안 결과 받음 (context.security_result):",
+                  securityResultFromContext
+                );
 
-                const securityResults = securityResultFromContext.results || securityResultFromContext;
+                const securityResults =
+                  securityResultFromContext.results ||
+                  securityResultFromContext;
                 const vulnerabilities = securityResults.vulnerabilities || {};
 
                 const securityData = {
-                  score: securityResults.security_score ?? securityResultFromContext.security_score,
-                  grade: securityResults.security_grade ?? securityResultFromContext.security_grade,
-                  risk_level: securityResults.risk_level ?? securityResultFromContext.risk_level ?? "unknown",
-                  vulnerability_count: vulnerabilities.total ?? securityResultFromContext.vulnerability_count ?? 0,
-                  critical: vulnerabilities.critical ?? securityResultFromContext.critical_count ?? 0,
-                  high: vulnerabilities.high ?? securityResultFromContext.high_count ?? 0,
-                  medium: vulnerabilities.medium ?? securityResultFromContext.medium_count ?? 0,
-                  low: vulnerabilities.low ?? securityResultFromContext.low_count ?? 0,
+                  score:
+                    securityResults.security_score ??
+                    securityResultFromContext.security_score,
+                  grade:
+                    securityResults.security_grade ??
+                    securityResultFromContext.security_grade,
+                  risk_level:
+                    securityResults.risk_level ??
+                    securityResultFromContext.risk_level ??
+                    "unknown",
+                  vulnerability_count:
+                    vulnerabilities.total ??
+                    securityResultFromContext.vulnerability_count ??
+                    0,
+                  critical:
+                    vulnerabilities.critical ??
+                    securityResultFromContext.critical_count ??
+                    0,
+                  high:
+                    vulnerabilities.high ??
+                    securityResultFromContext.high_count ??
+                    0,
+                  medium:
+                    vulnerabilities.medium ??
+                    securityResultFromContext.medium_count ??
+                    0,
+                  low:
+                    vulnerabilities.low ??
+                    securityResultFromContext.low_count ??
+                    0,
                   summary: securityResultFromContext.report || "",
                   vulnerabilities: vulnerabilities.details || [],
-                  recommendations: securityResultFromContext.recommendations || [],
+                  recommendations:
+                    securityResultFromContext.recommendations || [],
                 };
 
                 console.log("변환된 보안 데이터 (from context):", securityData);
@@ -363,7 +396,10 @@ export const useAnalysisStream = ({
               if (target_agent === "recommend" && agent_result) {
                 console.log("추천 결과 받음 (스트리밍):", agent_result);
                 // recommendations 또는 similar_projects 키에서 데이터 추출
-                const recProjects = agent_result.recommendations || agent_result.similar_projects || [];
+                const recProjects =
+                  agent_result.recommendations ||
+                  agent_result.similar_projects ||
+                  [];
                 setAnalysisResult((prev) => ({
                   ...prev,
                   similarProjects: recProjects,
@@ -465,26 +501,30 @@ export const useAnalysisStream = ({
                   data.context.security_result
                 );
                 const secResult = data.context.security_result;
-                // 백엔드 구조: security_score, security_grade, vulnerabilities: {total, critical, high, medium, low}
-                const vulnerabilities = secResult.vulnerabilities || {};
+                // 백엔드 구조: { results: { security_score, security_grade, vulnerabilities: {total, critical, high, medium, low, details} } }
+                // results가 있으면 그 안에서, 없으면 직접 접근
+                const results = secResult.results || secResult;
+                const vulnerabilities = results.vulnerabilities || {};
 
                 const securityData = {
-                  score: secResult.security_score ?? secResult.score ?? null,
-                  grade: secResult.security_grade ?? secResult.grade ?? "N/A",
-                  risk_level: secResult.risk_level ?? "low",
+                  score:
+                    results.security_score ?? secResult.security_score ?? null,
+                  grade:
+                    results.security_grade ?? secResult.security_grade ?? "N/A",
+                  risk_level:
+                    results.risk_level ?? secResult.risk_level ?? "low",
                   vulnerability_count: vulnerabilities.total ?? 0,
                   critical: vulnerabilities.critical ?? 0,
                   high: vulnerabilities.high ?? 0,
                   medium: vulnerabilities.medium ?? 0,
                   low: vulnerabilities.low ?? 0,
-                  vulnerabilities:
-                    secResult.vulnerability_details ||
-                    vulnerabilities.details ||
-                    [],
+                  vulnerabilities: vulnerabilities.details || [],
                   recommendations: secResult.recommendations || [],
-                  summary: `취약점 ${vulnerabilities.total || 0
-                    }개 발견 (Critical: ${vulnerabilities.critical || 0}, High: ${vulnerabilities.high || 0
-                    })`,
+                  summary: `취약점 ${
+                    vulnerabilities.total || 0
+                  }개 발견 (Critical: ${vulnerabilities.critical || 0}, High: ${
+                    vulnerabilities.high || 0
+                  })`,
                 };
 
                 console.log("보안 데이터 파싱 완료:", securityData);
@@ -550,7 +590,7 @@ export const useAnalysisStream = ({
               isClarification: true, // 명확화 요청 표시
             };
             addMessage(clarificationResponse);
-            setIsTyping(false);
+            if (setIsTyping) setIsTyping(false);
             break;
           }
 
@@ -561,7 +601,7 @@ export const useAnalysisStream = ({
             const warningResponse = {
               id: `warning_${Date.now()}`,
               role: "assistant",
-              content: `⚠️ ${data.message}`,
+              content: `[Warning] ${data.message}`,
               timestamp: new Date(),
               isWarning: true,
             };
@@ -572,7 +612,7 @@ export const useAnalysisStream = ({
           case "done": {
             setIsStreaming(false);
             setStreamingMessage("");
-            setIsTyping(false);
+            if (setIsTyping) setIsTyping(false);
             break;
           }
 
@@ -589,7 +629,7 @@ export const useAnalysisStream = ({
               timestamp: new Date(),
             };
             addMessage(errorResponse);
-            setIsTyping(false);
+            if (setIsTyping) setIsTyping(false);
             console.error("Streaming error:", errorMessage);
             break;
           }

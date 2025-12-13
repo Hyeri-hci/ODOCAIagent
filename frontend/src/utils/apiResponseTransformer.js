@@ -87,16 +87,25 @@ export const transformApiResponse = (apiResponse, repositoryUrl) => {
 
       // 활동성 메트릭
       lastCommit: formatLastCommit(analysis.days_since_last_commit),
+      daysSinceLastCommit: analysis.days_since_last_commit || 0,
       totalCommits30d: analysis.total_commits_30d || 0,
+      commits30d: analysis.total_commits_30d || analysis.commits_30d || 0,
 
-      // 품질 점수 (100점 만점)
-      documentationQuality: analysis.documentation_quality || 0,
-      activityMaintainability: analysis.activity_maintainability || 0,
+      // 품질 점수 (100점 만점) - 여러 필드명 지원
+      documentationQuality:
+        analysis.documentation_quality || analysis.docs_score || 0,
+      activityMaintainability:
+        analysis.activity_maintainability || analysis.activity_score || 0,
       onboardingScore: analysis.onboarding_score || 0,
       dependencyComplexity: analysis.dependency_complexity_score || 0,
 
-      // 상세 메트릭
-      issueCloseRate: analysis.issue_close_rate || 0,
+      // 상세 메트릭 - 정수로 변환
+      issueCloseRate: Math.round(
+        (analysis.issue_close_rate || 0) *
+          (analysis.issue_close_rate > 1 ? 1 : 100)
+      ),
+      prMergeSpeed:
+        analysis.median_pr_merge_days_text || analysis.pr_merge_speed || "N/A",
       issueCloseRatePct: analysis.issue_close_rate_pct || "N/A",
       medianPRMergeDays: analysis.median_pr_merge_days,
       medianPRMergeDaysText: analysis.median_pr_merge_days_text || "N/A",
@@ -113,11 +122,16 @@ export const transformApiResponse = (apiResponse, repositoryUrl) => {
 
     // 온보딩 플랜 (plan 배열 직접 추출)
     onboardingPlan:
-      (rawData.onboarding_plan?.plan || rawData.onboarding_plan) ||
-      (analysis.onboarding_plan?.plan || analysis.onboarding_plan) ||
+      rawData.onboarding_plan?.plan ||
+      rawData.onboarding_plan ||
+      analysis.onboarding_plan?.plan ||
+      analysis.onboarding_plan ||
       null,
     // 온보딩 요약 (별도 필드)
-    onboardingSummary: rawData.onboarding_plan?.summary || analysis.onboarding_plan?.summary || "",
+    onboardingSummary:
+      rawData.onboarding_plan?.summary ||
+      analysis.onboarding_plan?.summary ||
+      "",
 
     // AI 채팅 응답
     chatResponse: rawData.chat_response || analysis.chat_response || null,
@@ -146,12 +160,21 @@ export const transformApiResponse = (apiResponse, repositoryUrl) => {
     flowAdjustments: analysis.flow_adjustments || [],
 
     // 신규 기여자 가이드 (contributor 에이전트 결과)
-    contributorGuide: rawData.contributor_guide || analysis.contributor_guide || null,
-    firstContributionGuide: rawData.first_contribution_guide || analysis.first_contribution_guide || null,
-    contributionChecklist: rawData.contribution_checklist || analysis.contribution_checklist || null,
-    communityAnalysis: rawData.community_analysis || analysis.community_analysis || null,
+    contributorGuide:
+      rawData.contributor_guide || analysis.contributor_guide || null,
+    firstContributionGuide:
+      rawData.first_contribution_guide ||
+      analysis.first_contribution_guide ||
+      null,
+    contributionChecklist:
+      rawData.contribution_checklist || analysis.contribution_checklist || null,
+    communityAnalysis:
+      rawData.community_analysis || analysis.community_analysis || null,
     issueMatching: rawData.issue_matching || analysis.issue_matching || null,
-    structureVisualization: rawData.structure_visualization || analysis.structure_visualization || null,
+    structureVisualization:
+      rawData.structure_visualization ||
+      analysis.structure_visualization ||
+      null,
 
     // 비교 분석 결과 (compare 에이전트 결과)
     compareResults: rawData.compare_results || analysis.compare_results || null,

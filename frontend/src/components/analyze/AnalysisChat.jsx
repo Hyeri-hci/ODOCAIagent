@@ -101,8 +101,9 @@ const AnalysisChat = ({
       {
         id: "initial_text",
         role: "assistant",
-        content: `**${userProfile?.repositoryUrl || "저장소"
-          }** 분석이 완료되었습니다!\n\n위의 보고서 카드에서 각 섹션을 클릭하면 상세 정보를 확인할 수 있습니다. 궁금한 점이 있으시면 질문해주세요.`,
+        content: `**${
+          userProfile?.repositoryUrl || "저장소"
+        }** 분석이 완료되었습니다!\n\n위의 보고서 카드에서 각 섹션을 클릭하면 상세 정보를 확인할 수 있습니다. 궁금한 점이 있으시면 질문해주세요.`,
         timestamp: new Date(),
       },
     ];
@@ -125,7 +126,8 @@ const AnalysisChat = ({
   const [isComparing, setIsComparing] = useState(false);
   const [showCompareSelector, setShowCompareSelector] = useState(false);
   const [selectedForCompare, setSelectedForCompare] = useState(new Set());
-  const [suggestions, setSuggestions] = useState([]);
+  // suggestions 기능 비활성화 (필요시 재활성화)
+  // const [suggestions, setSuggestions] = useState([]);
 
   // 리포트 영역 표시 상태 (데이터 있을 때만 표시)
   const hasInitialData =
@@ -158,9 +160,9 @@ const AnalysisChat = ({
     transformApiResponse,
     setSessionId,
     setSessionRepo, // 백엔드와 저장소 정보 동기화
-    setSuggestions,
+    setSuggestions: () => {}, // suggestions 기능 비활성화
     setAnalysisResult,
-    setIsGeneratingPlan: () => { }, // noop
+    setIsGeneratingPlan: () => {}, // noop
     onAnalysisUpdate,
   });
 
@@ -227,7 +229,12 @@ const AnalysisChat = ({
         return msg;
       });
     });
-  }, [analysisResult, analysisResult?.similarProjects?.length, progressMessage, setMessages]);
+  }, [
+    analysisResult,
+    analysisResult?.similarProjects?.length,
+    progressMessage,
+    setMessages,
+  ]);
 
   // analysisResult의 repositoryUrl이 변경되면 세션 저장소 정보 업데이트
   useEffect(() => {
@@ -464,8 +471,9 @@ const AnalysisChat = ({
         const errorMessage = {
           id: `compare_error_${Date.now()}`,
           role: "assistant",
-          content: `비교 분석 중 오류가 발생했습니다: ${response.error || "결과를 가져올 수 없습니다"
-            }`,
+          content: `비교 분석 중 오류가 발생했습니다: ${
+            response.error || "결과를 가져올 수 없습니다"
+          }`,
           timestamp: new Date(),
         };
         addMessage(errorMessage);
@@ -503,9 +511,10 @@ const AnalysisChat = ({
         setSessionId(response.session_id);
       }
 
-      if (response.suggestions && response.suggestions.length > 0) {
-        setSuggestions(response.suggestions);
-      }
+      // suggestions 기능 비활성화
+      // if (response.suggestions && response.suggestions.length > 0) {
+      //   setSuggestions(response.suggestions);
+      // }
 
       if (response.context) {
         const { agent_result, target_agent } = response.context;
@@ -783,8 +792,9 @@ const AnalysisChat = ({
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-start">
           {/* 왼쪽: 채팅 영역 - 리포트 숨김 시 전체 너비 */}
           <div
-            className={`${showReport ? "md:col-span-2" : "md:col-span-5"
-              } bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col h-[calc(100vh-140px)] min-h-[500px] transition-all duration-300`}
+            className={`${
+              showReport ? "md:col-span-2" : "md:col-span-5"
+            } bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col h-[calc(100vh-140px)] min-h-[500px] transition-all duration-300`}
           >
             {/* 채팅 헤더 */}
             <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100">
@@ -868,7 +878,7 @@ const AnalysisChat = ({
               isStreaming={isStreaming}
               isComparing={isComparing}
               isTyping={isTyping}
-              suggestions={suggestions}
+              suggestions={[]} // suggestions 기능 비활성화
             />
           </div>
 
