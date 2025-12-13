@@ -263,7 +263,7 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                             "diagnosis": ("run_diagnosis_agent", "프로젝트 진단 중..."),
                             "onboarding": ("run_onboarding_agent", "온보딩 플랜 생성 중..."),
                             "security": ("run_security_agent", "보안 취약점 분석 중..."),
-                            "contributor": ("run_contributor_agent", "기여 가이드 생성 중..."),
+                            "contributor": ("run_onboarding_agent", "기여 가이드 생성 중..."),  # contributor → onboarding
                             "recommend": ("run_recommend_agent", "추천 생성 중..."),
                         }
                         step_info = step_mapping.get(target_agent, ("finalize_answer", "응답 생성 중..."))

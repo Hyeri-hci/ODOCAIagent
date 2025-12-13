@@ -12,8 +12,9 @@ import logging
 from backend.api.http_router import router as api_router
 from backend.api.sse_analyze import router as sse_router
 from backend.api.cache_router import router as cache_router
-# from backend.api.chat_stream import router as chat_stream_router  # V2로 대체됨
 from backend.api.chat_router import router as chat_router
+from backend.api.websocket_router import router as websocket_router
+from backend.api import sse_chat
 from backend.common.errors import BaseError, ErrorKind
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,10 @@ app.include_router(api_router)
 app.include_router(sse_router)
 app.include_router(cache_router)
 app.include_router(chat_router)  # 세션 기반 채팅 API
+app.include_router(sse_chat.router) # SSE 기반 채팅 API (LangGraph)
+app.include_router(websocket_router, prefix="/ws")  # WebSocket 기반 실시간 채팅
+
+
 
 
 @app.get("/")
@@ -94,6 +99,7 @@ async def root():
             "health": "GET /api/health",
             "cache_stats": "GET /api/cache/stats",
             "cache_invalidate": "POST /api/cache/invalidate",
+            "websocket_chat": "WS /ws/chat",
         }
     }
 
