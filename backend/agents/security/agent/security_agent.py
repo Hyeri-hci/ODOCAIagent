@@ -27,7 +27,7 @@ class SecurityAgent:
         llm_temperature: float,
         execution_mode: Literal["fast", "intelligent", "auto"] = "auto",
             # 실행모드 : fast-규칙기반, intelligent-LLM기반, auto-자동
-        max_iterations: int = 20,
+        max_iterations: int = 10,
             # 최대 반복 횟수-ReAct 패턴에서 사용될 최대 반복 횟수
         enable_reflection: bool = True,
             # 반성을 할 것인지 아닌지 활성화
@@ -155,6 +155,7 @@ class SecurityAgent:
             # LLM 호출 없이 기본 의도 설정 (보안 분석 요청으로 라우팅됨)
             intent = {
                 "primary_action": supervisor_intent or "scan_vulnerabilities",
+                "ecosystem": "npm",
                 "scope": "full_repository",
                 "secondary_actions": [],
                 "risk_focus": [],

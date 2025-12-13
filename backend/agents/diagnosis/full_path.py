@@ -221,41 +221,44 @@ async def _generate_summary_async(
             has_readme = docs_result.has_readme
         
         commits_count = 0
+        active_contributors = 0
         if isinstance(activity_result, dict):
             commits_count = activity_result.get('total_commits_in_window', activity_result.get('recent_commits_count', 0))
         elif hasattr(activity_result, 'total_commits_in_window'):
             commits_count = activity_result.total_commits_in_window
+            if hasattr(activity_result, 'active_contributors_count'):
+                active_contributors = activity_result.active_contributors_count
         elif hasattr(activity_result, 'recent_commits_count'):
             commits_count = activity_result.recent_commits_count
+            # If activity_result is not a dict and only has recent_commits_count,
+            # active_contributors might not be directly available.
+            # We'll default it to 0 or try other attributes if they exist.
+            if hasattr(activity_result, 'unique_authors'):
+                active_contributors = activity_result.unique_authors
+            elif hasattr(activity_result, 'active_contributors'):
+                active_contributors = activity_result.active_contributors
+            else:
+                active_contributors = 0
+        else:
+            active_contributors = 0 # Default if no activity data
         
-        active_contributors = 0
-        if isinstance(activity_result, dict):
-            active_contributors = activity_result.get('unique_authors', activity_result.get('active_contributors', 0))
-        elif hasattr(activity_result, 'unique_authors'):
-            active_contributors = activity_result.unique_authors
-        elif hasattr(activity_result, 'active_contributors'):
-            active_contributors = activity_result.active_contributors
+        from backend.prompts.loader import render_prompt
         
-        # DiagnosisCoreResult에서 점수 추출
-        health_score = getattr(scoring_result, 'health_score', 0)
-        onboarding_score = getattr(scoring_result, 'onboarding_score', 0)
-        docs_score = getattr(scoring_result, 'documentation_quality', 0)
-        activity_score = getattr(scoring_result, 'activity_maintainability', 0)
-        
-        prompt = f"""다음은 {owner}/{repo} 저장소의 진단 결과입니다.
-
-점수:
-- 건강도: {health_score}/100
-- 온보딩: {onboarding_score}/100
-- 문서화: {docs_score}/100
-- 활동성: {activity_score}/100
-
-주요 내용:
-- README: {"있음" if has_readme else "없음"}
-- 최근 커밋: {commits_count}개
-- 활성 기여자: {active_contributors}명
-
-3-5문장으로 저장소 상태를 요약해주세요."""
+        prompt = render_prompt(
+            "diagnosis_prompts",
+            "summary_generation",
+            owner=owner,
+            repo=repo,
+            health_score=getattr(scoring_result, 'health_score', 0),
+            health_level=compute_health_level(getattr(scoring_result, 'health_score', 0)),
+            onboarding_score=getattr(scoring_result, 'onboarding_score', 0),
+            onboarding_level=compute_onboarding_level(getattr(scoring_result, 'onboarding_score', 0)),
+            docs_score=getattr(scoring_result, 'documentation_quality', 0),
+            activity_score=getattr(scoring_result, 'activity_maintainability', 0),
+            has_readme="O" if has_readme else "X",
+            commits_count=commits_count,
+            active_contributors=active_contributors
+        )
 
         # 비동기 LLM 호출
         loop = asyncio.get_event_loop()

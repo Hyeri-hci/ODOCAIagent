@@ -98,7 +98,7 @@ async def run_recommend(
     initial_state: RecommendState = {
         "owner": owner,
         "repo": repo,
-        "repo_url": f"{owner}/{repo}",
+        "repo_url": f"https://github.com/{owner}/{repo}",
         "ref": ref,
         "user_request": user_message,
         "skip_intent_parsing": skip_intent_parsing,

@@ -38,14 +38,14 @@ class FallbackEmbeddingClient(EmbeddingClient):
     """langchain_upstage 없을 때 사용하는 fallback 클라이언트"""
     
     def embed_query(self, text: str) -> List[float]:
-        # 빈 임베딩 반환 (추천 기능 비활성화)
-        return [0.0] * 768
+        # 빈 임베딩 반환 (추천 기능 비활성화) -> Qdrant 설정에 맞춰 4096 차원으로 변경
+        return [0.0] * 4096
     
     def embed_passage(self, text: str) -> List[float]:
-        return [0.0] * 768
+        return [0.0] * 4096
     
     def embed_passage_batch(self, texts: List[str]) -> List[List[float]]:
-        return [[0.0] * 768 for _ in texts]
+        return [[0.0] * 4096 for _ in texts]
 
 
 class UpstageEmbeddingClient(EmbeddingClient):

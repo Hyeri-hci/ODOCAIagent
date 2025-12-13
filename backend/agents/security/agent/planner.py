@@ -404,13 +404,26 @@ Parameters: {parameters}
     def _extract_json(self, content: str) -> Dict[str, Any]:
         """LLM 응답에서 JSON 추출"""
         # 마크다운 코드 블록 제거
-        json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+        json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', content, re.DOTALL)
         if json_match:
-            content = json_match.group(1)
-        elif '```' in content:
-            content = content.split('```')[1].strip()
-
-        return json.loads(content)
+            content = json_match.group(1).strip()
+        
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            # 단순 파싱 실패 시, 가장 바깥쪽 중괄호를 찾아 재시도
+            try:
+                start_idx = content.find('{')
+                end_idx = content.rfind('}')
+                if start_idx != -1 and end_idx != -1:
+                    json_str = content[start_idx : end_idx + 1]
+                    return json.loads(json_str)
+            except:
+                pass
+            
+            # 실패 로그 출력 (디버깅용)
+            print(f"[Planner] JSON parse failed. Content preview: {content[:200]}...")
+            raise e
 
     async def replan(
         self,

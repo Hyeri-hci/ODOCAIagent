@@ -664,6 +664,50 @@ def clear_all_cache() -> None:
     github_cache.clear()
 
 
+@cached(ttl=3600)  # 1시간 캐시
+def fetch_file_content(owner: str, repo: str, path: str, ref: str = "HEAD") -> Optional[str]:
+    """
+    특정 파일의 내용을 가져옵니다.
+    
+    Args:
+        owner: 저장소 소유자
+        repo: 저장소 이름
+        path: 파일 경로
+        ref: 브랜치/태그 (기본: HEAD)
+    
+    Returns:
+        파일 내용 (문자열) 또는 None (파일 없음)
+    """
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contents/{path}"
+    params = {"ref": ref} if ref != "HEAD" else {}
+    
+    try:
+        resp = requests.get(url, headers=_build_headers(), params=params, timeout=10)
+        if resp.status_code == 404:
+            return None
+        if resp.status_code != 200:
+            logger.warning("fetch_file_content failed: %s/%s/%s - %s", owner, repo, path, resp.status_code)
+            return None
+        
+        data = resp.json()
+        
+        # 파일 내용은 base64 인코딩됨
+        if data.get("encoding") == "base64":
+            import base64
+            content = data.get("content", "")
+            return base64.b64decode(content).decode("utf-8", errors="ignore")
+        
+        # 텍스트로 직접 반환된 경우
+        return data.get("content")
+        
+    except requests.Timeout:
+        logger.warning("fetch_file_content timeout: %s/%s/%s", owner, repo, path)
+        return None
+    except Exception as e:
+        logger.warning("fetch_file_content failed: %s/%s/%s - %s", owner, repo, path, e)
+        return None
+
+
 @cached(ttl=300)
 def fetch_beginner_issues(
     owner: str,

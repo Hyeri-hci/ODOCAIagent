@@ -9,6 +9,8 @@ import requests
 import base64
 import json
 import re
+import nest_asyncio
+nest_asyncio.apply()
 
 # Import from dependencies_core.py
 from ....core.dependencies_core import parse_dependencies as core_parse_dependencies
@@ -267,7 +269,12 @@ async def parse_package_json(state: SecurityAnalysisState, **kwargs) -> Dict[str
             "success": True,
             "dependencies": dependencies,
             "total_count": len(dependencies),
-            "ecosystem": "npm"
+            "ecosystem": "npm",
+            "state_update": {
+                "dependencies": {"npm": dependencies},
+                "dependency_count": len(dependencies),
+                "analyzed_files": ["package.json"]
+            }
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -310,7 +317,12 @@ async def parse_requirements_txt(state: SecurityAnalysisState, **kwargs) -> Dict
             "success": True,
             "dependencies": dependencies,
             "total_count": len(dependencies),
-            "ecosystem": "pip"
+            "ecosystem": "pip",
+            "state_update": {
+                "dependencies": {"pip": dependencies},
+                "dependency_count": len(dependencies),
+                "analyzed_files": ["requirements.txt"]
+            }
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -884,6 +896,10 @@ async def search_file_vulnerabilities(state: SecurityAnalysisState, **kwargs) ->
 
     print(f"[search_file_vulnerabilities] Analyzing vulnerabilities for {file_path}")
 
+    # Remove file_path from kwargs to avoid multiple values error
+    if "file_path" in kwargs:
+        kwargs.pop("file_path")
+        
     # 1. 파일의 의존성 먼저 파싱
     deps_result = await parse_file_dependencies(state, file_path=file_path, **kwargs)
 

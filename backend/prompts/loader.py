@@ -74,14 +74,35 @@ def render_prompt(name: str, template_key: str = "user_prompt_template", **kwarg
     # 템플릿 변수 치환
     try:
         return template.format(**kwargs)
-    except KeyError as e:
-        # 누락된 변수는 빈 문자열로 대체
+    except KeyError:
+        # 누락된 변수는 대괄호로 감싸서 표시 [variable]
         import re
         result = template
-        for key in re.findall(r'\{(\w+)\}', template):
+        # 1. 중괄호 안에 있는 키 찾기 {key}
+        keys = re.findall(r'\{([a-zA-Z0-9_]+)\}', template)
+        for key in keys:
             if key not in kwargs:
-                result = result.replace(f'{{{key}}}', kwargs.get(key, f'[{key}]'))
-        return result
+                # {key} -> [key]로 변환하여 에러 방지
+                # replace 시 중복된 키도 한 번에 처리됨
+                result = result.replace(f'{{{key}}}', f'[{key}]')
+            else:
+                # 존재하는 키는 format으로 처리되지만, 부분적으로 처리하기 어려우므로
+                # format_map을 쓰고 싶지만 안전하게 직접 치환 시도
+                pass
+        
+        # 다시 시도 (누락된 키가 [key]로 변했으므로 에러 안 날 수 있음)
+        # 하지만 이미 템플릿 문법이 깨졌을 수 있으므로, 안전하게 format_map + Default dict 사용 권장
+        # 여기서는 간단히 문자열 replace로 fallback
+        
+        final_result = template
+        for key in keys:
+            if key in kwargs:
+                final_result = final_result.replace(f'{{{key}}}', str(kwargs[key]))
+            else:
+                final_result = final_result.replace(f'{{{key}}}', f'[{key}]')
+        return final_result
+    except Exception as e:
+        return f"Template render error: {e}\nOriginal Template: {template}"
 
 
 def get_system_prompt(name: str) -> str:

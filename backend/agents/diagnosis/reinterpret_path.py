@@ -82,8 +82,19 @@ async def execute_reinterpret_path(
     # 진단 결과 요약
     summary_data = _summarize_diagnosis(cached_result)
     
-    # 관점별 프롬프트
-    perspective_instruction = PERSPECTIVE_PROMPTS.get(perspective, "")
+    # 프롬프트 로드
+    prompt_data = load_prompt("diagnosis_prompts")
+    reinterpret_prompts = prompt_data.get("reinterpret", {})
+    perspective_instruction = reinterpret_prompts.get(perspective, "일반적인 관점에서 설명하세요.")
+    
+    # LLM 요청 준비
+    system_prompt = (
+        "당신은 오픈소스 프로젝트 분석 전문가입니다. "
+        "주어진 분석 데이터를 바탕으로 사용자의 질문에 답하거나 분석 결과를 설명해야 합니다.\n"
+        f"{perspective_instruction}\n"
+        f"분석 대상: {summary_data['repository']}\n"
+        "설명은 한국어로 작성하고, 마크다운 형식을 사용하여 가독성을 높이세요."
+    )
     
     # 상세도별 지시사항
     detail_instructions = {

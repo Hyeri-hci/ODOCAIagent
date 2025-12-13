@@ -51,6 +51,8 @@ class KananaWrapper:
         Returns a list of weeks (dicts).
         Includes retry logic for JSON parsing errors.
         """
+        from backend.prompts.loader import load_prompt, render_prompt
+
         # 난이도에 따른 설명 추가
         experience_level = user_context.get('experience_level', 'beginner')
         level_descriptions = {
@@ -68,28 +70,58 @@ class KananaWrapper:
         }
         level_guideline = level_guidelines.get(experience_level, level_guidelines['beginner'])
         
-        system_prompt = (
-            "당신은 오픈소스 프로젝트 온보딩을 도와주는 전문 멘토입니다. "
-            "새로운 기여자를 위한 체계적인 온보딩 플랜을 한국어로 작성하세요. "
-            "반드시 유효한 JSON 배열만 반환하세요. 각 객체는 다음 필드를 포함해야 합니다:\n"
-            "- 'week' (int): 주차 번호\n"
-            "- 'goals' (list of strings): 해당 주의 목표들 (한국어)\n"
-            "- 'tasks' (list of strings): 구체적인 할 일 목록 (한국어)\n\n"
-            "마크다운 포맷(```json 등)을 사용하지 마세요. 순수 JSON만 반환하세요."
-        )
+        # 프롬프트 로드
+        prompt_data = load_prompt("onboarding_prompts")
+        plan_gen_prompt = prompt_data.get("plan_generation", {})
+        
+        system_prompt = plan_gen_prompt.get("system_prompt", "")
         
         issues_text = "\n".join([f"- #{i['number']}: {i['title']}" for i in candidate_issues]) if candidate_issues else "추천 이슈 없음"
         
-        user_prompt = (
-            f"저장소: {repo_id}\n"
-            f"프로젝트 요약: {diagnosis_summary}\n"
-            f"사용자 수준: {level_desc}\n\n"
-            f"**{experience_level.upper()} 레벨 지침:**\n{level_guideline}\n\n"
-            f"관련 이슈:\n{issues_text}\n\n"
-            f"위 정보를 바탕으로 {experience_level} 수준에 **맞는** 1-4주 온보딩 플랜을 한국어로 생성하세요.\n"
-            "각 주차마다 명확한 목표와 구체적인 태스크를 포함하세요.\n"
-            f"**중요: {experience_level} 레벨 지침을 반드시 따르세요.**"
+        # 유동적인 주차 수 (기본 1-4주)
+        weeks = user_context.get("weeks", "1-4")
+
+        user_prompt = render_prompt(
+            "onboarding_prompts", 
+            template_key="plan_generation", # loader가 딕셔너리를 지원하는지 확인 필요 (지원 X시 아래처럼 수동 포맷)
         )
+        # render_prompt는 키가 'user_prompt_template'라고 가정하거나 직접 텍스트를 받지 않음.
+        # loader.py의 render_prompt는 YAML의 특정 키 값을 템플릿으로 사용함.
+        # onboarding_prompts.yaml 구조: plan_generation: { system_prompt: ..., user_prompt_template: ... }
+        # 따라서 render_prompt를 쓰려면 loader.py 수정이 필요할 수 있음.
+        # 현재 loader.py는 `prompt.get(template_key)`를 수행함.
+        # 만약 template_key가 'plan_generation'이면 딕셔너리가 반환됨 -> format 실패.
+        
+        # 해결책:
+        # loader.py를 수정하지 않고 여기서 직접 format
+        user_template = plan_gen_prompt.get("user_prompt_template", "")
+        
+        # Context-Aware Section extraction
+        previous_context_section = user_context.get("previous_context_section", "")
+
+        try:
+            user_prompt = user_template.format(
+                repo_id=repo_id,
+                diagnosis_summary=diagnosis_summary,
+                level_desc=level_desc,
+                experience_level_upper=experience_level.upper(),
+                level_guideline=level_guideline,
+                issues_text=issues_text,
+                experience_level=experience_level,
+                weeks=weeks,
+                previous_context_section=previous_context_section
+            )
+        except Exception:
+            # fallback formatting
+            user_prompt = user_template.replace("{repo_id}", str(repo_id))\
+                .replace("{diagnosis_summary}", str(diagnosis_summary))\
+                .replace("{level_desc}", str(level_desc))\
+                .replace("{experience_level_upper}", experience_level.upper())\
+                .replace("{level_guideline}", str(level_guideline))\
+                .replace("{issues_text}", str(issues_text))\
+                .replace("{experience_level}", str(experience_level))\
+                .replace("{weeks}", str(weeks))\
+                .replace("{previous_context_section}", str(previous_context_section))
         
         last_error = None
         
@@ -149,19 +181,22 @@ class KananaWrapper:
         """
         Summarize the onboarding plan in a friendly, encouraging tone (Korean).
         """
-        system_prompt = (
-            "You are a helpful mentor. Summarize the provided onboarding plan in Korean. "
-            "Use a friendly and encouraging tone. "
-            "Do not use emojis. "
-            "Format with clear sections."
-        )
+        from backend.prompts.loader import load_prompt
+        
+        prompt_data = load_prompt("onboarding_prompts")
+        summary_prompt_config = prompt_data.get("plan_summary", {})
+        
+        system_prompt = summary_prompt_config.get("system_prompt", "System prompt not found")
+        user_template = summary_prompt_config.get("user_prompt_template", "User template not found")
         
         plan_text = str(plan)
         
-        user_prompt = (
-            f"Repository: {repo_id}\n"
-            f"Plan: {plan_text}\n\n"
-            "Summarize this plan for the user."
-        )
+        try:
+            user_prompt = user_template.format(
+                repo_id=repo_id,
+                plan_text=plan_text
+            )
+        except Exception:
+            user_prompt = user_template.replace("{repo_id}", str(repo_id)).replace("{plan_text}", plan_text)
         
         return self._call_llm(system_prompt, user_prompt, temperature=0.7)
