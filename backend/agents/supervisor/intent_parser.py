@@ -26,11 +26,12 @@ class SupervisorIntentV2(BaseModel):
         "security",       # 보안 관련
         "recommend",      # 추천 관련
         "contributor",    # 기여자 지원 관련
+        "comparison",     # 비교 분석 관련
         "general_chat",   # 일반 대화
         "clarification"   # 명확화 필요
     ]
     
-    target_agent: Literal["diagnosis", "onboarding", "security", "recommend", "contributor", "chat", "none"]
+    target_agent: Literal["diagnosis", "onboarding", "security", "recommend", "contributor", "comparison", "chat", "none"]
     
     # Agentic 기능
     needs_clarification: bool = Field(
@@ -72,6 +73,11 @@ class SupervisorIntentV2(BaseModel):
     implicit_context: bool = Field(
         default=False,
         description="암묵적 컨텍스트 사용 여부"
+    )
+
+    comparison_targets: Optional[List[str]] = Field(
+        default=None,
+        description="비교할 저장소 목록 (예: ['owner1/repo1', 'owner2/repo2'])"
     )
     
     # 멀티 에이전트 협업
@@ -122,9 +128,9 @@ class SupervisorIntentParserV2(IntentParserBase):
 사용자의 의도를 파악하여 다음 JSON 형식으로 반환하세요:
 
 {{
-    "task_type": "diagnosis" | "onboarding" | "security" | "recommend" | "contributor" | "general_chat" | "clarification",
-    "target_agent": "diagnosis" | "onboarding" | "security" | "recommend" | "contributor" | "chat" | "none",
-    "additional_agents": ["diagnosis", "security", "onboarding", "contributor", "recommend"],
+    "task_type": "diagnosis" | "onboarding" | "security" | "recommend" | "contributor" | "comparison" | "general_chat" | "clarification",
+    "target_agent": "diagnosis" | "onboarding" | "security" | "recommend" | "contributor" | "comparison" | "chat" | "none",
+    "additional_agents": ["diagnosis", "security", "onboarding", "contributor", "recommend", "comparison"],
     "needs_clarification": true | false,
     "clarification_questions": ["질문1", "질문2"],
     "uses_previous_context": true | false,
@@ -132,6 +138,7 @@ class SupervisorIntentParserV2(IntentParserBase):
     "confidence": 0.0 ~ 1.0,
     "reasoning": "의도 파악 근거",
     "detected_repo": "owner/repo" | null,
+    "comparison_targets": ["owner1/repo1", "owner2/repo2"] | null,
     "implicit_context": true | false
 }}
 

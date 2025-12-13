@@ -100,8 +100,8 @@ class SupervisorState(BaseModel):
         return hasattr(self, key) and getattr(self, key) is not None
     
     # === 필수 입력 필드 ===
-    owner: str = Field(..., description="저장소 소유자")
-    repo: str = Field(..., description="저장소 이름")
+    owner: Optional[str] = Field(default=None, description="저장소 소유자")
+    repo: Optional[str] = Field(default=None, description="저장소 이름")
     
     # === 선택적 입력 필드 ===
     ref: str = Field(default="main", description="브랜치/태그 참조")
@@ -121,7 +121,7 @@ class SupervisorState(BaseModel):
     
     # === 의도 분석 ===
     supervisor_intent: Optional[Dict[str, Any]] = Field(default=None, description="분석된 의도")
-    target_agent: Optional[Literal["diagnosis", "onboarding", "security", "recommend", "contributor", "chat", "none"]] = Field(
+    target_agent: Optional[Literal["diagnosis", "onboarding", "security", "recommend", "contributor", "comparison", "chat", "none"]] = Field(
         default=None, description="대상 에이전트"
     )
     detected_intent: Optional[str] = Field(default=None, description="감지된 의도")
