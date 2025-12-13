@@ -46,14 +46,18 @@ const DiagramThumbnail = ({
     // SVG의 원본 크기 가져오기 (viewBox 또는 width/height 속성 사용)
     const viewBox = svg.getAttribute("viewBox");
     let svgWidth, svgHeight;
-    
+
     if (viewBox) {
       const parts = viewBox.split(" ");
       svgWidth = parseFloat(parts[2]) || svg.getBoundingClientRect().width;
       svgHeight = parseFloat(parts[3]) || svg.getBoundingClientRect().height;
     } else {
-      svgWidth = parseFloat(svg.getAttribute("width")) || svg.getBoundingClientRect().width;
-      svgHeight = parseFloat(svg.getAttribute("height")) || svg.getBoundingClientRect().height;
+      svgWidth =
+        parseFloat(svg.getAttribute("width")) ||
+        svg.getBoundingClientRect().width;
+      svgHeight =
+        parseFloat(svg.getAttribute("height")) ||
+        svg.getBoundingClientRect().height;
     }
 
     const containerRect = containerRef.current.getBoundingClientRect();

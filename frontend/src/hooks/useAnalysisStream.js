@@ -196,24 +196,27 @@ export const useAnalysisStream = ({
                 "[Stream] contributor_guide 데이터 수신:",
                 data.contributor_guide
               );
-              
+
               // matched_issues가 있으면 recommendedIssues로 매핑
               const matchedIssues = data.contributor_guide.matched_issues || [];
-              
+
               setAnalysisResult((prev) => ({
                 ...prev,
                 contributorGuide: data.contributor_guide,
                 // matched_issues를 recommendedIssues로 변환
-                recommendedIssues: matchedIssues.length > 0 ? matchedIssues.map(issue => ({
-                  title: issue.title || issue.issue_title || '',
-                  url: issue.url || issue.issue_url || '',
-                  number: issue.number || issue.issue_number || 0,
-                  labels: issue.labels || [],
-                  reason: issue.reason || issue.match_reason || '',
-                  score: issue.score || issue.match_score || 0,
-                  difficulty: issue.difficulty || 'medium',
-                  estimated_time: issue.estimated_time || '',
-                })) : prev.recommendedIssues,
+                recommendedIssues:
+                  matchedIssues.length > 0
+                    ? matchedIssues.map((issue) => ({
+                        title: issue.title || issue.issue_title || "",
+                        url: issue.url || issue.issue_url || "",
+                        number: issue.number || issue.issue_number || 0,
+                        labels: issue.labels || [],
+                        reason: issue.reason || issue.match_reason || "",
+                        score: issue.score || issue.match_score || 0,
+                        difficulty: issue.difficulty || "medium",
+                        estimated_time: issue.estimated_time || "",
+                      }))
+                    : prev.recommendedIssues,
                 onboardingPlan: [], // 기존 플랜 렌더링 방지
               }));
             }
