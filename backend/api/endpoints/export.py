@@ -47,13 +47,20 @@ async def export_report(request: ExportReportRequest):
                 include_ai_trace=request.include_ai_trace
             )
         elif request.report_type == "onboarding":
-            experience_level = request.data.get("experience_level", "beginner")
-            markdown_content = export_onboarding_guide(
-                plan=request.data,
-                owner=request.owner,
-                repo=request.repo,
-                experience_level=experience_level
-            )
+            # contributor_guide 타입이면 markdown 필드 직접 사용
+            if request.data.get("type") == "contributor_guide" and request.data.get("markdown"):
+                markdown_content = request.data["markdown"]
+            elif request.data.get("markdown"):
+                # markdown 필드가 있으면 직접 사용
+                markdown_content = request.data["markdown"]
+            else:
+                experience_level = request.data.get("experience_level", "beginner")
+                markdown_content = export_onboarding_guide(
+                    plan=request.data,
+                    owner=request.owner,
+                    repo=request.repo,
+                    experience_level=experience_level
+                )
         elif request.report_type == "security":
             markdown_content = export_security_report(
                 result=request.data,

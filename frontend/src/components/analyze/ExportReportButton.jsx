@@ -62,20 +62,46 @@ const ExportReportButton = ({ analysisResult, className = "" }) => {
   }
 
   if (analysisResult?.onboardingPlan) {
+    // onboardingPlan이 배열이면 plan 키로 감싸기
+    const planData = Array.isArray(analysisResult.onboardingPlan)
+      ? {
+          plan: analysisResult.onboardingPlan,
+          summary: analysisResult.onboardingSummary || "",
+        }
+      : analysisResult.onboardingPlan;
+
     availableReports.push({
       type: "onboarding",
       label: "온보딩 가이드",
       icon: BookOpen,
-      data: analysisResult.onboardingPlan,
+      data: planData,
+    });
+  }
+
+  // contributorGuide가 있고 markdown 필드가 있으면 추가 (contributor_guide 타입)
+  if (analysisResult?.contributorGuide?.markdown) {
+    availableReports.push({
+      type: "onboarding",
+      label: "기여 가이드",
+      icon: BookOpen,
+      data: {
+        type: "contributor_guide",
+        markdown: analysisResult.contributorGuide.markdown,
+      },
     });
   }
 
   if (analysisResult?.security) {
+    // security 데이터를 results 키로 감싸서 백엔드 형식에 맞추기
+    const securityData = analysisResult.security.results
+      ? analysisResult.security
+      : { results: analysisResult.security };
+
     availableReports.push({
       type: "security",
       label: "보안 리포트",
       icon: Shield,
-      data: analysisResult.security,
+      data: securityData,
     });
   }
 

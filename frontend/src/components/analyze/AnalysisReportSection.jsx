@@ -617,6 +617,7 @@ const AnalysisReportSection = ({
       case "contributor":
         // 신규 기여자 가이드 데이터가 없으면 표시하지 않음
         if (
+          !analysisResult.contributorGuide?.markdown &&
           !analysisResult.contributorGuide &&
           !analysisResult.firstContributionGuide &&
           !analysisResult.contributionChecklist

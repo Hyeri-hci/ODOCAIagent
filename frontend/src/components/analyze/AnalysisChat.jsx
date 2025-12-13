@@ -540,10 +540,22 @@ const AnalysisChat = ({
         }
 
         if (target_agent === "onboarding" && agent_result) {
-          setAnalysisResult((prev) => ({
-            ...prev,
-            onboardingPlan: agent_result,
-          }));
+          // contributor_guide 타입 처리 (마크다운이 직접 포함된 경우)
+          if (
+            agent_result.type === "contributor_guide" &&
+            agent_result.markdown
+          ) {
+            setAnalysisResult((prev) => ({
+              ...prev,
+              contributorGuide: agent_result,
+              onboardingPlan: [], // 빈 배열로 설정
+            }));
+          } else {
+            setAnalysisResult((prev) => ({
+              ...prev,
+              onboardingPlan: agent_result,
+            }));
+          }
         }
 
         // contributor 에이전트 결과 처리

@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   BookOpen,
   CheckSquare,
@@ -52,6 +53,86 @@ const ContributorGuideSection = ({
 
   return (
     <div className="space-y-4">
+      {/* 마크다운 형태의 기여 가이드 (contributor_guide 타입) */}
+      {contributorGuide?.markdown && (
+        <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+          <div className="p-4 border-b border-gray-100 bg-gray-50">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
+                <BookOpen className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-800">기여 가이드</h3>
+                <p className="text-sm text-gray-500">
+                  AI가 생성한 프로젝트 기여 가이드
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="p-6 prose prose-sm max-w-none dark:prose-invert">
+            <ReactMarkdown
+              components={{
+                h1: ({ children }) => (
+                  <h1 className="text-xl font-bold text-gray-900 mb-4 mt-6 first:mt-0">
+                    {children}
+                  </h1>
+                ),
+                h2: ({ children }) => (
+                  <h2 className="text-lg font-semibold text-gray-800 mb-3 mt-5">
+                    {children}
+                  </h2>
+                ),
+                h3: ({ children }) => (
+                  <h3 className="text-base font-medium text-gray-700 mb-2 mt-4">
+                    {children}
+                  </h3>
+                ),
+                p: ({ children }) => (
+                  <p className="mb-3 text-gray-700 leading-relaxed">
+                    {children}
+                  </p>
+                ),
+                ul: ({ children }) => (
+                  <ul className="list-disc pl-5 mb-3 space-y-1 text-gray-700">
+                    {children}
+                  </ul>
+                ),
+                ol: ({ children }) => (
+                  <ol className="list-decimal pl-5 mb-3 space-y-1 text-gray-700">
+                    {children}
+                  </ol>
+                ),
+                li: ({ children }) => (
+                  <li className="text-sm leading-relaxed">{children}</li>
+                ),
+                blockquote: ({ children }) => (
+                  <blockquote className="border-l-4 border-blue-200 pl-4 py-1 my-3 text-gray-600 bg-blue-50/50 rounded-r">
+                    {children}
+                  </blockquote>
+                ),
+                code: ({ children }) => (
+                  <code className="px-1.5 py-0.5 bg-gray-100 text-gray-800 rounded text-xs font-mono">
+                    {children}
+                  </code>
+                ),
+                a: ({ href, children }) => (
+                  <a
+                    href={href}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    {children}
+                  </a>
+                ),
+              }}
+            >
+              {contributorGuide.markdown}
+            </ReactMarkdown>
+          </div>
+        </div>
+      )}
+
       {/* 첫 기여 가이드 */}
       {firstContributionGuide && (
         <CollapsibleCard

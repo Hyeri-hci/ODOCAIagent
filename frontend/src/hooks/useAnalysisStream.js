@@ -296,6 +296,21 @@ export const useAnalysisStream = ({
               if (target_agent === "onboarding" && agent_result) {
                 console.log("온보딩 플랜 생성됨 (스트리밍):", agent_result);
 
+                // contributor_guide 타입 처리 (마크다운이 직접 포함된 경우)
+                if (
+                  agent_result.type === "contributor_guide" &&
+                  agent_result.markdown
+                ) {
+                  console.log("기여 가이드 마크다운 결과 받음");
+                  setAnalysisResult((prev) => ({
+                    ...prev,
+                    contributorGuide: agent_result,
+                    onboardingPlan: [], // 빈 배열로 설정 (기존 플랜 렌더링 방지)
+                  }));
+                  setIsGeneratingPlan(false);
+                  return;
+                }
+
                 // 온보딩 결과에서 similar_projects도 추출
                 const similarProjects = agent_result.similar_projects || [];
 
