@@ -112,45 +112,66 @@ class SupervisorIntentV2(BaseModel):
 class SupervisorIntentParserV2(IntentParserBase):
     """Supervisor 의도 파싱기 V2 (세션 지원)"""
     
-    # URL 패턴
+    # URL 패턴 (Trailing slash, dot git, @ref 지원)
     GITHUB_URL_PATTERN = re.compile(
-        r'(?:https?://)?(?:www\.)?github\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)'
+        r'(?:https?://)?(?:www\.)?github\.com/([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)(?:.git)?(?:/)?(?:tree/([a-zA-Z0-9_.-]+))?'
     )
-    REPO_PATTERN = re.compile(r'^([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)$')
-    
+    # Owner/Repo 패턴 (@ref 지원)
+    REPO_PATTERN = re.compile(r'^([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)(?:@([a-zA-Z0-9_.-]+))?$')
+
     def __init__(self):
         super().__init__()
         self.keyword_rules = KEYWORD_RULES
         logger.info("SupervisorIntentParserV2 initialized")
-    
+
     def _extract_repo(self, message: str) -> Optional[str]:
-        """메시지에서 저장소 추출"""
+        """메시지에서 저장소 추출 (ref 포함)"""
         # GitHub URL에서 추출
         url_match = self.GITHUB_URL_PATTERN.search(message)
         if url_match:
-            return f"{url_match.group(1)}/{url_match.group(2)}"
-        
+            repo = f"{url_match.group(1)}/{url_match.group(2)}"
+            # .git 제거
+            if repo.endswith(".git"):
+                repo = repo[:-4]
+            return repo
+
         # owner/repo 형식 추출
         words = message.split()
         for word in words:
             repo_match = self.REPO_PATTERN.match(word.strip())
             if repo_match:
                 return f"{repo_match.group(1)}/{repo_match.group(2)}"
-        
+
         return None
-    
+
     def _is_url_only(self, message: str) -> bool:
-        """URL만 입력되었는지 확인"""
+        """URL 혹은 저장소 식별자만 입력되었는지 확인"""
         message = message.strip()
-        # GitHub URL만 있거나, owner/repo만 있는 경우
+
+        # 1. GitHub URL 완전 일치 (Trailing slash 등 허용된 정규식 사용)
         if self.GITHUB_URL_PATTERN.fullmatch(message):
             return True
+
+        # 2. Owner/Repo 완전 일치
         if self.REPO_PATTERN.fullmatch(message):
             return True
-        # URL + 간단한 질문 ("어때?", "분석", "진단")
+
+        # 3. URL + 간단한 키워드 (분석, 진단, 어때 등)인 경우도 URL 의도로 간주
+        # 정규식 부분을 제거하고 남은 텍스트가 "분석", "진단" 등인지 확인
         url_removed = self.GITHUB_URL_PATTERN.sub("", message).strip()
-        if url_removed in ["", "어때?", "어때", "분석", "분석해줘", "진단", "진단해줘"]:
+        if not url_removed: # URL 제거 후 빈 문자열이면 OK
+             return True
+
+        # owner/repo 제거 시도
+        repo_removed = self.REPO_PATTERN.sub("", message).strip()
+        if not repo_removed:
             return True
+
+        # 허용된 접미사 키워드
+        allowed_suffixes = ["", "어때", "어때?", "분석", "분석해줘", "진단", "진단해줘", "확인", "확인해줘"]
+        if url_removed in allowed_suffixes or repo_removed in allowed_suffixes:
+            return True
+
         return False
     
     def _keyword_preprocess(self, message: str) -> Optional[str]:

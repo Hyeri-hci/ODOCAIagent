@@ -227,7 +227,8 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     if github_url_match:
         detected_owner = github_url_match.group(1)
         detected_repo = github_url_match.group(2).replace('.git', '')
-        logger.info(f"Detected repo from GitHub URL: {detected_owner}/{detected_repo}")
+        if detected_owner and detected_repo:
+            logger.info(f"Detected repo from GitHub URL: {detected_owner}/{detected_repo}")
     else:
         # 2-2. owner/repo 패턴 (예: facebook/react)
         repo_pattern = r'([a-zA-Z0-9_-]+)/([a-zA-Z0-9_.-]+)'
