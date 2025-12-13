@@ -290,7 +290,10 @@ def export_security_report(
 """
     
     # 상세 취약점 목록
-    vuln_details = vulnerabilities.get("details", [])
+    if isinstance(vulnerabilities, list):
+        vuln_details = vulnerabilities
+    else:
+        vuln_details = vulnerabilities.get("details", [])
     if vuln_details:
         report += "---\n\n## 상세 취약점 목록\n\n"
         for vuln in vuln_details[:10]:  # 최대 10개

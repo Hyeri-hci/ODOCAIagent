@@ -487,6 +487,20 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     if intent.comparison_targets:
         result["compare_repos"] = intent.comparison_targets
         logger.info(f"Comparison targets mapped to compare_repos: {intent.comparison_targets}")
+    elif intent.task_type == "compare_repos" or intent.target_agent == "comparison":
+        # 타겟이 없으면 히스토리에서 최근 2개 검색
+        analyzed_repos = accumulated_context.get("analyzed_repos", [])
+        if len(analyzed_repos) >= 2:
+            # 최근 순서대로 정렬되어 있다고 가정 (또는 analyzed_at으로 정렬)
+            # analyzed_repos는 append 되므로 뒤쪽이 최신
+            recent_repos = analyzed_repos[-2:]
+            targets = [f"{r['owner']}/{r['repo']}" for r in recent_repos]
+            
+            result["compare_repos"] = targets
+            # result["needs_clarification"] = False # 명확화 불필요
+            logger.info(f"No explicit comparison targets, using recent history: {targets}")
+            
+            # 사용자에게 알림 메시지를 주면 좋겠지만, 여기서는 state만 설정
     
     # 규칙 기반 detected_owner/detected_repo 우선 (unknown 제외)
     def is_valid_repo(owner: str, repo: str) -> bool:

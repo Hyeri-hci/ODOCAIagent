@@ -36,9 +36,17 @@ class AccumulatedContext(TypedDict, total=False):
     # 커스텀 분석
     custom_analyses: List[Dict[str, Any]]
     
-    # 마지막 주제 (대명사 해결용)
+    # 분석된 저장소 목록 (비교 분석용)
+    analyzed_repos: List[Dict[str, Any]] # [{owner, repo, analyzed_at, health_score}]
+    
+    # 마지막 주제 및 저장소 (대명사 해결용)
     last_topic: Optional[str]  # "diagnosis", "onboarding", "security"
     last_generated_data: Optional[str]  # 직전 턴에서 생성한 데이터 키
+    last_mentioned_repo: Optional[Dict[str, Any]] # {owner, repo, full_name, ...}
+    found_repo_info: bool
+    
+    # 대명사 정보
+    last_pronoun_reference: Optional[Dict[str, Any]]
 
 
 # === 트레이스 (디버깅) ===
@@ -102,8 +110,12 @@ class Session:
     # 누적 컨텍스트
     accumulated_context: AccumulatedContext = field(default_factory=lambda: AccumulatedContext(
         custom_analyses=[],
+        analyzed_repos=[],
         last_topic=None,
-        last_generated_data=None
+        last_generated_data=None,
+        last_mentioned_repo=None,
+        found_repo_info=False,
+        last_pronoun_reference=None
     ))
     
     # 메타 정보
@@ -165,6 +177,26 @@ class Session:
         self.accumulated_context[key] = value
         self.last_active = datetime.now()
     
+    def add_analyzed_repo(self, repo_info: Dict[str, Any]):
+        """분석된 저장소 정보 추가 (중복 방지)"""
+        if "analyzed_repos" not in self.accumulated_context:
+            self.accumulated_context["analyzed_repos"] = []
+            
+        repo_key = f"{repo_info.get('owner')}/{repo_info.get('repo')}"
+        
+        # 기존 목록에서 동일한 저장소 제거 (최신 정보로 갱신하기 위해)
+        self.accumulated_context["analyzed_repos"] = [
+            r for r in self.accumulated_context["analyzed_repos"]
+            if f"{r.get('owner')}/{r.get('repo')}" != repo_key
+        ]
+        
+        # 새 정보 추가
+        self.accumulated_context["analyzed_repos"].append(repo_info)
+        
+        # 최대 10개 유지
+        if len(self.accumulated_context["analyzed_repos"]) > 10:
+             self.accumulated_context["analyzed_repos"] = self.accumulated_context["analyzed_repos"][-10:]
+
     def get_context(self, key: str) -> Optional[Any]:
         """컨텍스트 조회"""
         return self.accumulated_context.get(key)
@@ -177,7 +209,7 @@ class Session:
         """에러 로그 추가"""
         self.trace["errors"].append(error_log)
     
-    def is_expired(self, ttl_minutes: int = 30) -> bool:
+    def is_expired(self, ttl_minutes: int = 60) -> bool: # TTL increased to 60m
         """세션 만료 여부"""
         return datetime.now() - self.last_active > timedelta(minutes=ttl_minutes)
     
@@ -195,16 +227,46 @@ class Session:
             "total_turns": self.total_turns,
             "trace": self.trace
         }
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'Session':
+        """딕셔너리에서 세션 복원"""
+        session = cls(
+            session_id=data["session_id"],
+            owner=data["owner"],
+            repo=data["repo"],
+            ref=data.get("ref", "main")
+        )
+        session.conversation_history = data.get("conversation_history", [])
+        session.accumulated_context = data.get("accumulated_context", {})
+        session.created_at = datetime.fromisoformat(data["created_at"])
+        session.last_active = datetime.fromisoformat(data["last_active"])
+        session.total_turns = data.get("total_turns", 0)
+        session.trace = data.get("trace", {})
+        return session
 
 
-# === 세션 저장소 (인메모리) ===
+# === 세션 저장소 (파일 기반 영구 저장) ===
+import os
+import json
+import shutil
+
+SESSION_DIR = "backend/data/sessions"
+
 class SessionStore:
-    """인메모리 세션 저장소"""
+    """파일 기반 세션 저장소 (영속성 지원)"""
     
     def __init__(self):
-        self._sessions: Dict[str, Session] = {}
-        self._ttl_minutes = 30
-        logger.info("SessionStore initialized (in-memory)")
+        self._ttl_minutes = 60 # 1 hour TTL
+        self._ensure_storage()
+        logger.info(f"SessionStore initialized (Storage: {SESSION_DIR})")
+    
+    def _ensure_storage(self):
+        """저장소 디렉토리 셋업"""
+        os.makedirs(SESSION_DIR, exist_ok=True)
+        
+    def _get_path(self, session_id: str) -> str:
+        return os.path.join(SESSION_DIR, f"{session_id}.json")
     
     def create_session(
         self,
@@ -220,59 +282,94 @@ class SessionStore:
             repo=repo,
             ref=ref
         )
-        self._sessions[session_id] = session
+        self._save_session(session)
         logger.info(f"Session created: {session_id} for {owner}/{repo}")
         return session
     
     def get_session(self, session_id: str) -> Optional[Session]:
         """세션 조회"""
-        session = self._sessions.get(session_id)
-        
-        if session is None:
-            logger.warning(f"Session not found: {session_id}")
+        path = self._get_path(session_id)
+        if not os.path.exists(path):
+            logger.warning(f"Session file not found: {session_id}")
             return None
-        
-        # 만료 체크
-        if session.is_expired(self._ttl_minutes):
-            logger.info(f"Session expired: {session_id}")
-            del self._sessions[session_id]
+            
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            session = Session.from_dict(data)
+            
+            # 만료 체크
+            if session.is_expired(self._ttl_minutes):
+                logger.info(f"Session expired: {session_id}")
+                self.delete_session(session_id)
+                return None
+            
+            return session
+        except Exception as e:
+            logger.error(f"Failed to load session {session_id}: {e}")
             return None
-        
-        return session
     
     def update_session(self, session: Session):
         """세션 업데이트"""
         session.last_active = datetime.now()
-        self._sessions[session.session_id] = session
+        self._save_session(session)
+    
+    def _save_session(self, session: Session):
+        """세션을 파일로 저장"""
+        path = self._get_path(session.session_id)
+        try:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(session.to_dict(), f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save session {session.session_id}: {e}")
     
     def delete_session(self, session_id: str) -> bool:
         """세션 삭제"""
-        if session_id in self._sessions:
-            del self._sessions[session_id]
-            logger.info(f"Session deleted: {session_id}")
-            return True
+        path = self._get_path(session_id)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                logger.info(f"Session deleted: {session_id}")
+                return True
+            except Exception as e:
+                logger.error(f"Failed to delete session {session_id}: {e}")
         return False
     
     def cleanup_expired_sessions(self):
         """만료된 세션 정리"""
-        expired = [
-            sid for sid, session in self._sessions.items()
-            if session.is_expired(self._ttl_minutes)
-        ]
-        
-        for sid in expired:
-            del self._sessions[sid]
-        
-        if expired:
-            logger.info(f"Cleaned up {len(expired)} expired sessions")
+        count = 0
+        if not os.path.exists(SESSION_DIR):
+            return
+            
+        for filename in os.listdir(SESSION_DIR):
+            if not filename.endswith(".json"):
+                 continue
+            
+            sid = filename[:-5]
+            session = self.get_session(sid) # get_session inside checks expiry
+            if session is None:
+                # Already deleted or invalid
+                count += 1
+                
+        if count > 0:
+            logger.info(f"Cleaned up {count} expired sessions")
     
     def get_all_sessions(self) -> List[Session]:
         """모든 세션 조회 (디버깅용)"""
-        return list(self._sessions.values())
+        sessions = []
+        if os.path.exists(SESSION_DIR):
+            for filename in os.listdir(SESSION_DIR):
+                if filename.endswith(".json"):
+                    sid = filename[:-5]
+                    session = self.get_session(sid)
+                    if session:
+                        sessions.append(session)
+        return sessions
     
     def get_session_count(self) -> int:
         """활성 세션 수"""
-        return len(self._sessions)
+        return len(self.get_all_sessions())
 
 
 # === 싱글톤 인스턴스 ===

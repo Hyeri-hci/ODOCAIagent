@@ -4,6 +4,7 @@
 
 from typing import Dict, Any
 import logging
+from datetime import datetime
 
 from backend.agents.supervisor.models import SupervisorState
 from backend.common.session import get_session_store
@@ -76,7 +77,16 @@ async def update_session_node(state: SupervisorState) -> Dict[str, Any]:
             session.update_context("diagnosis_result", agent_result)
             session.update_context("last_topic", "diagnosis")
             result_updates["diagnosis_result"] = agent_result  # state에도 반환
-            logger.info("Stored diagnosis_result in session context")
+            
+            # 분석된 저장소 목록에 추가
+            repo_info = {
+                "owner": agent_result.get("owner", session.owner),
+                "repo": agent_result.get("repo", session.repo),
+                "health_score": agent_result.get("health_score", 0),
+                "analyzed_at": datetime.now().isoformat()
+            }
+            session.add_analyzed_repo(repo_info)
+            logger.info(f"Stored diagnosis_result and added to analyzed_repos: {repo_info['owner']}/{repo_info['repo']}")
         
         # Onboarding 결과 저장
         elif result_type == "onboarding_plan" or target_agent == "onboarding":

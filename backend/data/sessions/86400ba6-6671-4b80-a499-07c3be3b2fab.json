@@ -1,0 +1,68 @@
+{
+  "session_id": "86400ba6-6671-4b80-a499-07c3be3b2fab",
+  "owner": "facebook",
+  "repo": "react",
+  "ref": "main",
+  "conversation_history": [
+    {
+      "turn": 1,
+      "timestamp": "2025-12-13T21:36:32.713404",
+      "user_message": "analyze facebook/react",
+      "resolved_intent": {},
+      "execution_path": "diagnosis",
+      "agent_response": "",
+      "data_generated": [
+        "diagnosis_result"
+      ],
+      "execution_time_ms": 0
+    },
+    {
+      "turn": 2,
+      "timestamp": "2025-12-13T21:36:32.721595",
+      "user_message": "analyze microsoft/vscode",
+      "resolved_intent": {},
+      "execution_path": "diagnosis",
+      "agent_response": "",
+      "data_generated": [
+        "diagnosis_result"
+      ],
+      "execution_time_ms": 0
+    }
+  ],
+  "accumulated_context": {
+    "custom_analyses": [],
+    "analyzed_repos": [
+      {
+        "owner": "facebook",
+        "repo": "react",
+        "health_score": 80,
+        "analyzed_at": "2025-12-13T21:36:32.713404"
+      },
+      {
+        "owner": "microsoft",
+        "repo": "vscode",
+        "health_score": 90,
+        "analyzed_at": "2025-12-13T21:36:32.721595"
+      }
+    ],
+    "last_topic": "diagnosis",
+    "last_generated_data": "diagnosis_result",
+    "last_mentioned_repo": null,
+    "found_repo_info": false,
+    "last_pronoun_reference": null,
+    "diagnosis_result": {
+      "type": "full_diagnosis",
+      "owner": "microsoft",
+      "repo": "vscode",
+      "health_score": 90
+    }
+  },
+  "created_at": "2025-12-13T21:36:32.706376",
+  "last_active": "2025-12-13T21:36:32.721595",
+  "total_turns": 2,
+  "trace": {
+    "turn_traces": [],
+    "errors": [],
+    "performance": {}
+  }
+}
