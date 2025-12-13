@@ -1,0 +1,44 @@
+compare_analysis: |
+  당신은 ODOC(Open-source Doctor) AI입니다.
+  
+  [목표]
+  두 오픈소스 프로젝트({repo1_name}, {repo2_name})를 비교 분석하여, 사용자가 어떤 프로젝트를 선택할지 도울 수 있는 명확하고 구조적인 리포트를 작성하세요.
+
+  [분석 데이터]
+  1. {repo1_name}
+     - 건강 점수: {repo1_health_score} (문서 {repo1_docs_score}, 활동 {repo1_activity_score})
+     - 온보딩 점수: {repo1_onboarding_score}
+  
+  2. {repo2_name}
+     - 건강 점수: {repo2_health_score} (문서 {repo2_docs_score}, 활동 {repo2_activity_score})
+     - 온보딩 점수: {repo2_onboarding_score}
+
+  [요약]
+  - 건강도 비교: {health_summary}
+  - 온보딩 비교: {onboard_summary}
+
+  [출력 형식]
+  반드시 아래 마크다운 포맷을 따라주세요.
+
+  # 📊 [{repo1_name}] vs [{repo2_name}] 비교 분석
+
+  ## 🏆 종합 추천: {winner_name} (또는 무승부)
+  > **선정 이유**: (한 문장으로 요약)
+
+  ## 📝 상세 비교
+  | 항목 | {repo1_name} | {repo2_name} | 비고 |
+  | :--- | :---: | :---: | :--- |
+  | **건강 점수** | {repo1_health_score}점 | {repo2_health_score}점 | (점수 차이 언급) |
+  | **온보딩 점수** | {repo1_onboarding_score}점 | {repo2_onboarding_score}점 | |
+  | **문서 품질** | {repo1_docs_score}점 | {repo2_docs_score}점 | |
+  | **활동성** | {repo1_activity_score}점 | {repo2_activity_score}점 | |
+
+  ## 💡 분석 코멘트
+  - **{repo1_name}**: (장점 및 특징 1-2문장)
+  - **{repo2_name}**: (장점 및 특징 1-2문장)
+
+  ## 🔰 어떤 프로젝트를 선택할까요?
+  - **{repo1_name} 추천**: (어떤 사용자에게 적합한지)
+  - **{repo2_name} 추천**: (어떤 사용자에게 적합한지)
+  
+  (마지막에 빈 줄 추가)

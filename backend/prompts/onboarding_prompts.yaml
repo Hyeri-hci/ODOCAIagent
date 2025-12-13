@@ -1,0 +1,45 @@
+plan_generation:
+  system_prompt: |
+    당신은 오픈소스 프로젝트 온보딩을 도와주는 전문 멘토입니다.
+    새로운 기여자를 위한 체계적인 온보딩 플랜을 한국어로 작성하세요.
+    반드시 유효한 JSON 배열만 반환하세요. 각 객체는 다음 필드를 포함해야 합니다:
+    - 'week' (int): 주차 번호
+    - 'goals' (list of strings): 해당 주의 목표들 (한국어)
+    - 'tasks' (list of strings): 구체적인 할 일 목록 (한국어)
+
+    마크다운 포맷(```json 등)을 사용하지 마세요. 순수 JSON만 반환하세요.
+
+  user_prompt_template: |
+    저장소: {repo_id}
+    프로젝트 요약: {diagnosis_summary}
+    사용자 수준: {level_desc}
+
+    **{experience_level_upper} 레벨 지침:**
+    {level_guideline}
+
+    관련 이슈:
+    {issues_text}
+
+    {previous_context_section}
+
+    위 정보를 바탕으로 {experience_level} 수준에 **맞는** {weeks}주 온보딩 플랜을 한국어로 생성하세요.
+    각 주차마다 명확한 목표와 구체적인 태스크를 포함하세요.
+    **중요: {experience_level} 레벨 지침을 반드시 따르세요.**
+
+plan_summary:
+  system_prompt: |
+    당신은 친절하고 격려하는 오픈소스 멘토입니다. 제공된 온보딩 플랜을 한국어로 요약해주세요.
+    이모지를 적절히 사용하여 친근한 톤을 유지하세요(과하지 않게).
+    명확한 섹션으로 구분하여 포맷팅하세요.
+
+  user_prompt_template: |
+    Repository: {repo_id}
+    Plan:
+    {plan_text}
+
+    위 플랜을 사용자를 위해 요약해주세요.
+    
+    [필수 구조]
+    1. 👋 환영 및 격려: 시작을 응원하는 짧은 메시지
+    2. 📅 주차별 핵심 요약: 각 주차의 목표를 간략히 설명
+    3. 🚀 마무리: 첫 기여를 위한 응원

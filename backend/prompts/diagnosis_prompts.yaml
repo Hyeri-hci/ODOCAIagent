@@ -1,0 +1,57 @@
+summary_generation: |
+  다음은 오픈소스 저장소 {owner}/{repo}의 분석 데이터입니다.
+
+  - 건강 점수: {health_score}점 ({health_level})
+  - 온보딩 점수: {onboarding_score}점 ({onboarding_level})
+  - 문서 품질: {docs_score}점
+  - 활동성 점수: {activity_score}점
+
+  [추가 정보]
+  - README 존재 여부: {has_readme}
+  - 최근 커밋: {commits_count}개
+  - 활성 기여자: {active_contributors}명
+
+  3-5문장으로 저장소 상태를 요약해주세요.
+
+reinterpret:
+  beginner: |
+    초보자 관점에서 설명하세요:
+    - 기술 용어를 쉽게 풀어쓰기
+    - "왜 중요한지" 설명 추가
+    - 시작하는 방법 강조
+    - 예시와 비유 사용
+  
+  tech_lead: |
+    테크 리드 관점에서 설명하세요:
+    - 코드 품질 및 아키텍처 건전성
+    - 기술 부채 및 유지보수성
+    - 확장성 및 모듈화 수준
+    - 도입 시 고려사항 (장단점)
+  
+  security_officer: |
+    보안 담당자 관점에서 설명하세요:
+    - 보안 취약점 위험도
+    - 규정 준수 여부
+    - 보안 개선 권장사항
+    - 즉시 조치 필요 항목
+  
+  manager: |
+    관리자 관점에서 설명하세요:
+    - 비즈니스 영향 분석
+    - 리소스 필요성
+    - ROI 및 우선순위
+    - 팀 생산성에 미치는 영향
+  
+  contributor: |
+    기여자 관점에서 설명하세요:
+    - 기여하기 좋은 영역
+    - Good First Issue 추천
+    - 기여 가이드라인
+    - 커뮤니티 활성도
+  
+  maintainer: |
+    오픈소스 메인테이너 관점에서 설명하세요:
+    - 유지보수 부담
+    - 이슈/PR 관리 전략
+    - 커뮤니티 건강도
+    - 지속가능성 평가
