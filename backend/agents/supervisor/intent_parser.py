@@ -362,17 +362,25 @@ class SupervisorIntentParserV2(IntentParserBase):
         return f"""당신은 ODOC(Open-source Doctor) AI의 의도 분류기입니다.
 사용자 입력을 분석하여 적절한 에이전트로 라우팅합니다.
 
-## 입력
-사용자: {user_message}
-컨텍스트: {context_summary}
+## 현재 입력
+사용자 메시지: {user_message}
+
+## 대화 맥락 (중요! - 멀티턴 대화에서 이전 맥락을 참고하세요)
+{context_summary}
+
+## 멀티턴 대화 규칙 (중요!)
+- 이전에 "진단/분석" 결과가 있고 후속 질문이면: 해당 맥락 활용 (uses_previous_context=true)
+- "그거", "이거", "아까 그", "방금" 등 대명사 사용 시: 이전 맥락 참조
+- 명시적으로 새 저장소/새 작업 요청하면: 새 의도로 처리
+- 맥락 없이 단순 질문이면: chat
 
 ## 의도 유형 (target_agent)
-- diagnosis: 저장소 분석/진단/건강도/점수/상태 확인
-- onboarding: 기여 가이드/코드 구조/이슈 추천/학습 플랜
+- diagnosis: 저장소 분석/진단/건강도/점수/상태 확인/"분석해줘"/"어때?"
+- onboarding: 기여 가이드/코드 구조/이슈 추천/학습 플랜/"기여하고 싶어"/"온보딩"
 - security: 보안 분석/취약점/CVE 검색
 - recommend: 유사 프로젝트 추천/대안 찾기
 - comparison: 두 프로젝트 비교
-- chat: 일반 대화/인사/개념 질문
+- chat: 일반 대화/인사/개념 질문/후속 질문(이전 결과 기반)
 - none: 정보 부족 (clarification 필요)
 
 ## 판단 우선순위 (중요!)

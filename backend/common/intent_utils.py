@@ -121,7 +121,7 @@ def extract_experience_level(user_message: str) -> Optional[str]:
 
 def summarize_session_context(session_context: Dict[str, Any]) -> str:
     """
-    세션 컨텍스트 요약
+    세션 컨텍스트 요약 (멀티턴 대화 지원 강화)
     
     Args:
         session_context: 세션 컨텍스트 딕셔너리
@@ -133,9 +133,10 @@ def summarize_session_context(session_context: Dict[str, Any]) -> str:
     
     # 저장소 정보
     if "owner" in session_context and "repo" in session_context:
-        summary_parts.append(
-            f"Repository: {session_context['owner']}/{session_context['repo']}"
-        )
+        owner = session_context['owner']
+        repo = session_context['repo']
+        if owner and repo and owner != "unknown" and repo != "unknown":
+            summary_parts.append(f"📁 현재 저장소: {owner}/{repo}")
     
     # 대명사 해결 정보
     if session_context.get("pronoun_detected"):
@@ -146,54 +147,60 @@ def summarize_session_context(session_context: Dict[str, Any]) -> str:
                 f"⚠️ 대명사 감지: '{pronoun_ref.get('pattern')}' → 참조: {pronoun_ref.get('refers_to')}"
             )
     
-    # 대화 히스토리
-    history = session_context.get("conversation_history", [])
-    if history:
-        recent = history[-3:]  # 최근 3턴
-        summary_parts.append(f"Recent turns: {len(recent)}")
-        for turn in recent:
-            msg = turn.get('user_message', '')
-            agent_resp = turn.get('agent_response', '')
-            summary_parts.append(
-                f"  Turn {turn.get('turn', '?')}: User: {msg[:40]}... → Agent: {agent_resp[:40]}..."
-            )
-    
-    # 누적 컨텍스트
+    # 누적 컨텍스트 먼저 (가용 데이터)
     accumulated = session_context.get("accumulated_context", {})
     available_data = []
     if accumulated.get("diagnosis_result"):
-        available_data.append("diagnosis_result")
+        available_data.append("diagnosis_result(진단 완료)")
     if accumulated.get("onboarding_plan"):
-        available_data.append("onboarding_plan")
+        available_data.append("onboarding_plan(온보딩 완료)")
     if accumulated.get("security_scan"):
-        available_data.append("security_scan")
+        available_data.append("security_scan(보안 완료)")
     
     if available_data:
-        summary_parts.append(f"✅ Available data: {', '.join(available_data)}")
+        summary_parts.append(f"✅ 이전 분석 결과: {', '.join(available_data)}")
+    
+    # 마지막 주제 (대화 연속성)
+    last_topic = accumulated.get("last_topic")
+    if last_topic:
+        topic_map = {
+            "diagnosis": "진단/분석",
+            "onboarding": "온보딩/기여가이드",
+            "security": "보안분석",
+            "chat": "일반대화"
+        }
+        topic_kr = topic_map.get(last_topic, last_topic)
+        summary_parts.append(f"🔄 마지막 작업: {topic_kr}")
+    
+    # 대화 히스토리 (더 상세하게)
+    history = session_context.get("conversation_history", [])
+    if history:
+        recent = history[-3:]  # 최근 3턴
+        summary_parts.append(f"\n📝 최근 대화 ({len(recent)}턴):")
+        for turn in recent:
+            msg = turn.get('user_message', '')[:60]
+            agent_resp = turn.get('agent_response', '')[:80]
+            resolved_intent = turn.get('resolved_intent', {})
+            task_type = resolved_intent.get('task_type', 'unknown') if isinstance(resolved_intent, dict) else 'unknown'
+            summary_parts.append(f"  - User: \"{msg}...\"")
+            summary_parts.append(f"    → Agent({task_type}): \"{agent_resp}...\"")
     
     # 최근 언급된 저장소 (멀티턴 컨텍스트)
     last_mentioned_repo = accumulated.get("last_mentioned_repo")
     if last_mentioned_repo:
         summary_parts.append(
-            f"📌 Last mentioned repo: {last_mentioned_repo.get('full_name', 'unknown')}"
+            f"📌 마지막 언급 저장소: {last_mentioned_repo.get('full_name', 'unknown')}"
         )
-    
-    # 마지막 주제
-    last_topic = accumulated.get("last_topic")
-    if last_topic:
-        summary_parts.append(f"Last topic: {last_topic}")
     
     # 마지막 의도 (대화 연속성 지원)
     last_intent = accumulated.get("last_intent")
     if last_intent:
-        task_type = last_intent.get("task_type", "unknown")
+        intent_task_type = last_intent.get("task_type", "unknown")
         needs_clarification = last_intent.get("needs_clarification", False)
         if needs_clarification:
-            summary_parts.append(f"🔄 Last intent: {task_type} (clarification 요청 중)")
-        else:
-            summary_parts.append(f"🔄 Last intent: {task_type}")
+            summary_parts.append(f"🔄 마지막 의도: {intent_task_type} (clarification 요청 중)")
     
-    return "\n".join(summary_parts) if summary_parts else "없음"
+    return "\n".join(summary_parts) if summary_parts else "없음 (새 대화)"
 
 
 def detect_force_refresh(user_message: str) -> bool:
