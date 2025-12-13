@@ -1,7 +1,7 @@
 """
 Onboarding Handler Node (Unified)
 Supervisor에서 Onboarding Agent를 호출합니다.
-Tool A (기여 가이드) / Tool B (커리큘럼) / Both 모드를 지원합니다.
+Tool A (기여 가이드) / Tool B (커리큘럼) / Tool C (구조 시각화) / Both 모드를 지원합니다.
 """
 
 import logging
@@ -16,15 +16,18 @@ from backend.agents.onboarding.tools.contributor_guide_tool import generate_cont
 from backend.agents.onboarding.tools.curriculum_tool import generate_onboarding_curriculum
 from backend.agents.diagnosis.graph import run_diagnosis
 from backend.common.intent_utils import detect_force_refresh
+from backend.common.structure_visualizer import generate_structure_visualization
+from backend.common.github_client import fetch_repo_tree
 
 logger = logging.getLogger(__name__)
 
 # Intent 키워드
 GUIDE_KEYWORDS = ["가이드", "기여", "pr", "포크", "클론", "브랜치", "contributing", "fork", "clone", "branch", "커밋", "commit"]
 CURRICULUM_KEYWORDS = ["주", "커리큘럼", "플랜", "로드맵", "학습", "온보딩", "week", "curriculum", "plan", "roadmap", "onboarding"]
+STRUCTURE_KEYWORDS = ["코드 구조", "폴더 구조", "구조", "트리", "디렉토리", "structure", "tree", "directory", "folder"]
 
 
-def _route_by_intent(user_message: str) -> Literal["guide", "curriculum", "both"]:
+def _route_by_intent(user_message: str) -> Literal["guide", "curriculum", "both", "structure"]:
     """사용자 의도 분석 → Tool 선택"""
     if not user_message:
         return "curriculum"  # 기본값: 커리큘럼
@@ -32,9 +35,12 @@ def _route_by_intent(user_message: str) -> Literal["guide", "curriculum", "both"
     msg = user_message.lower()
     has_guide = any(kw in msg for kw in GUIDE_KEYWORDS)
     has_curriculum = any(kw in msg for kw in CURRICULUM_KEYWORDS)
+    has_structure = any(kw in msg for kw in STRUCTURE_KEYWORDS)
     
-    # 우선순위: curriculum > both > guide
-    if has_curriculum and has_guide:
+    # 우선순위: structure > curriculum > both > guide
+    if has_structure:
+        return "structure"
+    elif has_curriculum and has_guide:
         return "both"
     elif has_curriculum:
         return "curriculum"
@@ -183,6 +189,49 @@ async def run_onboarding_agent_node(state: SupervisorState) -> Dict[str, Any]:
                 "summary": f"{weeks}주 온보딩 플랜이 생성되었습니다." + (" (새로 생성됨)" if force_refresh else ""),
                 "is_regenerated": force_refresh
             }
+        
+        elif tool_mode == "structure":
+            # Tool C: 코드 구조 시각화
+            logger.info(f"[Onboarding] Structure visualization mode")
+            
+            # file_tree 가져오기
+            accumulated_context = state.get("accumulated_context", {})
+            file_tree = accumulated_context.get("file_tree", [])
+            
+            # file_tree가 없으면 GitHub에서 직접 조회
+            if not file_tree:
+                try:
+                    tree_result = fetch_repo_tree(owner, repo)
+                    if isinstance(tree_result, dict):
+                        file_tree = tree_result.get("tree", [])
+                    else:
+                        file_tree = tree_result if isinstance(tree_result, list) else []
+                    logger.info(f"[Onboarding] Fetched file tree from GitHub: {len(file_tree)} items")
+                except Exception as e:
+                    logger.warning(f"[Onboarding] Failed to fetch file tree: {e}")
+                    file_tree = []
+            
+            if file_tree:
+                visualization = generate_structure_visualization(owner, repo, file_tree)
+                result = {
+                    "type": "structure",
+                    "structure_visualization": visualization,
+                    "summary": f"{owner}/{repo} 프로젝트의 코드 구조입니다."
+                }
+                
+                # structure_visualization을 별도로 반환
+                return {
+                    "agent_result": result,
+                    "target_agent": "onboarding",
+                    "structure_visualization": visualization,
+                    "iteration": state.get("iteration", 0) + 1
+                }
+            else:
+                result = {
+                    "type": "structure",
+                    "structure_visualization": None,
+                    "summary": "코드 구조를 가져올 수 없습니다."
+                }
             
         else:
             # Both: Tool B + Tool A (부록) - 다양성 옵션 포함

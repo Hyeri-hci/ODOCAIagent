@@ -296,6 +296,21 @@ export const useAnalysisStream = ({
               if (target_agent === "onboarding" && agent_result) {
                 console.log("온보딩 플랜 생성됨 (스트리밍):", agent_result);
 
+                // structure 타입 처리 (코드 구조 시각화)
+                if (
+                  agent_result.type === "structure" &&
+                  agent_result.structure_visualization
+                ) {
+                  console.log("코드 구조 시각화 결과 받음");
+                  setAnalysisResult((prev) => ({
+                    ...prev,
+                    structureVisualization:
+                      agent_result.structure_visualization,
+                  }));
+                  setIsGeneratingPlan(false);
+                  return;
+                }
+
                 // contributor_guide 타입 처리 (마크다운이 직접 포함된 경우)
                 if (
                   agent_result.type === "contributor_guide" &&

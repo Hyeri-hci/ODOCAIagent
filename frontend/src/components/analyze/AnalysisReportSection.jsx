@@ -620,7 +620,8 @@ const AnalysisReportSection = ({
           !analysisResult.contributorGuide?.markdown &&
           !analysisResult.contributorGuide &&
           !analysisResult.firstContributionGuide &&
-          !analysisResult.contributionChecklist
+          !analysisResult.contributionChecklist &&
+          !analysisResult.structureVisualization
         )
           return null;
         return (

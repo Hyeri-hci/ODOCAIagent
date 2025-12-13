@@ -46,7 +46,8 @@ const ContributorGuideSection = ({
     !contributorGuide &&
     !firstContributionGuide &&
     !contributionChecklist &&
-    !communityAnalysis
+    !communityAnalysis &&
+    !structureVisualization
   ) {
     return null;
   }
