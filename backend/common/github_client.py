@@ -270,6 +270,44 @@ def fetch_recent_commits(
     return resp.json()
 
 
+@cached(ttl=3600)  # 1시간 캐시 (contributors 수는 자주 변하지 않음)
+def fetch_contributors_count(owner: str, repo: str) -> int:
+    """
+    전체 contributors 수를 가져옵니다.
+    GitHub API의 Link 헤더에서 마지막 페이지 번호를 추출하여 총 수를 계산합니다.
+    """
+    logger.debug("GitHub API: fetch_contributors_count %s/%s", owner, repo)
+    url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/contributors"
+    params = {"per_page": 1, "anon": "false"}  # 1개만 요청하여 총 수 확인
+    
+    try:
+        resp = requests.get(url, headers=_build_headers(), params=params, timeout=10)
+        if resp.status_code != 200:
+            logger.warning(f"Failed to fetch contributors count: {resp.status_code}")
+            return 0
+        
+        # Link 헤더에서 마지막 페이지 번호 추출
+        # 예: <...?page=732>; rel="last"
+        link_header = resp.headers.get("Link", "")
+        if 'rel="last"' in link_header:
+            import re
+            match = re.search(r'[?&]page=(\d+)[^>]*>;\s*rel="last"', link_header)
+            if match:
+                total_count = int(match.group(1))
+                logger.info(f"[Contributors] {owner}/{repo}: {total_count} total contributors")
+                return total_count
+        
+        # Link 헤더가 없으면 첫 페이지의 결과 수 반환 (contributors가 1페이지 이내)
+        contributors = resp.json()
+        count = len(contributors) if isinstance(contributors, list) else 0
+        logger.info(f"[Contributors] {owner}/{repo}: {count} contributors (single page)")
+        return count
+        
+    except Exception as e:
+        logger.warning(f"Failed to fetch contributors count for {owner}/{repo}: {e}")
+        return 0
+
+
 @cached(ttl=180)
 def fetch_activity_summary(
     owner: str,

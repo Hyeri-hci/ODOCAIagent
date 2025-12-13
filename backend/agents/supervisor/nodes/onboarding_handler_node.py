@@ -127,6 +127,20 @@ async def run_onboarding_agent_node(state: SupervisorState) -> Dict[str, Any]:
     user_message = state.get("user_message", "")
     accumulated_context = state.get("accumulated_context", {})
     
+    # owner/repo가 없으면 clarification 요청
+    if not owner or not repo:
+        logger.warning("[Onboarding] No owner/repo specified, requesting clarification")
+        return {
+            "needs_clarification": True,
+            "clarification_questions": [
+                "온보딩을 진행할 GitHub 저장소를 알려주세요.",
+                "예: `owner/repo` 또는 전체 URL을 입력해주세요."
+            ],
+            "target_agent": "onboarding",
+            "accumulated_context": accumulated_context,
+            "iteration": state.get("iteration", 0) + 1
+        }
+    
     # ===== 다시 생성 요청 감지 =====
     force_refresh = detect_force_refresh(user_message)
     previous_plan = accumulated_context.get("onboarding_result", {})
@@ -242,15 +256,44 @@ async def run_onboarding_agent_node(state: SupervisorState) -> Dict[str, Any]:
             # Tool D: 이슈 추천 (Good First Issue 매칭)
             logger.info(f"[Onboarding] Issue recommendation mode")
             
+            # 세션에서 사용자 기술 스택 가져오기
+            accumulated_context = state.get("accumulated_context", {}) or {}
+            user_profile = accumulated_context.get("user_profile", {})
+            user_skills = user_profile.get("tech_stack", [])
+            
+            # 기술 스택이 없으면 clarification 요청
+            if not user_skills:
+                logger.info("[Onboarding] No user skills found, requesting clarification")
+                
+                # clarification 후 재시도를 위해 컨텍스트에 저장
+                new_context = dict(accumulated_context)
+                new_context["pending_action"] = "issues"
+                new_context["pending_target_agent"] = "onboarding"
+                
+                return {
+                    "needs_clarification": True,
+                    "clarification_type": "tech_stack",
+                    "clarification_questions": [
+                        "더 정확한 이슈 추천을 위해 기술 스택을 알려주세요:",
+                        "예: Python, JavaScript, React, TypeScript, Java, Go 등",
+                        "(쉼표로 구분해서 입력해주세요)"
+                    ],
+                    "target_agent": "onboarding",
+                    "accumulated_context": new_context,
+                    "iteration": state.get("iteration", 0) + 1
+                }
+            
+            logger.info(f"[Onboarding] User skills: {user_skills}")
+            
             try:
                 # GitHub에서 초보자 친화적 이슈 가져오기
                 issues = fetch_beginner_issues(owner, repo, max_count=10)
                 logger.info(f"[Onboarding] Fetched {len(issues)} beginner issues")
                 
                 if issues:
-                    # 이슈 매칭 및 점수화
-                    matched_issues = match_issues_to_user(issues, experience_level=user_level)
-                    logger.info(f"[Onboarding] Matched {len(matched_issues)} issues for {user_level}")
+                    # 이슈 매칭 및 점수화 (사용자 기술 스택 포함)
+                    matched_issues = match_issues_to_user(issues, user_skills=user_skills, experience_level=user_level)
+                    logger.info(f"[Onboarding] Matched {len(matched_issues)} issues for {user_level} with skills {user_skills}")
                     
                     # 난이도 레벨 한글 변환
                     level_kr = {"beginner": "입문자", "intermediate": "중급자", "advanced": "숙련자"}.get(user_level, user_level)
@@ -258,6 +301,9 @@ async def run_onboarding_agent_node(state: SupervisorState) -> Dict[str, Any]:
                     # 마크다운 형식으로 이슈 목록 생성
                     md_lines = [f"# 🎯 {owner}/{repo} 추천 이슈\n"]
                     md_lines.append(f"> **{level_kr}** 수준에 맞는 이슈를 추천합니다.\n")
+                    if user_skills:
+                        skills_str = ", ".join([f"`{s}`" for s in user_skills])
+                        md_lines.append(f"> **기술 스택**: {skills_str}\n")
                     md_lines.append(f"> 총 {len(issues)}개 이슈 중 {len(matched_issues)}개를 분석했습니다.\n\n")
                     
                     for i, issue in enumerate(matched_issues[:5], 1):

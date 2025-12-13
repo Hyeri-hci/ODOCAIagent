@@ -215,17 +215,38 @@ class Session:
     
     def to_dict(self) -> Dict[str, Any]:
         """딕셔너리 변환 (직렬화용)"""
+        
+        def _serialize(obj):
+            """중첩된 객체를 JSON 직렬화 가능하게 변환"""
+            if obj is None:
+                return None
+            if isinstance(obj, (str, int, float, bool)):
+                return obj
+            if isinstance(obj, dict):
+                return {k: _serialize(v) for k, v in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_serialize(item) for item in obj]
+            if hasattr(obj, 'to_dict'):
+                return obj.to_dict()
+            if hasattr(obj, '__dict__'):
+                return {k: _serialize(v) for k, v in obj.__dict__.items() if not k.startswith('_')}
+            # datetime 등 기타 타입
+            try:
+                return str(obj)
+            except:
+                return None
+        
         return {
             "session_id": self.session_id,
             "owner": self.owner,
             "repo": self.repo,
             "ref": self.ref,
-            "conversation_history": self.conversation_history,
-            "accumulated_context": dict(self.accumulated_context),
+            "conversation_history": _serialize(self.conversation_history),
+            "accumulated_context": _serialize(dict(self.accumulated_context)),
             "created_at": self.created_at.isoformat(),
             "last_active": self.last_active.isoformat(),
             "total_turns": self.total_turns,
-            "trace": self.trace
+            "trace": _serialize(self.trace)
         }
     
     @classmethod

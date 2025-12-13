@@ -101,9 +101,8 @@ const AnalysisChat = ({
       {
         id: "initial_text",
         role: "assistant",
-        content: `**${
-          userProfile?.repositoryUrl || "저장소"
-        }** 분석이 완료되었습니다!\n\n위의 보고서 카드에서 각 섹션을 클릭하면 상세 정보를 확인할 수 있습니다. 궁금한 점이 있으시면 질문해주세요.`,
+        content: `**${userProfile?.repositoryUrl || "저장소"
+          }** 분석이 완료되었습니다!\n\n위의 보고서 카드에서 각 섹션을 클릭하면 상세 정보를 확인할 수 있습니다. 궁금한 점이 있으시면 질문해주세요.`,
         timestamp: new Date(),
       },
     ];
@@ -160,9 +159,9 @@ const AnalysisChat = ({
     transformApiResponse,
     setSessionId,
     setSessionRepo, // 백엔드와 저장소 정보 동기화
-    setSuggestions: () => {}, // suggestions 기능 비활성화
+    setSuggestions: () => { }, // suggestions 기능 비활성화
     setAnalysisResult,
-    setIsGeneratingPlan: () => {}, // noop
+    setIsGeneratingPlan: () => { }, // noop
     onAnalysisUpdate,
   });
 
@@ -471,9 +470,8 @@ const AnalysisChat = ({
         const errorMessage = {
           id: `compare_error_${Date.now()}`,
           role: "assistant",
-          content: `비교 분석 중 오류가 발생했습니다: ${
-            response.error || "결과를 가져올 수 없습니다"
-          }`,
+          content: `비교 분석 중 오류가 발생했습니다: ${response.error || "결과를 가져올 수 없습니다"
+            }`,
           timestamp: new Date(),
         };
         addMessage(errorMessage);
@@ -517,59 +515,108 @@ const AnalysisChat = ({
       // }
 
       if (response.context) {
-        const { agent_result, target_agent } = response.context;
+        const { agent_result, target_agent, multi_agent_results } = response.context;
 
-        if (target_agent === "diagnosis" && agent_result) {
-          const repoUrl =
-            analysisResult?.repositoryUrl ||
-            `https://github.com/${owner}/${repo}`;
-          const updatedResult = transformApiResponse(
-            { context: response.context, analysis: agent_result },
-            repoUrl
-          );
+        // 1. multi_agent_results 처리 (종합 분석)
+        if (multi_agent_results) {
+          let updates = {};
 
-          setAnalysisResult((prev) => ({
-            ...prev,
-            ...updatedResult,
-            repositoryUrl: repoUrl,
-          }));
+          // Diagnosis
+          if (multi_agent_results.diagnosis) {
+            const repoUrl = analysisResult?.repositoryUrl || `https://github.com/${owner}/${repo}`;
+            const diagUpdate = transformApiResponse(
+              { context: response.context, analysis: multi_agent_results.diagnosis },
+              repoUrl
+            );
+            updates = { ...updates, ...diagUpdate, repositoryUrl: repoUrl };
+          }
 
-          if (onAnalysisUpdate) {
-            onAnalysisUpdate(updatedResult);
+          // Security
+          if (multi_agent_results.security) {
+            const secResult = multi_agent_results.security;
+            // transformApiResponse가 securityResult 포맷을 처리하는지 확인 필요하지만, 보통 직접 매핑도 가능
+            // 여기서는 AnalysisResult 구조에 맞게 매핑
+            updates.securityAnalysis = {
+              vulnerabilities: secResult.vulnerabilities || [],
+              grade: secResult.grade || "UNKNOWN",
+              score: secResult.security_score || 0,
+              summary: secResult.summary || ""
+            };
+          }
+
+          // Onboarding
+          if (multi_agent_results.onboarding) {
+            const onbResult = multi_agent_results.onboarding;
+            if (onbResult.type === "contributor_guide" && onbResult.markdown) {
+              updates.contributorGuide = onbResult;
+              updates.onboardingPlan = [];
+            } else {
+              updates.onboardingPlan = onbResult;
+            }
+          }
+
+          if (Object.keys(updates).length > 0) {
+            setAnalysisResult((prev) => ({
+              ...prev,
+              ...updates,
+            }));
           }
         }
 
-        if (target_agent === "onboarding" && agent_result) {
-          // contributor_guide 타입 처리 (마크다운이 직접 포함된 경우)
-          if (
-            agent_result.type === "contributor_guide" &&
-            agent_result.markdown
-          ) {
+        // 2. 단일 target_agent 처리 (기존 로직 유지하되, multi_agent_results가 없을 때 동작하도록)
+        if (!multi_agent_results) {
+          if (target_agent === "diagnosis" && agent_result) {
+            const repoUrl =
+              analysisResult?.repositoryUrl ||
+              `https://github.com/${owner}/${repo}`;
+            const updatedResult = transformApiResponse(
+              { context: response.context, analysis: agent_result },
+              repoUrl
+            );
+
+            setAnalysisResult((prev) => ({
+              ...prev,
+              ...updatedResult,
+              repositoryUrl: repoUrl,
+            }));
+
+            if (onAnalysisUpdate) {
+              onAnalysisUpdate(updatedResult);
+            }
+          }
+
+          if (target_agent === "onboarding" && agent_result) {
+            // contributor_guide 타입 처리 (마크다운이 직접 포함된 경우)
+            if (
+              agent_result.type === "contributor_guide" &&
+              agent_result.markdown
+            ) {
+              setAnalysisResult((prev) => ({
+                ...prev,
+                contributorGuide: agent_result,
+                onboardingPlan: [], // 빈 배열로 설정
+              }));
+            } else {
+              setAnalysisResult((prev) => ({
+                ...prev,
+                onboardingPlan: agent_result,
+              }));
+            }
+          }
+
+          // contributor 에이전트 결과 처리
+          if (target_agent === "contributor" && agent_result) {
+            const features = agent_result.features || {};
             setAnalysisResult((prev) => ({
               ...prev,
               contributorGuide: agent_result,
-              onboardingPlan: [], // 빈 배열로 설정
-            }));
-          } else {
-            setAnalysisResult((prev) => ({
-              ...prev,
-              onboardingPlan: agent_result,
+              firstContributionGuide: features.first_contribution_guide || null,
+              contributionChecklist: features.contribution_checklist || null,
+              communityAnalysis: features.community_analysis || null,
+              issueMatching: features.issue_matching || null,
+              structureVisualization: features.structure_visualization || null,
             }));
           }
-        }
-
-        // contributor 에이전트 결과 처리
-        if (target_agent === "contributor" && agent_result) {
-          const features = agent_result.features || {};
-          setAnalysisResult((prev) => ({
-            ...prev,
-            contributorGuide: agent_result,
-            firstContributionGuide: features.first_contribution_guide || null,
-            contributionChecklist: features.contribution_checklist || null,
-            communityAnalysis: features.community_analysis || null,
-            issueMatching: features.issue_matching || null,
-            structureVisualization: features.structure_visualization || null,
-          }));
         }
       }
 
@@ -804,9 +851,8 @@ const AnalysisChat = ({
         <div className="grid grid-cols-1 md:grid-cols-5 gap-4 items-start">
           {/* 왼쪽: 채팅 영역 - 리포트 숨김 시 전체 너비 */}
           <div
-            className={`${
-              showReport ? "md:col-span-2" : "md:col-span-5"
-            } bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col h-[calc(100vh-140px)] min-h-[500px] transition-all duration-300`}
+            className={`${showReport ? "md:col-span-2" : "md:col-span-5"
+              } bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 flex flex-col h-[calc(100vh-140px)] min-h-[500px] transition-all duration-300`}
           >
             {/* 채팅 헤더 */}
             <div className="flex items-center justify-between px-6 py-3 border-b border-gray-100">

@@ -1,15 +1,45 @@
-# Intent Classification Few-shot Examples v2.0
-# 구체적인 컨텍스트와 reasoning 포함
-
-version: "2.0"
-
 # =============================================================================
 # 키워드 기반 규칙 (LLM 호출 전 전처리 - 빠른 분류용)
+# priority 숫자가 낮을수록 우선순위 높음
 # =============================================================================
 keyword_rules:
-  diagnosis:
-    keywords: ["분석", "진단", "건강", "상태", "어때", "점수", "평가", "확인"]
+  # 특수 에이전트 (우선순위 높음)
+  security:
+    keywords:
+      [
+        "보안",
+        "취약점",
+        "CVE",
+        "vulnerability",
+        "security",
+        "보안 분석",
+        "보안 점검",
+        "보안 취약",
+      ]
     priority: 1
+
+  comparison:
+    keywords: ["비교", " vs ", "versus", "차이", "뭐가 나아", "뭐가 좋아"]
+    priority: 1
+
+  # 일반 분석 (우선순위 낮음)
+  diagnosis:
+    keywords:
+      [
+        "진단",
+        "건강",
+        "상태",
+        "어때",
+        "점수",
+        "평가",
+        "확인",
+        "analysis",
+        "diagnose",
+        "health",
+        "check",
+        "분석",
+      ]
+    priority: 2
 
   onboarding_structure:
     keywords: ["코드 구조", "폴더 구조", "디렉토리", "트리 구조", "구조 보여"]
@@ -42,17 +72,19 @@ keyword_rules:
       ]
     priority: 3
 
-  security:
-    keywords: ["보안", "취약점", "CVE", "vulnerability", "security"]
-    priority: 2
-
   recommend:
-    keywords: ["추천", "비슷한", "유사", "대안", "alternative", "similar"]
-    priority: 3
-
-  comparison:
-    keywords: ["비교", " vs ", "versus", "차이", "뭐가 나아", "뭐가 좋아"]
-    priority: 2
+    keywords:
+      [
+        "추천",
+        "비슷한",
+        "유사",
+        "대안",
+        "alternative",
+        "similar",
+        "찾아줘",
+        "알려줘",
+      ]
+    priority: 1 # 추천 요청은 우선순위 높음
 
 # =============================================================================
 # Few-shot 예제 (LLM용) - 컨텍스트와 reasoning 포함
@@ -284,6 +316,22 @@ examples:
       confidence: 0.95
     reasoning: "인사말 = 일반 대화"
 
+  - input: "ODOC이 뭐야?"
+    context: "새 세션"
+    output:
+      task_type: "general_chat"
+      target_agent: "chat"
+      confidence: 1.0
+    reasoning: "서비스명 질문 = 일반 대화"
+
+  - input: "OSSDoctor가 뭐야?"
+    context: "새 세션"
+    output:
+      task_type: "general_chat"
+      target_agent: "chat"
+      confidence: 1.0
+    reasoning: "서비스명 질문 = 일반 대화"
+
   - input: "오픈소스가 뭐야?"
     context: "새 세션"
     output:
@@ -292,7 +340,7 @@ examples:
       confidence: 0.9
     reasoning: "개념 질문 = 일반 대화"
 
-  # ===== 복합 요청 =====
+  # ===== 복합 요청 / 종합 분석 =====
   - input: "분석하고 보안도 체크해줘"
     context: "현재 저장소: nodejs/node"
     output:
@@ -301,6 +349,34 @@ examples:
       additional_agents: ["security"]
       confidence: 0.9
     reasoning: "'분석' + '보안' = 복합"
+
+  - input: "종합 분석해줘"
+    context: "현재 저장소: facebook/react"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      additional_agents: ["security", "onboarding", "contributor"]
+      confidence: 0.95
+    reasoning: "'종합 분석' = 모든 에이전트 실행"
+
+  - input: "flask 프로젝트 전체 분석해줘"
+    context: "새 세션"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      detected_repo: "pallets/flask"
+      additional_agents: ["security", "onboarding", "contributor"]
+      confidence: 0.95
+    reasoning: "Flask 프로젝트 종합 분석 요청 (well-known repo)"
+
+  - input: "전체적으로 분석해줘"
+    context: "현재 저장소: microsoft/vscode"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      additional_agents: ["security", "onboarding"]
+      confidence: 0.9
+    reasoning: "'전체적으로' = 주요 분석 에이전트 실행"
 
 # =============================================================================
 # 간소화된 프롬프트 템플릿
@@ -321,12 +397,6 @@ prompt_template: |
   - clarification: 정보부족
 
   JSON 응답:
-  {"task_type":"...","target_agent":"...","detected_repo":"owner/repo"|null,"needs_clarification":bool,"confidence":0.0-1.0,"reasoning":"..."}
-    output: "RunRecommendAgent"
+  {{"task_type":"...","target_agent":"...","detected_repo":"owner/repo"|null,"needs_clarification":bool,"confidence":0.0-1.0,"reasoning":"..."}}
 
-  - input: "안녕"
-    output: "GeneralChat"
-  - input: "너는 누구니?"
-    output: "GeneralChat"
-  - input: "오픈소스가 뭐야?"
-    output: "GeneralChat"
+  IMPORTANT: 'target_agent' and 'task_type' MUST be one of the English keys listed above (e.g., 'diagnosis', 'security'). DO NOT translate to Korean (e.g., do NOT use '진단', '보안', '기여자').

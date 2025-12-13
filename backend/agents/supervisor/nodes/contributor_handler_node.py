@@ -89,10 +89,37 @@ async def run_contributor_agent_node(state: SupervisorState) -> Dict[str, Any]:
         
         if any(kw in user_message for kw in ["이슈", "issue", "good first"]):
             # Good First Issue 매칭 (accumulated_context에서 이슈 정보 가져옴)
-            accumulated_context = state.get("accumulated_context", {})
+            accumulated_context = state.get("accumulated_context", {}) or {}
             issues = accumulated_context.get("open_issues", [])
+            
+            # 사용자 기술 스택 가져오기
+            user_profile = accumulated_context.get("user_profile", {})
+            user_skills = user_profile.get("tech_stack", [])
+            
+            # 기술 스택이 없으면 clarification 요청
+            if not user_skills and issues:
+                logger.info("[Contributor] No user skills found, requesting clarification for issue matching")
+                
+                # clarification 후 재시도를 위해 컨텍스트에 저장
+                new_context = dict(accumulated_context)
+                new_context["pending_action"] = "issues"
+                new_context["pending_target_agent"] = "contributor"
+                
+                return {
+                    "needs_clarification": True,
+                    "clarification_type": "tech_stack",
+                    "clarification_questions": [
+                        "더 정확한 이슈 추천을 위해 기술 스택을 알려주세요:",
+                        "예: Python, JavaScript, React, TypeScript, Java, Go 등",
+                        "(쉼표로 구분해서 입력해주세요)"
+                    ],
+                    "target_agent": "contributor",
+                    "accumulated_context": new_context,
+                    "iteration": state.get("iteration", 0) + 1
+                }
+            
             if issues:
-                matched = match_issues_to_user(issues, experience_level="beginner")
+                matched = match_issues_to_user(issues, user_skills=user_skills, experience_level="beginner")
                 result["features"]["issue_matching"] = matched
         
         if any(kw in user_message for kw in ["커뮤니티", "활동", "community"]):

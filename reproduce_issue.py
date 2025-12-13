@@ -11,12 +11,8 @@ from backend.common.session import get_session_store
 async def test_url_intent():
     # Test Cases
     test_inputs = [
-        "https://github.com/hyeri-hci/OSSDoctor",           # Clean URL
-        "https://github.com/hyeri-hci/OSSDoctor/",          # Trailing slash
-        "https://github.com/hyeri-hci/OSSDoctor.git",       # .git extension
-        "hyeri-hci/OSSDoctor",                              # Owner/Repo
-        "hyeri-hci/OSSDoctor@main",                         # @ref
-        "https://github.com/hyeri-hci/OSSDoctor/tree/dev"   # Tree URL
+        "facebook/react 종합 분석해줘",
+        "flask 프로젝트 전체 분석해줘"
     ]
     
     for user_message in test_inputs:

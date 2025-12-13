@@ -42,6 +42,11 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
     if not agent_result:
         return {"final_answer": "결과를 생성할 수 없습니다.", "error": "No agent result"}
     
+    # agent_result가 dict인지 확인 (문자열이나 다른 타입일 수 있음)
+    if not isinstance(agent_result, dict):
+        logger.warning(f"agent_result is not a dict: {type(agent_result)}")
+        return {"final_answer": str(agent_result), "agent_result": {"type": "text", "content": str(agent_result)}}
+    
     # 대명사 해결 정보 가져오기
     accumulated_context = state.get("accumulated_context", {})
     pronoun_info = accumulated_context.get("last_pronoun_reference", {})
@@ -88,7 +93,7 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
     
     # 대명사 참조가 있는 경우 컨텍스트 데이터 가져오기
     referenced_data = None
-    if pronoun_info.get("resolved") and pronoun_info.get("confidence", 0) > 0.5:
+    if pronoun_info and pronoun_info.get("resolved") and pronoun_info.get("confidence", 0) > 0.5:
         refers_to = pronoun_info.get("refers_to")
         if refers_to and refers_to in accumulated_context:
             referenced_data = accumulated_context.get(refers_to)

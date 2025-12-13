@@ -37,14 +37,40 @@ class IntentParserBase:
             
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(None, self.llm.chat, request)
-            return json.loads(response.content)
+            
+            # 빈 응답 체크
+            if not response or not response.content:
+                logger.warning("LLM returned empty response")
+                return {}
+            
+            content = response.content.strip()
+            
+            # JSON 블록 추출 시도
+            if "```json" in content:
+                start = content.find("```json") + 7
+                end = content.find("```", start)
+                if end > start:
+                    content = content[start:end].strip()
+            elif "```" in content:
+                start = content.find("```") + 3
+                end = content.find("```", start)
+                if end > start:
+                    content = content[start:end].strip()
+            
+            # JSON 파싱
+            if not content:
+                logger.warning("Empty content after extraction")
+                return {}
+                
+            return json.loads(content)
             
         except json.JSONDecodeError as e:
             logger.error(f"Failed to parse LLM response as JSON: {e}")
-            raise
+            logger.debug(f"Raw response: {response.content if response else 'None'}")
+            return {}  # 빈 딕셔너리 반환하여 상위에서 폴백 처리
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
-            raise
+            return {}  # 빈 딕셔너리 반환
 
 
 def extract_experience_level(user_message: str) -> Optional[str]:

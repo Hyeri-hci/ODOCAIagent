@@ -691,7 +691,7 @@ export const useAnalysisStream = ({
             const warningResponse = {
               id: `warning_${Date.now()}`,
               role: "assistant",
-              content: `[Warning] ${data.message}`,
+              content: `⚠️ ${data.message}`,
               timestamp: new Date(),
               isWarning: true,
             };

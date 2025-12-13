@@ -73,7 +73,8 @@ async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
             llm_api_key=os.getenv("LLM_API_KEY", ""),
             llm_model=os.getenv("LLM_MODEL", "gpt-4"),
             llm_temperature=float(os.getenv("LLM_TEMPERATURE", "0.1")),
-            execution_mode="fast"  # supervisor에서는 빠른 모드 사용
+            execution_mode="fast",  # supervisor에서는 빠른 모드 사용
+            max_iterations=8,  # 분석 품질을 위해 반복 횟수 조정 (5는 너무 빠름)
         )
         
         # 분석 요청 구성

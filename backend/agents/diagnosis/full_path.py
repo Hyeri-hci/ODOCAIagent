@@ -113,7 +113,9 @@ async def execute_full_path(
             # 상세 메트릭 (activity_result에서)
             "days_since_last_commit": get_activity_attr("days_since_last_commit"),
             "total_commits_30d": get_activity_attr("total_commits_in_window", 0),
+            # unique_contributors: 최근 90일 활성 기여자 (커뮤니티 활성도 파악용)
             "unique_contributors": get_activity_attr("unique_authors", 0) or get_activity_attr("unique_contributors", 0),
+            "unique_contributors_period": "90일",  # 기간 표시용
             "issue_close_rate": get_activity_attr("issue_closure_ratio", 0) or get_activity_attr("issue_close_rate", 0),
             "issue_close_rate_pct": f"{(get_activity_attr('issue_closure_ratio', 0) or get_activity_attr('issue_close_rate', 0)) * 100:.1f}%",
             "median_pr_merge_days": get_activity_attr("median_pr_merge_days"),

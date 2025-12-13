@@ -170,14 +170,17 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
         original_message = pending_request.get("original_message", "")
         original_task_type = pending_request.get("task_type", "")
         
-        # 현재 메시지가 분석/진단 요청인지 체크 (의도 변경 감지)
+        # 현재 메시지가 새로운 요청인지 체크 (의도 변경 감지)
         diagnosis_keywords = ["분석해", "진단해", "analyze", "diagnose", "확인해봐", "살펴봐"]
+        recommend_keywords = ["추천", "recommend", "찾아줘", "알려줘"]
         is_new_diagnosis_intent = any(kw in msg_lower for kw in diagnosis_keywords)
+        is_new_recommend_intent = any(kw in msg_lower for kw in recommend_keywords)
         
-        if is_new_diagnosis_intent and original_task_type == "recommend":
-            # 의도 변경 감지: recommend → diagnosis
-            # pending_request를 클리어하고 새로운 진단 요청으로 처리
-            logger.info(f"Intent change detected: '{original_task_type}' → 'diagnosis', skipping pending_request merge")
+        if is_new_diagnosis_intent or is_new_recommend_intent:
+            # 의도 변경 감지: 새로운 diagnosis/recommend 요청
+            # pending_request를 클리어하고 새로운 요청으로 처리
+            new_intent = "diagnosis" if is_new_diagnosis_intent else "recommend"
+            logger.info(f"Intent change detected: '{original_task_type}' → '{new_intent}', skipping pending_request merge")
             del accumulated_context["pending_request"]
             # 세션에 저장된 추천 결과에서 '첫 번째 프로젝트' 등 참조 해결 필요
             # 이건 대명사 해결 단계에서 처리됨
@@ -252,7 +255,7 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
     # 이미 분석 중인 저장소가 있으면, 단일 단어를 프로젝트명으로 오인하지 않도록 스킵 (LLM이 문맥 전환 판단)
     # 단, "이제 jquery 분석해줘" 처럼 명시적으로 새로운 분석을 요청하는 경우는 LLM 단계에서 처리됨
     has_existing_repo = False
-    last_mentioned = accumulated_context.get("last_mentioned_repo", {})
+    last_mentioned = accumulated_context.get("last_mentioned_repo") or {}
     if last_mentioned.get("owner") and last_mentioned.get("repo"):
         has_existing_repo = True
         logger.info(f"Existing repo in session: {last_mentioned['owner']}/{last_mentioned['repo']}")
@@ -380,6 +383,37 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
                         "target_agent": "onboarding",
                         "accumulated_context": new_context
                     }
+            
+            # 기술 스택 응답 처리
+            if "기술 스택을 알려주세요" in last_response or last_intent.get("clarification_type") == "tech_stack":
+                # 쉼표 또는 공백으로 구분된 기술 스택 파싱
+                tech_input = user_message.strip()
+                tech_list = [t.strip() for t in tech_input.replace(",", " ").split() if t.strip()]
+                
+                if tech_list:
+                    logger.info(f"Tech stack from clarification: {tech_list}")
+                    new_context = dict(accumulated_context)
+                    user_profile = new_context.get("user_profile", {})
+                    user_profile["tech_stack"] = tech_list
+                    new_context["user_profile"] = user_profile
+                    
+                    # 원래 요청이 뭐였는지 확인
+                    pending_action = accumulated_context.get("pending_action", "issues")
+                    target = accumulated_context.get("pending_target_agent", "onboarding")
+                    
+                    return {
+                        "supervisor_intent": {
+                            "task_type": "onboarding" if target == "onboarding" else "contributor",
+                            "target_agent": target,
+                            "needs_clarification": False,
+                            "confidence": 0.95,
+                            "reasoning": f"Clarification 응답에서 기술 스택 '{tech_list}' 감지"
+                        },
+                        "needs_clarification": False,
+                        "clarification_questions": [],
+                        "target_agent": target,
+                        "accumulated_context": new_context
+                    }
     
     # === 4단계: 검색 결과가 있지만 정확 매칭이 없으면 clarification 요청 ===
     # 검색 결과가 1개 이상이고 정확 매칭이 없으면 사용자에게 선택지 제시
@@ -425,14 +459,19 @@ async def parse_intent_node(state: SupervisorState) -> Dict[str, Any]:
         "conversation_history": conversation_history,
         "accumulated_context": accumulated_context,
         "pronoun_detected": pronoun_detected,
-        "detected_repo": f"{detected_owner}/{detected_repo}" if detected_owner else f"{context_owner}/{context_repo}" if context_owner and context_repo else None
+        "detected_repo": f"{detected_owner}/{detected_repo}" if detected_owner and detected_repo else f"{context_owner}/{context_repo}" if context_owner and context_repo else None
     }
     
     # === 6단계: LLM 의도 파싱 ===
     parser = SupervisorIntentParserV2()
+    
+    # detected_owner/repo가 이미 있으면 intent_parser에게 전달
+    pre_detected_repo = f"{detected_owner}/{detected_repo}" if detected_owner and detected_repo else None
+    
     intent = await parser.parse(
         user_message=resolved_message,
-        session_context=session_context
+        session_context=session_context,
+        pre_detected_repo=pre_detected_repo  # 이미 감지된 저장소 전달
     )
     
     needs_clarification = intent.needs_clarification

@@ -190,10 +190,10 @@ const formatGuideMessage = (guide) => {
         g.color === "green"
           ? "🟢"
           : g.color === "yellow"
-            ? "🟡"
-            : g.color === "orange"
-              ? "🟠"
-              : "🔴";
+          ? "🟡"
+          : g.color === "orange"
+          ? "🟠"
+          : "🔴";
       message += `\n- ${emoji} **${g.label}**: ${g.range}`;
     });
   }
@@ -405,7 +405,7 @@ const AnalysisReportSection = ({
                     <StatCard
                       icon={Users}
                       value={formatNumber(technicalDetails?.contributors || 0)}
-                      label="Contributors"
+                      label="활성 기여자(90일)"
                       borderColor="border-purple-200"
                       iconColor="text-purple-600"
                     />
@@ -487,8 +487,9 @@ const AnalysisReportSection = ({
               icon={<Shield className="w-5 h-5 text-gray-500" />}
               subtitle={
                 analysisResult.security
-                  ? `취약점 ${analysisResult.security.vulnerability_count || 0
-                  }개 발견`
+                  ? `취약점 ${
+                      analysisResult.security.vulnerability_count || 0
+                    }개 발견`
                   : "분석 완료"
               }
               isExpanded={expandedSections.security}
@@ -588,7 +589,6 @@ const AnalysisReportSection = ({
           </div>
         );
 
-
       case "contributor":
         // 신규 기여자 가이드 데이터가 없으면 표시하지 않음
         if (
@@ -629,24 +629,24 @@ const AnalysisReportSection = ({
       {(Array.isArray(analysisResult.onboardingPlan)
         ? analysisResult.onboardingPlan.length > 0
         : analysisResult.onboardingPlan?.plan?.length > 0) && (
-          <OnboardingPlanSection
-            plan={
-              Array.isArray(analysisResult.onboardingPlan)
-                ? analysisResult.onboardingPlan
-                : analysisResult.onboardingPlan?.plan || []
+        <OnboardingPlanSection
+          plan={
+            Array.isArray(analysisResult.onboardingPlan)
+              ? analysisResult.onboardingPlan
+              : analysisResult.onboardingPlan?.plan || []
+          }
+          userProfile={{ repositoryUrl: analysisResult.repositoryUrl }}
+          onGeneratePlan={() => {
+            if (onSendGuideMessage) {
+              // 캐시 무시하고 새로 생성하도록 명시적 키워드 포함
+              onSendGuideMessage(
+                "온보딩 플랜을 새로 다시 생성해줘 (캐시 무시)",
+                { asUserMessage: true }
+              );
             }
-            userProfile={{ repositoryUrl: analysisResult.repositoryUrl }}
-            onGeneratePlan={() => {
-              if (onSendGuideMessage) {
-                // 캐시 무시하고 새로 생성하도록 명시적 키워드 포함
-                onSendGuideMessage(
-                  "온보딩 플랜을 새로 다시 생성해줘 (캐시 무시)",
-                  { asUserMessage: true }
-                );
-              }
-            }}
-          />
-        )}
+          }}
+        />
+      )}
 
       {/* 섹션 목록 */}
       <div className="space-y-4">
@@ -706,8 +706,9 @@ const ScoreCard = ({ score, statusConfig }) => (
       {/* 프로그레스 바 */}
       <div className="h-2 bg-gray-100 dark:bg-gray-700 rounded-full overflow-hidden">
         <div
-          className={`h-full ${statusConfig.barColor || "bg-blue-500"
-            } transition-all duration-500`}
+          className={`h-full ${
+            statusConfig.barColor || "bg-blue-500"
+          } transition-all duration-500`}
           style={{ width: `${score}%` }}
         />
       </div>
@@ -729,8 +730,9 @@ const StatCard = (props) => {
   const { icon: Icon, value, label, borderColor, iconColor } = props;
   return (
     <div
-      className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-4 border ${borderColor || "border-gray-200 dark:border-gray-700"
-        } hover:shadow-md transition-shadow`}
+      className={`bg-gray-50 dark:bg-gray-800 rounded-xl p-4 border ${
+        borderColor || "border-gray-200 dark:border-gray-700"
+      } hover:shadow-md transition-shadow`}
     >
       <Icon className={`w-5 h-5 ${iconColor} mb-2`} />
       <div className="text-2xl font-bold text-gray-900 dark:text-white mb-1">
@@ -832,8 +834,9 @@ const DetailedMetrics = ({ technicalDetails }) => {
         return (
           <div
             key={idx}
-            className={`bg-gray-50 rounded-lg p-3 border ${colors.split(" ")[0]
-              } text-center`}
+            className={`bg-gray-50 rounded-lg p-3 border ${
+              colors.split(" ")[0]
+            } text-center`}
           >
             <metric.icon
               className={`w-4 h-4 mx-auto mb-1.5 ${colors.split(" ")[1]}`}
@@ -1024,14 +1027,15 @@ const SecuritySection = ({ security }) => {
                     {vuln.cve_id || vuln.package || `취약점 #${idx + 1}`}
                   </span>
                   <span
-                    className={`px-2 py-0.5 text-xs font-medium rounded ${vuln.severity === "critical"
-                      ? "bg-red-100 text-red-700"
-                      : vuln.severity === "high"
+                    className={`px-2 py-0.5 text-xs font-medium rounded ${
+                      vuln.severity === "critical"
+                        ? "bg-red-100 text-red-700"
+                        : vuln.severity === "high"
                         ? "bg-orange-100 text-orange-700"
                         : vuln.severity === "medium"
-                          ? "bg-yellow-100 text-yellow-700"
-                          : "bg-blue-100 text-blue-700"
-                      }`}
+                        ? "bg-yellow-100 text-yellow-700"
+                        : "bg-blue-100 text-blue-700"
+                    }`}
                   >
                     {vuln.severity || "unknown"}
                   </span>

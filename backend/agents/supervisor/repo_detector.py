@@ -111,8 +111,8 @@ def _get_existing_repo_from_session(session_context: Optional[Dict[str, Any]]) -
         return True
     
     # accumulated_context에서 last_mentioned_repo 확인
-    acc_context = session_context.get("accumulated_context", {})
-    last_repo = acc_context.get("last_mentioned_repo", {})
+    acc_context = session_context.get("accumulated_context") or {}
+    last_repo = acc_context.get("last_mentioned_repo") or {}
     
     if last_repo.get("owner") and last_repo.get("repo"):
         if is_valid_repo(last_repo["owner"], last_repo["repo"]):
