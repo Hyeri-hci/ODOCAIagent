@@ -42,12 +42,12 @@ keyword_rules:
     priority: 2
 
   onboarding_structure:
-    keywords: 
+    keywords:
       [
-        "코드 구조", 
-        "폴더 구조", 
-        "디렉토리", 
-        "트리 구조", 
+        "코드 구조",
+        "폴더 구조",
+        "디렉토리",
+        "트리 구조",
         "구조 보여",
         "구조 분석",
         "구조 알려",

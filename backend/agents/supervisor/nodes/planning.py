@@ -94,9 +94,20 @@ def create_supervisor_plan(state: SupervisorState) -> Dict[str, Any]:
         ])
     
     logger.info(f"Created plan: {len(plan)} steps for intent={global_intent}")
+    
+    # Eval trace hook: plan 선택 기록
+    try:
+        from backend.eval.trace_collector import trace_plan_selected
+        trace_plan_selected(plan)
+    except ImportError:
+        pass
+    except Exception as e:
+        logger.debug(f"[Plan] Trace hook error: {e}")
+    
     return {
         "task_plan": plan,
         "plan_history": [plan],
         "step": state.step + 1,
     }
+
 

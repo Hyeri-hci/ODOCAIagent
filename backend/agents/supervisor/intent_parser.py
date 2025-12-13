@@ -247,50 +247,13 @@ class SupervisorIntentParserV2(IntentParserBase):
                 reasoning="URL만 입력 → 기본 진단"
             )
         
-        # === 2. 키워드 전처리 ===
-        keyword_agent = self._keyword_preprocess(user_message)
-        
-        # === 2-1. recommend는 repo 없이도 동작 가능 ===
-        # 키워드가 명확하면 LLM 스킵 (recommend, comparison은 repo 필요 없음)
-        repo_not_required = keyword_agent in ("recommend", "comparison")
-        has_repo = detected_repo or self._has_repo_in_context(session_context)
-        
-        if keyword_agent and (has_repo or repo_not_required):
-            repo = detected_repo or self._get_repo_from_context(session_context)
-            logger.info(f"Keyword match: {keyword_agent} for repo {repo} (skipping LLM)")
-            
-            # 온보딩 요청 시 경험 수준 체크
-            needs_clarification = False
-            clarification_questions = []
-            if keyword_agent == "onboarding":
-                experience_level = extract_experience_level(user_message)
-                if not experience_level:
-                    needs_clarification = True
-                    clarification_questions = [
-                        "프로그래밍 경험 수준을 알려주세요:",
-                        "1. 입문자 2. 중급자 3. 숙련자"
-                    ]
-            
-            # === 종합 분석(Comprehensive) 처리 ===
-            # 키워드 전처리에서 'diagnosis'나 'onboarding' 등이 잡혔더라도, '종합', '전체' 키워드가 있으면 확장
-            comprehensive_keywords = ["종합", "전체", "comprehensive", "full", "all"]
-            is_comprehensive = any(k in user_message.lower() for k in comprehensive_keywords)
-            
-            additional_agents = []
-            if is_comprehensive and keyword_agent == "diagnosis":
-                 additional_agents = ["security", "onboarding", "contributor"]
-                 logger.info("Comprehensive analysis keywords detected -> Adding additional agents")
-
-            return SupervisorIntentV2(
-                task_type=keyword_agent,
-                target_agent=keyword_agent,
-                detected_repo=repo,
-                needs_clarification=needs_clarification,
-                clarification_questions=clarification_questions,
-                confidence=0.9,
-                reasoning=f"키워드 매칭: {keyword_agent}" + (" (종합 분석)" if is_comprehensive else ""),
-                additional_agents=additional_agents
-            )
+        # === 2. LLM-only 방식: 키워드 전처리 비활성화 ===
+        # 기존 키워드 로직 제거 → 모든 케이스를 LLM이 판단
+        # (롤백 시 아래 주석 해제)
+        # keyword_agent = self._keyword_preprocess(user_message)
+        # if keyword_agent and (...):
+        #     return SupervisorIntentV2(...)
+        keyword_agent = None  # LLM-only 모드
         
         # === 3. 모호한 경우 LLM 호출 ===
         prompt = self._build_prompt(user_message, context_summary)
@@ -395,35 +358,69 @@ class SupervisorIntentParserV2(IntentParserBase):
         return None
     
     def _build_prompt(self, user_message: str, context_summary: str) -> str:
-        """간소화된 LLM 프롬프트 생성 (~40줄)"""
-        return f"""GitHub 저장소 분석 시스템 의도 분류기.
+        """LLM 의도 분류 프롬프트 (고정 예제 포함)."""
+        return f"""당신은 ODOC(Open-source Doctor) AI의 의도 분류기입니다.
+사용자 입력을 분석하여 적절한 에이전트로 라우팅합니다.
 
-[입력] {user_message}
-[컨텍스트] {context_summary}
+## 입력
+사용자: {user_message}
+컨텍스트: {context_summary}
 
-## 분류 기준
-- diagnosis: 분석/진단/건강도/점수/상태 (URL만 있어도 diagnosis)
-- onboarding: 기여시작/가이드/코드구조/이슈추천/학습플랜
-- security: 보안/취약점/CVE
-- recommend: 유사프로젝트/추천/대안/"프로젝트 찾아줘"
-- comparison: 프로젝트 vs 프로젝트 비교
-- contributor: 기여자분석/커뮤니티활동
-- general_chat: 일반대화/인사/개념질문
-- clarification: 정보부족 (저장소 없음)
+## 의도 유형 (target_agent)
+- diagnosis: 저장소 분석/진단/건강도/점수/상태 확인
+- onboarding: 기여 가이드/코드 구조/이슈 추천/학습 플랜
+- security: 보안 분석/취약점/CVE 검색
+- recommend: 유사 프로젝트 추천/대안 찾기
+- comparison: 두 프로젝트 비교
+- chat: 일반 대화/인사/개념 질문
+- none: 정보 부족 (clarification 필요)
 
-## 핵심 규칙
-1. URL/owner/repo만 입력 → diagnosis
-2. "비슷한 프로젝트", "대안", "찾아줘" → recommend (NOT general_chat!)
-3. "코드 구조", "폴더 구조" → onboarding
-4. "좋은 이슈", "first issue" → onboarding
-5. 저장소 없고 분석 요청 → clarification + "어떤 저장소?" 질문
-6. 대명사("이거", "그거") + 이전 결과 → uses_previous_context=true
+## 판단 우선순위 (중요!)
+1. "건강", "점수", "상태", "어때", "분석" → diagnosis
+2. "보안", "취약점", "CVE", "security" → security  
+3. "비교", "vs", "versus" → comparison
+4. "비슷한", "추천", "대안", "유사" → recommend
+5. "구조", "폴더", "코드 구조" → onboarding
+6. "이슈", "기여", "가이드", "온보딩" → onboarding
+7. URL/owner/repo만 입력 → diagnosis
+8. 일반 질문/인사 → chat
 
-## JSON 응답 형식
+## 예제
+
+### diagnosis
+- "이 저장소 건강도 점수만 빠르게 알려줘" → diagnosis (건강도 = diagnosis)
+- "facebook/react 분석해줘" → diagnosis
+- "상태가 어때?" → diagnosis
+- "https://github.com/vuejs/vue" → diagnosis
+
+### security
+- "보안 취약점 있어?" → security
+- "CVE 확인해줘" → security
+- "의존성 보안 분석" → security
+
+### onboarding
+- "코드 구조 보여줘" → onboarding
+- "좋은 이슈 추천해줘" → onboarding
+- "기여하고 싶어" → onboarding
+
+### recommend
+- "비슷한 프로젝트 추천해줘" → recommend
+- "React 대안 있어?" → recommend
+- "머신러닝 프로젝트 찾아줘" → recommend
+
+### comparison
+- "React vs Vue 비교해줘" → comparison
+- "PyTorch랑 TensorFlow 뭐가 나아?" → comparison
+
+### chat
+- "안녕" → chat
+- "ODOC이 뭐야?" → chat
+
+## JSON 응답 (반드시 이 형식으로)
 {{
-  "task_type": "...",
-  "target_agent": "...",
-  "detected_repo": "owner/repo" | null,
+  "task_type": "diagnosis|onboarding|security|recommend|comparison|general_chat|clarification",
+  "target_agent": "diagnosis|onboarding|security|recommend|comparison|chat|none",
+  "detected_repo": "owner/repo 또는 null",
   "needs_clarification": false,
   "clarification_questions": [],
   "uses_previous_context": false,
@@ -431,5 +428,8 @@ class SupervisorIntentParserV2(IntentParserBase):
   "additional_agents": [],
   "comparison_targets": null,
   "confidence": 0.9,
-  "reasoning": "판단 근거 한줄"
-}}"""
+  "reasoning": "판단 근거"
+}}
+
+IMPORTANT: target_agent는 영어로만 응답하세요 (diagnosis, onboarding, security 등). 한글(진단, 온보딩)로 응답하지 마세요."""
+

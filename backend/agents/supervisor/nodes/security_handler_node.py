@@ -11,6 +11,8 @@ from backend.agents.supervisor.models import SupervisorState
 from backend.common.cache_manager import get_cache_manager
 from backend.agents.supervisor.utils import check_repo_size_and_warn
 from backend.agents.security.agent.security_agent import SecurityAgent
+# Eval trace hooks
+from backend.eval.trace_collector import trace_agent_start, trace_agent_end
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
     이미 보안 분석 결과가 세션 컨텍스트에 있거나 캐시에 있으면 재사용합니다.
     """
     logger.info("Running Security Agent")
+    trace_agent_start("security", "FAST")
     
     owner = state.get("owner", "")
     repo = state.get("repo", "")
@@ -122,6 +125,9 @@ async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
         if warning_message:
             result["large_repo_warning"] = warning_message
         
+        # Trace hook: 보안 분석 완료
+        trace_agent_end("security", "FAST", ok=True)
+        
         return {
             "agent_result": result,
             "security_result": result,  # finalize에서 사용
@@ -141,6 +147,7 @@ async def run_security_agent_node(state: SupervisorState) -> Dict[str, Any]:
         }
     except Exception as e:
         logger.error(f"Security analysis failed: {e}")
+        trace_agent_end("security", "FAST", ok=False, error=str(e))
         return {
             "agent_result": {
                 "type": "security_scan",

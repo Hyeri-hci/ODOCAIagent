@@ -73,6 +73,22 @@ class OpenAILikeClient(LLMClient):
                 content = response.choices[0].message.content
                 raw = response.model_dump() if hasattr(response, 'model_dump') else {}
                 
+                # Eval trace hook: LLM 호출 기록
+                try:
+                    from backend.eval.trace_collector import trace_llm_call
+                    usage = response.usage
+                    if usage:
+                        trace_llm_call(
+                            prompt_tokens=usage.prompt_tokens or 0,
+                            completion_tokens=usage.completion_tokens or 0,
+                        )
+                    else:
+                        trace_llm_call(prompt_tokens=0, completion_tokens=0)
+                except ImportError:
+                    pass  # eval 모듈 없으면 무시
+                except Exception as e:
+                    logger.debug(f"[LLM] Trace hook error: {e}")
+                
                 return ChatResponse(content=content, raw=raw)
                 
             except (APIError, APITimeoutError) as e:

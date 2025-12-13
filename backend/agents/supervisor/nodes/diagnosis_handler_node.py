@@ -14,6 +14,8 @@ from backend.agents.shared.metacognition import (
 )
 from backend.common.cache_manager import get_cache_manager
 from backend.agents.supervisor.utils import check_repo_size_and_warn
+# Eval trace hooks
+from backend.eval.trace_collector import trace_agent_start, trace_agent_end
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ async def run_diagnosis_agent_node(state: SupervisorState) -> Dict[str, Any]:
     이미 진단 결과가 세션 컨텍스트에 있거나 캐시에 있으면 재사용합니다.
     """
     logger.info("Running Diagnosis Agent V2")
+    trace_agent_start("diagnosis", "FULL")
     
     owner = state["owner"]
     repo = state["repo"]
@@ -135,6 +138,9 @@ async def run_diagnosis_agent_node(state: SupervisorState) -> Dict[str, Any]:
         result["large_repo_warning"] = warning_message
         result["repo_stats"] = repo_size_info.get("repo_stats", {})
     
+    # Trace hook: 진단 완료
+    trace_agent_end("diagnosis", "FULL", ok=not result.get("error"))
+    
     return {
         "agent_result": result,
         "diagnosis_result": result,  # finalize에서 사용
@@ -143,3 +149,4 @@ async def run_diagnosis_agent_node(state: SupervisorState) -> Dict[str, Any]:
         "iteration": state.get("iteration", 0) + 1,
         "large_repo_warning": warning_message  # 대용량 경고 전달
     }
+
