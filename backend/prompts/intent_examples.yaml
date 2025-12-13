@@ -1,50 +1,329 @@
+# Intent Classification Few-shot Examples v2.0
+# 구체적인 컨텍스트와 reasoning 포함
+
+version: "2.0"
+
+# =============================================================================
+# 키워드 기반 규칙 (LLM 호출 전 전처리 - 빠른 분류용)
+# =============================================================================
+keyword_rules:
+  diagnosis:
+    keywords: ["분석", "진단", "건강", "상태", "어때", "점수", "평가", "확인"]
+    priority: 1
+
+  onboarding_structure:
+    keywords: ["코드 구조", "폴더 구조", "디렉토리", "트리 구조", "구조 보여"]
+    priority: 2
+
+  onboarding_issues:
+    keywords:
+      [
+        "좋은 이슈",
+        "쉬운 이슈",
+        "이슈 찾",
+        "이슈 추천",
+        "good first",
+        "첫 이슈",
+        "기여하기 좋은",
+      ]
+    priority: 2
+
+  onboarding:
+    keywords:
+      [
+        "온보딩",
+        "가이드",
+        "시작하",
+        "입문",
+        "학습",
+        "플랜",
+        "커리큘럼",
+        "기여 방법",
+      ]
+    priority: 3
+
+  security:
+    keywords: ["보안", "취약점", "CVE", "vulnerability", "security"]
+    priority: 2
+
+  recommend:
+    keywords: ["추천", "비슷한", "유사", "대안", "alternative", "similar"]
+    priority: 3
+
+  comparison:
+    keywords: ["비교", " vs ", "versus", "차이", "뭐가 나아", "뭐가 좋아"]
+    priority: 2
+
+# =============================================================================
+# Few-shot 예제 (LLM용) - 컨텍스트와 reasoning 포함
+# =============================================================================
 examples:
-  - input: "이 리포지토리 분석해줘"
-    output: "RunDiagnosisAgent"
-  - input: "https://github.com/facebook/react 분석 좀"
-    output: "RunDiagnosisAgent"
-  - input: "리액트 프로젝트 상태 어때?"
-    output: "RunDiagnosisAgent"
-  - input: "이거 건강해?"
-    output: "RunDiagnosisAgent"
-  
-  - input: "초보자가 기여하기 좋은지 알려줘"
-    output: "RunOnboardingAgent"
-  - input: "온보딩 가이드 만들어줘"
-    output: "RunOnboardingAgent"
-  - input: "어디서부터 시작해야 해?"
-    output: "RunOnboardingAgent"
-  - input: "쉬운 이슈 찾아줘"
-    output: "RunOnboardingAgent"
-  
-  - input: "리액트랑 뷰 중에서 뭐가 더 나아?"
-    output: "RunComparisonAgent"
-  - input: "A랑 B 비교해줘"
-    output: "RunComparisonAgent"
-  - input: "둘 중에 초보자한테 더 좋은 건 뭐야?"
-    output: "RunComparisonAgent"
-  - input: "TensorFlow vs PyTorch"
-    output: "RunComparisonAgent"
-  
+  # ===== URL 입력 케이스 =====
+  - input: "https://github.com/facebook/react"
+    context: "새 세션"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      detected_repo: "facebook/react"
+      confidence: 0.95
+    reasoning: "URL만 입력 = 기본 진단 요청"
+
+  - input: "pallets/flask"
+    context: "새 세션"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      detected_repo: "pallets/flask"
+      confidence: 0.9
+    reasoning: "owner/repo 형식 = 진단"
+
+  - input: "https://github.com/vuejs/vue 어때?"
+    context: "새 세션"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      detected_repo: "vuejs/vue"
+      confidence: 0.95
+    reasoning: "URL + '어때?' = 상태 진단"
+
+  - input: "https://github.com/pytorch/pytorch 좋은 이슈 찾아줘"
+    context: "새 세션"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      detected_repo: "pytorch/pytorch"
+      confidence: 0.95
+    reasoning: "URL + '좋은 이슈' = 이슈 추천"
+
+  # ===== 진단 케이스 =====
+  - input: "분석해줘"
+    context: "현재 저장소: facebook/react"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      confidence: 0.9
+    reasoning: "'분석' 키워드 + 저장소 있음"
+
+  - input: "이 프로젝트 건강해?"
+    context: "현재 저장소: nodejs/node"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      confidence: 0.9
+    reasoning: "'건강' = 건강도 진단"
+
+  - input: "분석해줘"
+    context: "새 세션, 저장소 없음"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      needs_clarification: true
+      clarification_questions:
+        ["어떤 GitHub 저장소를 분석할까요? (예: facebook/react)"]
+      confidence: 0.7
+    reasoning: "분석 요청이나 저장소 없음 → 명확화 필요"
+
+  # ===== 코드 구조 (onboarding structure) =====
+  - input: "코드 구조 보여줘"
+    context: "현재 저장소: django/django"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      confidence: 0.95
+    reasoning: "'코드 구조' = structure 모드"
+
+  - input: "폴더 구조가 어떻게 되어있어?"
+    context: "현재 저장소: expressjs/express"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      confidence: 0.9
+    reasoning: "'폴더 구조' = structure"
+
+  - input: "트리 구조"
+    context: "현재 저장소: rails/rails"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      confidence: 0.9
+    reasoning: "'트리 구조' = structure"
+
+  # ===== 이슈 추천 (onboarding issues) =====
+  - input: "초보자가 기여하기 좋은 이슈 있어?"
+    context: "현재 저장소: tensorflow/tensorflow"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      confidence: 0.95
+    reasoning: "'기여하기 좋은 이슈' = issues 모드"
+
+  - input: "good first issue 찾아줘"
+    context: "현재 저장소: kubernetes/kubernetes"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      confidence: 0.95
+    reasoning: "'good first issue' = 초보자 이슈"
+
+  - input: "쉬운 이슈 있어?"
+    context: "현재 저장소: angular/angular"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      confidence: 0.9
+    reasoning: "'쉬운 이슈' = issues 모드"
+
+  # ===== 온보딩 (가이드/플랜) =====
+  - input: "이 프로젝트에 기여하려면 어떻게 해?"
+    context: "현재 저장소: rust-lang/rust"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      needs_clarification: true
+      clarification_questions:
+        ["경험 수준을 알려주세요: 1) 입문자 2) 중급자 3) 숙련자"]
+      confidence: 0.85
+    reasoning: "'기여하려면' = 온보딩, 경험 수준 필요"
+
+  - input: "초보자인데 온보딩 가이드 만들어줘"
+    context: "현재 저장소: golang/go"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      confidence: 0.95
+    reasoning: "'초보자' 명시 + '온보딩 가이드' = 바로 실행"
+
+  # ===== 보안 =====
   - input: "보안 취약점 있어?"
-    output: "RunSecurityAgent"
-  - input: "CVE-2023-1234 설명해줘"
-    output: "RunSecurityAgent"
-  - input: "라이선스 문제 없어?"
-    output: "RunSecurityAgent"
-  
-  - input: "누가 제일 많이 기여해?"
-    output: "RunContributorAgent"
-  - input: "메인테이너 활동 활발해?"
-    output: "RunContributorAgent"
-  
+    context: "현재 저장소: apache/httpd"
+    output:
+      task_type: "security"
+      target_agent: "security"
+      confidence: 0.95
+    reasoning: "'보안 취약점' = security"
+
+  - input: "CVE 확인해줘"
+    context: "현재 저장소: openssl/openssl"
+    output:
+      task_type: "security"
+      target_agent: "security"
+      confidence: 0.95
+    reasoning: "'CVE' = 보안 분석"
+
+  # ===== 추천 =====
   - input: "비슷한 프로젝트 추천해줘"
+    context: "현재 저장소: facebook/react"
+    output:
+      task_type: "recommend"
+      target_agent: "recommend"
+      confidence: 0.95
+    reasoning: "'비슷한 프로젝트 추천' = recommend"
+
+  - input: "머신러닝 프로젝트 찾아줘"
+    context: "새 세션"
+    output:
+      task_type: "recommend"
+      target_agent: "recommend"
+      confidence: 0.9
+    reasoning: "'프로젝트 찾아줘' = 추천"
+
+  - input: "대안 있어?"
+    context: "현재 저장소: mongodb/mongo"
+    output:
+      task_type: "recommend"
+      target_agent: "recommend"
+      confidence: 0.85
+    reasoning: "'대안' = 유사 프로젝트 추천"
+
+  # ===== 비교 =====
+  - input: "React랑 Vue 비교해줘"
+    context: "새 세션"
+    output:
+      task_type: "comparison"
+      target_agent: "comparison"
+      comparison_targets: ["facebook/react", "vuejs/vue"]
+      confidence: 0.95
+    reasoning: "'비교해줘' + 두 프로젝트"
+
+  - input: "PyTorch vs TensorFlow"
+    context: "새 세션"
+    output:
+      task_type: "comparison"
+      target_agent: "comparison"
+      comparison_targets: ["pytorch/pytorch", "tensorflow/tensorflow"]
+      confidence: 0.9
+    reasoning: "'vs' = 비교"
+
+  # ===== 대화 연속성 =====
+  - input: "더 자세히"
+    context: "이전 결과: diagnosis_result"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      uses_previous_context: true
+      referenced_data: ["diagnosis_result"]
+      confidence: 0.8
+    reasoning: "'더 자세히' + diagnosis_result → 진단 상세"
+
+  - input: "그거 다시 설명해줘"
+    context: "이전 결과: onboarding_plan"
+    output:
+      task_type: "onboarding"
+      target_agent: "onboarding"
+      uses_previous_context: true
+      referenced_data: ["onboarding_plan"]
+      confidence: 0.8
+    reasoning: "'그거' = 이전 onboarding_plan 참조"
+
+  # ===== 일반 대화 =====
+  - input: "안녕"
+    context: "새 세션"
+    output:
+      task_type: "general_chat"
+      target_agent: "chat"
+      confidence: 0.95
+    reasoning: "인사말 = 일반 대화"
+
+  - input: "오픈소스가 뭐야?"
+    context: "새 세션"
+    output:
+      task_type: "general_chat"
+      target_agent: "chat"
+      confidence: 0.9
+    reasoning: "개념 질문 = 일반 대화"
+
+  # ===== 복합 요청 =====
+  - input: "분석하고 보안도 체크해줘"
+    context: "현재 저장소: nodejs/node"
+    output:
+      task_type: "diagnosis"
+      target_agent: "diagnosis"
+      additional_agents: ["security"]
+      confidence: 0.9
+    reasoning: "'분석' + '보안' = 복합"
+
+# =============================================================================
+# 간소화된 프롬프트 템플릿
+# =============================================================================
+prompt_template: |
+  GitHub 저장소 분석 시스템 의도 분류기.
+
+  [입력] {user_message}
+  [컨텍스트] {context_summary}
+
+  분류:
+  - diagnosis: 분석/진단/건강도/점수 (URL만 있어도 diagnosis)
+  - onboarding: 기여시작/가이드/코드구조/이슈추천
+  - security: 보안/취약점/CVE
+  - recommend: 유사프로젝트/추천/대안
+  - comparison: 프로젝트 비교
+  - general_chat: 일반대화
+  - clarification: 정보부족
+
+  JSON 응답:
+  {"task_type":"...","target_agent":"...","detected_repo":"owner/repo"|null,"needs_clarification":bool,"confidence":0.0-1.0,"reasoning":"..."}
     output: "RunRecommendAgent"
-  - input: "이거 말고 다른 대안 있어?"
-    output: "RunRecommendAgent"
-  - input: "머신러닝 관련 오픈소스 추천 좀"
-    output: "RunRecommendAgent"
-  
+
   - input: "안녕"
     output: "GeneralChat"
   - input: "너는 누구니?"
