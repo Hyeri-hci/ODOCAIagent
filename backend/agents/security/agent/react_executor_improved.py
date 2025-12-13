@@ -258,6 +258,26 @@ class ReActExecutor:
         # 연속 실패 경고
         if self.tracker.consecutive_failures >= 2:
             print(f"[ReAct] ⚠️ {self.tracker.consecutive_failures} consecutive failures detected")
+        
+        # === 의존성 없는 저장소 빠른 종료 ===
+        # 의존성 관련 도구들이 연속 실패하면 빠르게 종료
+        dep_tools = ["detect_lock_files", "parse_file_dependencies", "parse_package_json", "parse_requirements_txt"]
+        if thought_result["next_action"] in dep_tools and not action_result.get("success", False):
+            dep_failures = sum(
+                1 for t, stats in self.tracker.tool_attempts.items() 
+                if t in dep_tools and stats.get("failure", 0) > 0
+            )
+            deps_count = state.get("dependencies_count", 0)
+            
+            # 의존성 도구가 2번 이상 실패하고 의존성 수가 0이면 → 의존성 없는 저장소로 판단
+            if dep_failures >= 2 and deps_count == 0:
+                print(f"[ReAct] 🏁 No dependencies detected after {dep_failures} attempts - early exit")
+                return {
+                    "completed": True,
+                    "current_step": "finished",
+                    "early_exit_reason": "no_dependencies_found",
+                    **update_thought(state, "의존성 파일이 없는 저장소로 판단되어 분석을 조기 종료합니다.", "의존성 관련 도구 실패")
+                }
 
         # 상태 업데이트
         updates = {
