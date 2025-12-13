@@ -30,13 +30,21 @@ basic_search_prompt = ChatPromptTemplate.from_messages([
     - 요청: {user_request}
 
     ### 규칙
-    1. **Query**: 대화체를 제거하고, README 제목이나 설명에 나올법한 명확한 영어 구문으로 변환. (예: "Deep learning framework")
-    2. **Keywords**: 도메인 핵심 명사 1~3개.
+    1. **Query**: 
+       - 사용자가 찾고자 하는 **핵심 기술/주제**를 영어로 변환하세요.
+       - "추천해줘", "찾아줘" 같은 요청 동사는 제거하고 **기술 키워드만** 추출하세요.
+       - 예: "자율주행 딥러닝 추천해줘" → "autonomous driving deep learning"
+       - 예: "머신러닝 프레임워크 찾아줘" → "machine learning framework"
+       - **절대 "similar projects", "recommendation" 같은 메타 표현을 쿼리에 넣지 마세요!**
+       
+    2. **Keywords**: 핵심 기술 명사 1~3개 (영어).
+       - 예: ["autonomous driving", "deep learning", "self-driving"]
+       
     3. **Filters**: 사용자가 **명시적**으로 언어, 스타 수, 토픽을 언급한 경우에만 포함. (추측 금지)
 
     ### 출력 형식 (JSON Only)
     {{
-        "query": "string",
+        "query": "string (기술 키워드만, 메타 표현 금지)",
         "keywords": ["str", "str"],
         "filters": {{ "language": "str", "topics": ["str"] }}
     }}
