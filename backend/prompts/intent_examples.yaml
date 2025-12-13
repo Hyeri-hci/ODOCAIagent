@@ -42,8 +42,20 @@ keyword_rules:
     priority: 2
 
   onboarding_structure:
-    keywords: ["코드 구조", "폴더 구조", "디렉토리", "트리 구조", "구조 보여"]
-    priority: 2
+    keywords: 
+      [
+        "코드 구조", 
+        "폴더 구조", 
+        "디렉토리", 
+        "트리 구조", 
+        "구조 보여",
+        "구조 분석",
+        "구조 알려",
+        "기술 스택",
+        "tech stack",
+        "스택 분석",
+      ]
+    priority: 1
 
   onboarding_issues:
     keywords:
@@ -55,8 +67,9 @@ keyword_rules:
         "good first",
         "첫 이슈",
         "기여하기 좋은",
+        "기여 이슈",
       ]
-    priority: 2
+    priority: 1
 
   onboarding:
     keywords:
