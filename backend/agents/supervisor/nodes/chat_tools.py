@@ -193,44 +193,65 @@ async def call_onboarding_agent(owner: str, repo: str, experience_level: str = "
 
 
 async def get_dependencies(owner: str, repo: str, **kwargs) -> Dict[str, Any]:
-    """의존성 파일 목록 및 상세 정보 가져오기"""
+    """의존성 파일 목록 및 상세 정보 가져오기 (Security 도구 활용)"""
     try:
-        from backend.agents.diagnosis.fast_path import execute_fast_path
+        from backend.agents.security.tools.dependency_analyzer import (
+            analyze_repository_dependencies,
+            find_dependency_files,
+            summarize_dependency_analysis
+        )
         
-        result = await execute_fast_path(owner, repo, "main", "dependencies")
-        data = result.get("data", {})
+        # 먼저 파일 목록만 빠르게 가져오기
+        dep_files = await _run_sync(find_dependency_files, owner, repo)
         
-        dep_files = data.get("dependency_files", [])
-        details = data.get("dependencies_detail", [])
+        if not dep_files:
+            return {
+                "success": True,
+                "dependency_files": [],
+                "total_files": 0,
+                "message": "의존성 파일이 발견되지 않았습니다."
+            }
         
-        # 의존성 상세 정보 포맷팅
-        formatted_deps = []
-        for detail in details:
-            file_name = detail.get("file", "")
-            deps = detail.get("dependencies", [])
-            total = detail.get("total_count", 0)
-            
+        # 상세 분석 수행
+        analysis = await _run_sync(analyze_repository_dependencies, owner, repo)
+        
+        if analysis.get("error"):
+            return {
+                "success": False,
+                "error": analysis["error"],
+                "dependency_files": dep_files
+            }
+        
+        # 파일별 의존성 정보 포맷팅
+        files_info = []
+        for file_data in analysis.get("files", []):
+            deps = file_data.get("dependencies", [])
             dep_list = []
-            for d in deps[:15]:  # 최대 15개만
+            for d in deps[:15]:  # 최대 15개
                 name = d.get("name", "")
                 version = d.get("version", "*")
-                is_dev = d.get("dev", False)
+                is_dev = d.get("is_dev", False)
                 dev_tag = " (dev)" if is_dev else ""
                 dep_list.append(f"{name}@{version}{dev_tag}")
             
-            formatted_deps.append({
-                "file": file_name,
-                "type": detail.get("type", "unknown"),
+            files_info.append({
+                "file": file_data.get("file", ""),
                 "dependencies": dep_list,
-                "total_count": total,
-                "shown_count": len(dep_list)
+                "total_count": len(deps)
             })
+        
+        # 요약 정보
+        summary = analysis.get("summary", {})
         
         return {
             "success": True,
-            "dependency_files": [f.get("file") for f in dep_files],
-            "total_files": len(dep_files),
-            "details": formatted_deps
+            "dependency_files": dep_files,
+            "total_files": analysis.get("total_files", 0),
+            "total_dependencies": analysis.get("total_dependencies", 0),
+            "runtime_deps": summary.get("runtime_dependencies", 0),
+            "dev_deps": summary.get("dev_dependencies", 0),
+            "by_source": summary.get("by_source", {}),
+            "files_detail": files_info
         }
     except Exception as e:
         logger.warning(f"get_dependencies failed: {e}")
