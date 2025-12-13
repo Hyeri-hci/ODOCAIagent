@@ -1,0 +1,50 @@
+# LLM 모델 설정 파일
+# 평가 시 모델을 교체하며 동일 케이스 실행
+
+# Kanana 2.0 (현재 운영 모델)
+kanana2:
+  provider: openai_compatible
+  model: "kanana-2-30b-a3b-instruct"
+  base_url_env: "LLM_BASE_URL"
+  api_key_env: "LLM_API_KEY"
+  params:
+    temperature: 0.0
+    max_tokens: 2048
+    top_p: 1.0
+
+# Llama 3.1 (Ollama 로컬 실행)
+# 실행 방법: ollama run llama3.1:8b 또는 ollama run llama3.1:70b
+# Ollama는 OpenAI-compatible API를 http://localhost:11434/v1/ 에서 제공
+llama:
+  provider: openai_compatible
+  model: "llama3.1:8b"  # 또는 llama3.1:70b
+  base_url: "http://localhost:11434/v1"
+  api_key: "ollama"  # Ollama는 API 키를 무시하지만 필수 필드
+  params:
+    temperature: 0.0
+    max_tokens: 2048
+    top_p: 1.0
+
+# Qwen 2.5 (Ollama 로컬 실행)
+# 실행 방법: ollama run qwen2.5:7b 또는 ollama run qwen2.5:72b
+qwen:
+  provider: openai_compatible
+  model: "qwen2.5:7b"  # 또는 qwen2.5:14b, qwen2.5:32b, qwen2.5:72b
+  base_url: "http://localhost:11434/v1"
+  api_key: "ollama"
+  params:
+    temperature: 0.0
+    max_tokens: 2048
+    top_p: 1.0
+
+# vLLM 서버 예시 (대규모 모델용)
+# 실행 방법: python -m vllm.entrypoints.openai.api_server --model Qwen/Qwen2.5-72B-Instruct
+# qwen_vllm:
+#   provider: openai_compatible
+#   model: "Qwen/Qwen2.5-72B-Instruct"
+#   base_url_env: "VLLM_BASE_URL"  # 기본값: http://localhost:8000/v1
+#   api_key: "vllm"
+#   params:
+#     temperature: 0.0
+#     max_tokens: 2048
+#     top_p: 1.0
