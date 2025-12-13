@@ -465,6 +465,9 @@ async def github_search_node(state: RecommendState) -> Dict[str, Any]:
         structured_results: List[CandidateRepo] = []
         for item in raw_results:
             try:
+                # search_query는 str이어야 함 - dict의 "q" 값 사용
+                search_query_str = state.github_seach_query.get("q", "") if isinstance(state.github_seach_query, dict) else str(state.github_seach_query)
+                
                 repo_obj = CandidateRepo(
                     id=getattr(item, "id", 0),
                     name=getattr(item, "name"),
@@ -474,7 +477,7 @@ async def github_search_node(state: RecommendState) -> Dict[str, Any]:
                     main_language=getattr(item, "main_language", "Unknown"),
                     stars=int(getattr(item, "stars", 0)),
                     match_snippet=getattr(item, "match_snippet", "API result."),
-                    search_query=state.github_seach_query
+                    search_query=search_query_str
                 )
                 structured_results.append(repo_obj)
             except Exception as ve:

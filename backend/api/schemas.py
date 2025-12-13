@@ -82,7 +82,7 @@ class DiagnosisSummaryDTO(BaseModel):
     @classmethod
     def validate_health_level(cls, v: str) -> str:
         """health_level 값 검증."""
-        allowed = {"bad", "ok", "good", "excellent"}
+        allowed = {"bad", "ok", "good", "excellent", "warning"}
         if v not in allowed:
             raise ValueError(f"health_level must be one of {allowed}, got {v}")
         return v
@@ -135,6 +135,16 @@ class DiagnosisSummaryDTO(BaseModel):
     }
 
 
+def _normalize_health_level(level: str) -> str:
+    """health_level을 DTO 허용 값으로 정규화.
+    
+    Core: "good", "warning", "bad"
+    DTO:  "excellent", "good", "ok", "bad", "warning"
+    """
+    # warning은 그대로 허용 (이미 validator에 추가됨)
+    return level
+
+
 def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, dict[str, Any]]) -> DiagnosisSummaryDTO:
  
     summary_for_user: Optional[str] = None
@@ -165,7 +175,7 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, dict[str, Any]]
             activity_maintainability = scores.get("activity_maintainability", 0)
             health_score = scores.get("health_score", 0)
             onboarding_score = scores.get("onboarding_score", 0)
-            health_level = labels.get("health_level", "bad")
+            health_level = _normalize_health_level(labels.get("health_level", "bad"))
             onboarding_level = labels.get("onboarding_level", "hard")
             dependency_complexity_score = complexity.get("dependency_complexity_score", 0)
             dependency_flags = labels.get("dependency_flags", [])
@@ -179,7 +189,7 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, dict[str, Any]]
             activity_maintainability = res.get("activity", {}).get("total_score", 0)
             health_score = int(res.get("health_score", 0))
             onboarding_score = int(res.get("onboarding_score", 0))
-            health_level = res.get("health_level", "bad")
+            health_level = _normalize_health_level(res.get("health_level", "bad"))
             onboarding_level = res.get("onboarding_level", "hard")
             dependency_complexity_score = res.get("dependency_complexity_score", 0)
             dependency_flags = res.get("dependency_flags", [])
@@ -222,7 +232,7 @@ def to_summary_dto(repo_id: str, res: Union[DiagnosisCoreResult, dict[str, Any]]
         activity_maintainability = res.activity_maintainability
         health_score = res.health_score
         onboarding_score = res.onboarding_score
-        health_level = res.health_level
+        health_level = _normalize_health_level(res.health_level)
         onboarding_level = res.onboarding_level
         dependency_complexity_score = res.dependency_complexity_score
         dependency_flags = res.dependency_flags
