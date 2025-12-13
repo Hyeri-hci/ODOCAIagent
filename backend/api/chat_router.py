@@ -292,6 +292,10 @@ async def chat_stream(request: ChatRequest) -> StreamingResponse:
                                 "owner": result.get("owner"),
                                 "repo": result.get("repo"),
                             } if result.get("owner") and result.get("repo") else None,
+                            # 기여 가이드 결과 (finalize_handler_node에서 반환)
+                            "contributor_guide": result.get("contributor_guide"),
+                            # 구조 시각화 결과 (최상위 레벨)
+                            "structure_visualization": result.get("structure_visualization"),
                             "context": {
                                 "target_agent": target_agent_for_result,
                                 "agent_result_summary": _summarize_agent_result(main_agent_result),

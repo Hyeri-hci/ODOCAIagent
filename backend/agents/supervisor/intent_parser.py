@@ -147,6 +147,7 @@ class SupervisorIntentParserV2(IntentParserBase):
 1. task_type 결정:
    - "분석", "분석해줘", "전체 분석", "진단", "건강도", "점수", "상태 확인", "건강 상태" → diagnosis
    - "온보딩", "가이드", "기여 방법", "기여하려면", "시작하려면", "어떻게 시작", "기여 시작", "학습 플랜" → onboarding
+   - **"코드 구조", "폴더 구조", "구조 보여줘", "트리 구조", "디렉토리 구조" → onboarding (structure 모드)**
    - "보안", "취약점", "CVE", "취약점 분석", "보안 분석" → security
    - "추천", "추천해줘", "비슷한 프로젝트", "유사 프로젝트", "대안", "다른 프로젝트", "비슷한 저장소", "similar" → recommend
    - **"비슷한 프로젝트는?", "비슷한 거", "비슷한 것", "유사한 프로젝트는" → recommend (매우 중요!)**
@@ -168,10 +169,8 @@ class SupervisorIntentParserV2(IntentParserBase):
    - 단순한 "알려줘", "설명해줘"만 있으면 → general_chat
    
    **중요: "코드 구조", "폴더 구조", "구조 보기", "트리 구조" 요청 처리**
-   - 세션 컨텍스트에 diagnosis_result가 있으면 → general_chat (이전 결과 참조)
-     - uses_previous_context = true
-     - referenced_data = ["diagnosis_result", "structure_visualization"]
-   - 세션에 diagnosis_result가 없으면 → contributor (새로 가져옴)
+   - "코드 구조", "구조 보여줘", "트리 구조" → onboarding (structure_visualization 기능)
+   - onboarding_handler_node에서 structure 모드로 처리됨
    
    **중요: diagnosis vs contributor 구분**
    - "분석해줘", "전체 분석", "진단해줘", "건강도", "상태 확인" → diagnosis (저장소 전체 진단)

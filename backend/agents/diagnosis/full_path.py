@@ -70,8 +70,20 @@ async def execute_full_path(
         
         logger.info(f"Full path completed in {execution_time_ms}ms")
         
-        # activity_result에서 상세 메트릭 추출
-        activity_dict = activity_result.__dict__ if hasattr(activity_result, '__dict__') else (activity_result or {})
+        # activity_result에서 상세 메트릭 추출 - 딕셔너리 또는 객체 모두 처리
+        def get_activity_attr(key, default=None):
+            """activity_result에서 속성 가져오기 (dict 또는 객체)"""
+            if isinstance(activity_result, dict):
+                return activity_result.get(key, default)
+            return getattr(activity_result, key, default)
+        
+        # activity_result를 딕셔너리로 변환 (serialization용)
+        if hasattr(activity_result, '__dict__'):
+            activity_dict = activity_result.__dict__.copy()
+        elif isinstance(activity_result, dict):
+            activity_dict = activity_result
+        else:
+            activity_dict = {}
         
         return {
             "type": "full_diagnosis",
@@ -93,18 +105,20 @@ async def execute_full_path(
             # Repository Statistics (snapshot에서)
             "stars": getattr(snapshot, 'stars', 0),
             "forks": getattr(snapshot, 'forks', 0),
-            "open_issues_count": getattr(snapshot, 'open_issues', 0),
+            # open_issues_count와 open_prs_count는 activity_result에서 가져옴 (GitHub API의 open_issues는 이슈+PR 합산)
+            "open_issues_count": get_activity_attr("open_issues_count", 0),
+            "open_prs_count": get_activity_attr("open_prs_count", 0),
             
             # 상세 메트릭 (activity_result에서)
-            "days_since_last_commit": activity_dict.get("days_since_last_commit"),
-            "total_commits_30d": activity_dict.get("total_commits_in_window", 0),
-            "unique_contributors": activity_dict.get("unique_authors", 0) or activity_dict.get("unique_contributors", 0),
-            "issue_close_rate": activity_dict.get("issue_closure_ratio", 0) or activity_dict.get("issue_close_rate", 0),
-            "issue_close_rate_pct": f"{(activity_dict.get('issue_closure_ratio', 0) or activity_dict.get('issue_close_rate', 0)) * 100:.1f}%",
-            "median_pr_merge_days": activity_dict.get("median_pr_merge_days"),
-            "median_pr_merge_days_text": f"{activity_dict.get('median_pr_merge_days', 0):.1f}일" if activity_dict.get('median_pr_merge_days') else "N/A",
-            "median_issue_close_days": activity_dict.get("median_issue_close_days"),
-            "median_issue_close_days_text": f"{activity_dict.get('median_issue_close_days', 0):.1f}일" if activity_dict.get('median_issue_close_days') else "N/A",
+            "days_since_last_commit": get_activity_attr("days_since_last_commit"),
+            "total_commits_30d": get_activity_attr("total_commits_in_window", 0),
+            "unique_contributors": get_activity_attr("unique_authors", 0) or get_activity_attr("unique_contributors", 0),
+            "issue_close_rate": get_activity_attr("issue_closure_ratio", 0) or get_activity_attr("issue_close_rate", 0),
+            "issue_close_rate_pct": f"{(get_activity_attr('issue_closure_ratio', 0) or get_activity_attr('issue_close_rate', 0)) * 100:.1f}%",
+            "median_pr_merge_days": get_activity_attr("median_pr_merge_days"),
+            "median_pr_merge_days_text": f"{get_activity_attr('median_pr_merge_days', 0):.1f}일" if get_activity_attr('median_pr_merge_days') else "N/A",
+            "median_issue_close_days": get_activity_attr("median_issue_close_days"),
+            "median_issue_close_days_text": f"{get_activity_attr('median_issue_close_days', 0):.1f}일" if get_activity_attr('median_issue_close_days') else "N/A",
             
             # 상세 분석 (데이터클래스는 asdict 사용)
             "documentation": docs_result.__dict__ if hasattr(docs_result, '__dict__') else docs_result,

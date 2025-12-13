@@ -146,16 +146,33 @@ export const useAnalysisStream = ({
               setSessionId(data.session_id);
             }
 
-            // 다이어그램 데이터 추출 (contributor 에이전트 결과에서)
+            // 다이어그램 데이터 추출 (여러 소스에서)
             let diagramData = null;
-            if (
+
+            // 1. 최상위 레벨에서 structure_visualization 확인 (finalize_handler_node에서 반환)
+            if (data.structure_visualization) {
+              diagramData = data.structure_visualization;
+              console.log("[Stream] 다이어그램 데이터 (최상위):", diagramData);
+            }
+            // 2. context.agent_result에서 확인 (onboarding 결과)
+            else if (data.context?.agent_result?.structure_visualization) {
+              diagramData = data.context.agent_result.structure_visualization;
+              console.log(
+                "[Stream] 다이어그램 데이터 (agent_result):",
+                diagramData
+              );
+            }
+            // 3. contributor 에이전트 features에서 확인
+            else if (
               data.context?.target_agent === "contributor" &&
-              data.context?.agent_result
+              data.context?.agent_result?.features?.structure_visualization
             ) {
-              const features = data.context.agent_result.features || {};
-              if (features.structure_visualization) {
-                diagramData = features.structure_visualization;
-              }
+              diagramData =
+                data.context.agent_result.features.structure_visualization;
+              console.log(
+                "[Stream] 다이어그램 데이터 (features):",
+                diagramData
+              );
             }
 
             const aiResponse = {
@@ -171,6 +188,46 @@ export const useAnalysisStream = ({
 
             if (data.suggestions && data.suggestions.length > 0) {
               setSuggestions(data.suggestions);
+            }
+
+            // contributor_guide 데이터 처리 (finalize_handler_node에서 반환)
+            if (data.contributor_guide) {
+              console.log(
+                "[Stream] contributor_guide 데이터 수신:",
+                data.contributor_guide
+              );
+              
+              // matched_issues가 있으면 recommendedIssues로 매핑
+              const matchedIssues = data.contributor_guide.matched_issues || [];
+              
+              setAnalysisResult((prev) => ({
+                ...prev,
+                contributorGuide: data.contributor_guide,
+                // matched_issues를 recommendedIssues로 변환
+                recommendedIssues: matchedIssues.length > 0 ? matchedIssues.map(issue => ({
+                  title: issue.title || issue.issue_title || '',
+                  url: issue.url || issue.issue_url || '',
+                  number: issue.number || issue.issue_number || 0,
+                  labels: issue.labels || [],
+                  reason: issue.reason || issue.match_reason || '',
+                  score: issue.score || issue.match_score || 0,
+                  difficulty: issue.difficulty || 'medium',
+                  estimated_time: issue.estimated_time || '',
+                })) : prev.recommendedIssues,
+                onboardingPlan: [], // 기존 플랜 렌더링 방지
+              }));
+            }
+
+            // structure_visualization 데이터 처리 (finalize_handler_node에서 반환)
+            if (diagramData) {
+              console.log(
+                "[Stream] structure_visualization 데이터 수신:",
+                diagramData
+              );
+              setAnalysisResult((prev) => ({
+                ...prev,
+                structureVisualization: diagramData,
+              }));
             }
 
             // 백엔드에서 저장소 정보가 업데이트되었으면 동기화

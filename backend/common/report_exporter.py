@@ -247,11 +247,19 @@ def export_security_report(
     risk_level = results.get("risk_level", "unknown")
     
     vulnerabilities = results.get("vulnerabilities", {})
-    vuln_total = vulnerabilities.get("total", 0)
-    vuln_critical = vulnerabilities.get("critical", 0)
-    vuln_high = vulnerabilities.get("high", 0)
-    vuln_medium = vulnerabilities.get("medium", 0)
-    vuln_low = vulnerabilities.get("low", 0)
+    # vulnerabilities가 list인 경우 처리
+    if isinstance(vulnerabilities, list):
+        vuln_total = len(vulnerabilities)
+        vuln_critical = sum(1 for v in vulnerabilities if v.get("severity", "").lower() == "critical")
+        vuln_high = sum(1 for v in vulnerabilities if v.get("severity", "").lower() == "high")
+        vuln_medium = sum(1 for v in vulnerabilities if v.get("severity", "").lower() == "medium")
+        vuln_low = sum(1 for v in vulnerabilities if v.get("severity", "").lower() == "low")
+    else:
+        vuln_total = vulnerabilities.get("total", 0) if vulnerabilities else 0
+        vuln_critical = vulnerabilities.get("critical", 0) if vulnerabilities else 0
+        vuln_high = vulnerabilities.get("high", 0) if vulnerabilities else 0
+        vuln_medium = vulnerabilities.get("medium", 0) if vulnerabilities else 0
+        vuln_low = vulnerabilities.get("low", 0) if vulnerabilities else 0
     
     report = f"""# {owner}/{repo} 보안 분석 리포트
 

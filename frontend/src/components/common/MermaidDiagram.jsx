@@ -7,10 +7,14 @@ mermaid.initialize({
   startOnLoad: false,
   theme: "default",
   securityLevel: "loose",
+  // 다이어그램이 컨테이너에 맞추지 않고 원래 크기로 렌더링되도록 설정
   flowchart: {
-    useMaxWidth: true,
+    useMaxWidth: false, // 컨테이너 크기에 제한받지 않음
     htmlLabels: true,
     curve: "basis",
+    padding: 20,
+    nodeSpacing: 50,
+    rankSpacing: 50,
   },
   themeVariables: {
     primaryColor: "#818cf8",
@@ -19,6 +23,7 @@ mermaid.initialize({
     lineColor: "#9ca3af",
     secondaryColor: "#fef3c7",
     tertiaryColor: "#dbeafe",
+    fontSize: "14px",
   },
 });
 
@@ -128,6 +133,7 @@ const MermaidDiagram = ({
   className = "",
   showExpandButton = true,
   onError = null,
+  onLoad = null, // 렌더링 완료 콜백
 }) => {
   const containerRef = useRef(null);
   const [renderState, setRenderState] = useState({
@@ -179,6 +185,11 @@ const MermaidDiagram = ({
         svg,
         validatedCode: validation.code,
       });
+
+      // 렌더링 완료 콜백 호출 (약간의 지연 후 DOM이 업데이트된 다음)
+      if (onLoad) {
+        setTimeout(() => onLoad(), 100);
+      }
     } catch (renderError) {
       console.error("[Mermaid] Render error:", renderError);
       setRenderState({
@@ -189,7 +200,7 @@ const MermaidDiagram = ({
       });
       if (onError) onError(renderError.message);
     }
-  }, [code, onError]);
+  }, [code, onError, onLoad]);
 
   useEffect(() => {
     renderDiagram();

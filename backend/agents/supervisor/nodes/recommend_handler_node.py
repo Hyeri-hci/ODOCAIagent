@@ -81,12 +81,12 @@ async def run_recommend_agent_node(state: SupervisorState) -> Dict[str, Any]:
         repo = state.get("repo", "")
         user_message = state.get("user_message", "")
         
-        # 추천 에이전트 실행 (Intent Parsing 활성화: Trend vs Semantic 구분을 위해)
+        # 추천 에이전트 실행 (Supervisor가 이미 intent parsing 완료했으므로 skip)
         result = await run_recommend(
             owner=owner,
             repo=repo,
             user_message=user_message,
-            skip_intent_parsing=False
+            skip_intent_parsing=True
         )
         
         # 결과 포맷팅 - Pydantic 모델과 dict 모두 처리

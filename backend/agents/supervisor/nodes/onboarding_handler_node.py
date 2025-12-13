@@ -1,7 +1,7 @@
 """
 Onboarding Handler Node (Unified)
 Supervisor에서 Onboarding Agent를 호출합니다.
-Tool A (기여 가이드) / Tool B (커리큘럼) / Tool C (구조 시각화) / Both 모드를 지원합니다.
+Tool A (기여 가이드) / Tool B (커리큘럼) / Tool C (구조 시각화) / Tool D (이슈 추천) / Both 모드를 지원합니다.
 """
 
 import logging
@@ -17,7 +17,8 @@ from backend.agents.onboarding.tools.curriculum_tool import generate_onboarding_
 from backend.agents.diagnosis.graph import run_diagnosis
 from backend.common.intent_utils import detect_force_refresh
 from backend.common.structure_visualizer import generate_structure_visualization
-from backend.common.github_client import fetch_repo_tree
+from backend.common.github_client import fetch_repo_tree, fetch_beginner_issues
+from backend.common.issue_matcher import match_issues_to_user
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +26,10 @@ logger = logging.getLogger(__name__)
 GUIDE_KEYWORDS = ["가이드", "기여", "pr", "포크", "클론", "브랜치", "contributing", "fork", "clone", "branch", "커밋", "commit"]
 CURRICULUM_KEYWORDS = ["주", "커리큘럼", "플랜", "로드맵", "학습", "온보딩", "week", "curriculum", "plan", "roadmap", "onboarding"]
 STRUCTURE_KEYWORDS = ["코드 구조", "폴더 구조", "구조", "트리", "디렉토리", "structure", "tree", "directory", "folder"]
+ISSUE_KEYWORDS = ["이슈", "issue", "good first", "찾아줘", "추천", "초보자", "beginner", "좋은 이슈", "쉬운 이슈"]
 
 
-def _route_by_intent(user_message: str) -> Literal["guide", "curriculum", "both", "structure"]:
+def _route_by_intent(user_message: str) -> Literal["guide", "curriculum", "both", "structure", "issues"]:
     """사용자 의도 분석 → Tool 선택"""
     if not user_message:
         return "curriculum"  # 기본값: 커리큘럼
@@ -36,9 +38,12 @@ def _route_by_intent(user_message: str) -> Literal["guide", "curriculum", "both"
     has_guide = any(kw in msg for kw in GUIDE_KEYWORDS)
     has_curriculum = any(kw in msg for kw in CURRICULUM_KEYWORDS)
     has_structure = any(kw in msg for kw in STRUCTURE_KEYWORDS)
+    has_issues = any(kw in msg for kw in ISSUE_KEYWORDS)
     
-    # 우선순위: structure > curriculum > both > guide
-    if has_structure:
+    # 우선순위: issues > structure > curriculum > both > guide
+    if has_issues and not has_curriculum:
+        return "issues"
+    elif has_structure:
         return "structure"
     elif has_curriculum and has_guide:
         return "both"
@@ -231,6 +236,91 @@ async def run_onboarding_agent_node(state: SupervisorState) -> Dict[str, Any]:
                     "type": "structure",
                     "structure_visualization": None,
                     "summary": "코드 구조를 가져올 수 없습니다."
+                }
+        
+        elif tool_mode == "issues":
+            # Tool D: 이슈 추천 (Good First Issue 매칭)
+            logger.info(f"[Onboarding] Issue recommendation mode")
+            
+            try:
+                # GitHub에서 초보자 친화적 이슈 가져오기
+                issues = fetch_beginner_issues(owner, repo, max_count=10)
+                logger.info(f"[Onboarding] Fetched {len(issues)} beginner issues")
+                
+                if issues:
+                    # 이슈 매칭 및 점수화
+                    matched_issues = match_issues_to_user(issues, experience_level=user_level)
+                    logger.info(f"[Onboarding] Matched {len(matched_issues)} issues for {user_level}")
+                    
+                    # 난이도 레벨 한글 변환
+                    level_kr = {"beginner": "입문자", "intermediate": "중급자", "advanced": "숙련자"}.get(user_level, user_level)
+                    
+                    # 마크다운 형식으로 이슈 목록 생성
+                    md_lines = [f"# 🎯 {owner}/{repo} 추천 이슈\n"]
+                    md_lines.append(f"> **{level_kr}** 수준에 맞는 이슈를 추천합니다.\n")
+                    md_lines.append(f"> 총 {len(issues)}개 이슈 중 {len(matched_issues)}개를 분석했습니다.\n\n")
+                    
+                    for i, issue in enumerate(matched_issues[:5], 1):
+                        title = issue.get("title", "제목 없음")
+                        number = issue.get("number", "")
+                        url = issue.get("url", f"https://github.com/{owner}/{repo}/issues/{number}")
+                        labels = issue.get("labels", [])
+                        label_names = [l.get("name", l) if isinstance(l, dict) else str(l) for l in labels[:4]]
+                        score = issue.get("match_score", 0)
+                        reasons = issue.get("match_reasons", [])
+                        difficulty = issue.get("difficulty", {}).get("level", "unknown")
+                        est_time = issue.get("difficulty", {}).get("estimated_time", {}).get("text", "")
+                        
+                        # 난이도 이모지
+                        diff_emoji = {"easy": "🟢", "medium": "🟡", "hard": "🔴"}.get(difficulty, "⚪")
+                        diff_kr = {"easy": "쉬움", "medium": "보통", "hard": "어려움"}.get(difficulty, "알 수 없음")
+                        
+                        md_lines.append(f"## {i}. {title}")
+                        md_lines.append(f"")
+                        md_lines.append(f"| 항목 | 내용 |")
+                        md_lines.append(f"|------|------|")
+                        md_lines.append(f"| 🔗 링크 | [#{number}]({url}) |")
+                        if label_names:
+                            label_badges = " ".join([f"`{l}`" for l in label_names])
+                            md_lines.append(f"| 🏷️ 라벨 | {label_badges} |")
+                        md_lines.append(f"| {diff_emoji} 난이도 | {diff_kr} |")
+                        if est_time:
+                            md_lines.append(f"| ⏱️ 예상 시간 | {est_time} |")
+                        if score:
+                            md_lines.append(f"| 📊 매칭 점수 | **{score}점** |")
+                        if reasons:
+                            md_lines.append(f"| 💡 추천 이유 | {', '.join(reasons)} |")
+                        md_lines.append("")
+                    
+                    md_lines.append("\n---\n")
+                    md_lines.append("## 📚 시작하는 방법\n")
+                    md_lines.append(f"1. 관심 있는 이슈에 댓글로 작업 의사 표시\n")
+                    md_lines.append(f"2. 메인테이너의 승인 후 작업 시작\n")
+                    md_lines.append(f"3. Fork → Clone → Branch → Commit → PR\n")
+                    md_lines.append(f"\n💡 **팁**: `good first issue` 라벨은 메인테이너가 초보자에게 적합하다고 표시한 것입니다.")
+                    
+                    result = {
+                        "type": "contributor_guide",
+                        "markdown": "\n".join(md_lines),
+                        "matched_issues": matched_issues[:5],
+                        "total_issues": len(issues),
+                        "summary": f"{owner}/{repo}에서 {len(matched_issues[:5])}개의 추천 이슈를 찾았습니다."
+                    }
+                else:
+                    result = {
+                        "type": "contributor_guide",
+                        "markdown": f"# {owner}/{repo}\n\n현재 열려 있는 초보자 친화적 이슈가 없습니다.\n\n프로젝트의 [이슈 페이지](https://github.com/{owner}/{repo}/issues)를 확인해보세요.",
+                        "matched_issues": [],
+                        "total_issues": 0,
+                        "summary": "현재 열려 있는 초보자 친화적 이슈가 없습니다."
+                    }
+            except Exception as e:
+                logger.error(f"[Onboarding] Failed to fetch issues: {e}")
+                result = {
+                    "type": "contributor_guide",
+                    "markdown": f"# {owner}/{repo}\n\n이슈를 가져오는 중 오류가 발생했습니다.\n\n프로젝트의 [이슈 페이지](https://github.com/{owner}/{repo}/issues)를 직접 확인해보세요.",
+                    "matched_issues": [],
+                    "summary": "이슈를 가져오는 중 오류가 발생했습니다."
                 }
             
         else:

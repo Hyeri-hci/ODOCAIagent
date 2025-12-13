@@ -301,6 +301,91 @@ async def finalize_answer_node(state: SupervisorState) -> Dict[str, Any]:
         # 재해석 결과
         return {"final_answer": agent_result.get("reinterpreted_answer", "")}
     
+    elif result_type == "contributor_guide":
+        # 기여 가이드 결과 (마크다운 형태)
+        owner = state.get("owner", "")
+        repo = state.get("repo", "")
+        summary = agent_result.get("summary", f"{owner}/{repo} 기여 가이드가 생성되었습니다.")
+        matched_issues = agent_result.get("matched_issues", [])
+        total_issues = agent_result.get("total_issues", 0)
+        
+        # 이슈 추천 결과인 경우
+        if matched_issues:
+            issue_count = len(matched_issues)
+            answer = f"""**🎯 {summary}**
+
+"""
+            # 전체 이슈 목록 표시 (리포트 대신 채팅에서 바로 표시)
+            for i, issue in enumerate(matched_issues, 1):
+                title = issue.get("title", "제목 없음")
+                number = issue.get("number", "")
+                url = issue.get("url", f"https://github.com/{owner}/{repo}/issues/{number}")
+                labels = issue.get("labels", [])
+                label_names = [l.get("name", l) if isinstance(l, dict) else str(l) for l in labels[:2]]
+                label_str = " ".join([f"`{l}`" for l in label_names]) if label_names else ""
+                score = issue.get("match_score", 0)
+                reasons = issue.get("match_reasons", [])
+                reason_str = ", ".join(reasons[:2]) if reasons else "초보자 친화적"
+                
+                answer += f"### {i}. [{title}]({url})\n"
+                answer += f"   - **이슈**: #{number} {label_str}\n"
+                answer += f"   - **추천 이유**: {reason_str}\n"
+                if score:
+                    answer += f"   - **매칭 점수**: {score}점\n"
+                answer += "\n"
+            
+            answer += f"\n---\n💡 **팁**: `good first issue` 라벨이 있는 이슈는 메인테이너가 초보자에게 적합하다고 표시한 것입니다."
+        elif total_issues == 0:
+            # 이슈가 없는 경우
+            answer = f"""**{owner}/{repo}에서 초보자 친화적 이슈를 찾지 못했습니다.**
+
+😅 **이유**: 현재 `good first issue`, `help wanted` 등의 라벨이 붙은 열린 이슈가 없습니다.
+
+**대안 제안:**
+1. 📖 [이슈 페이지](https://github.com/{owner}/{repo}/issues) 직접 확인하기
+2. 📝 문서 개선이나 오타 수정으로 시작하기
+3. 🔍 `docs`, `documentation` 라벨 이슈 찾아보기
+4. 💬 Discussion에서 기여 방법 문의하기
+"""
+        else:
+            # 일반 기여 가이드
+            answer = f"""**{summary}**
+
+📖 **상세 가이드는 우측 리포트에서 확인하세요**
+
+이 가이드에서 다루는 내용:
+- 프로젝트 환경 설정
+- Fork & Clone 방법
+- 브랜치 생성 및 커밋 규칙
+- PR 작성 가이드
+"""
+        
+        return {
+            "final_answer": answer,
+            "agent_result": agent_result,
+            "contributor_guide": agent_result
+        }
+    
+    elif result_type == "structure":
+        # 코드 구조 시각화 결과
+        owner = state.get("owner", "")
+        repo = state.get("repo", "")
+        structure_viz = agent_result.get("structure_visualization", {})
+        summary = agent_result.get("summary", f"{owner}/{repo} 프로젝트 코드 구조입니다.")
+        
+        answer = f"""**{summary}**
+
+🌳 **코드 구조는 우측 리포트에서 확인하세요**
+
+다이어그램 또는 트리 뷰로 프로젝트 구조를 확인할 수 있습니다.
+"""
+        
+        return {
+            "final_answer": answer,
+            "agent_result": agent_result,
+            "structure_visualization": structure_viz
+        }
+    
     elif result_type == "onboarding_plan":
         # 온보딩 플랜 결과
         plan = agent_result.get("plan", [])
