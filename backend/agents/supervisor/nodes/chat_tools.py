@@ -192,6 +192,51 @@ async def call_onboarding_agent(owner: str, repo: str, experience_level: str = "
         return {"success": False, "error": str(e)}
 
 
+async def get_dependencies(owner: str, repo: str, **kwargs) -> Dict[str, Any]:
+    """의존성 파일 목록 및 상세 정보 가져오기"""
+    try:
+        from backend.agents.diagnosis.fast_path import execute_fast_path
+        
+        result = await execute_fast_path(owner, repo, "main", "dependencies")
+        data = result.get("data", {})
+        
+        dep_files = data.get("dependency_files", [])
+        details = data.get("dependencies_detail", [])
+        
+        # 의존성 상세 정보 포맷팅
+        formatted_deps = []
+        for detail in details:
+            file_name = detail.get("file", "")
+            deps = detail.get("dependencies", [])
+            total = detail.get("total_count", 0)
+            
+            dep_list = []
+            for d in deps[:15]:  # 최대 15개만
+                name = d.get("name", "")
+                version = d.get("version", "*")
+                is_dev = d.get("dev", False)
+                dev_tag = " (dev)" if is_dev else ""
+                dep_list.append(f"{name}@{version}{dev_tag}")
+            
+            formatted_deps.append({
+                "file": file_name,
+                "type": detail.get("type", "unknown"),
+                "dependencies": dep_list,
+                "total_count": total,
+                "shown_count": len(dep_list)
+            })
+        
+        return {
+            "success": True,
+            "dependency_files": [f.get("file") for f in dep_files],
+            "total_files": len(dep_files),
+            "details": formatted_deps
+        }
+    except Exception as e:
+        logger.warning(f"get_dependencies failed: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # === 도구 등록 ===
 
 _registry.register("search_codebase", search_codebase, "코드베이스에서 키워드 검색")
@@ -201,6 +246,7 @@ _registry.register("search_issues", search_issues, "이슈/PR 검색")
 _registry.register("call_diagnosis_agent", call_diagnosis_agent, "건강도/활동성 분석")
 _registry.register("call_security_agent", call_security_agent, "보안 취약점 분석")
 _registry.register("call_onboarding_agent", call_onboarding_agent, "온보딩 가이드 생성")
+_registry.register("get_dependencies", get_dependencies, "의존성 파일 및 패키지 목록 조회")
 
 
 def get_chat_tools() -> Dict[str, Callable]:
