@@ -1,11 +1,54 @@
 """Onboarding Agent 데이터 모델."""
-from __future__ import annotations
-
 from typing import Any, Dict, List, Literal, Optional, TypedDict
 from pydantic import BaseModel, Field
 
-
 ExperienceLevel = Literal["beginner", "intermediate", "advanced"]
+UserGoal = Literal["first_pr", "docs", "bugfix", "feature"]
+ToolMode = Literal["guide", "curriculum", "both"]
+
+
+# === 공통 컨텍스트 DTO (Unified Onboarding) ===
+
+class DocsIndex(TypedDict):
+    """프로젝트 문서 인덱스"""
+    readme: Optional[str]           # README.md 요약
+    contributing: Optional[str]     # CONTRIBUTING.md 요약
+    code_of_conduct: Optional[str]
+    security: Optional[str]
+    templates: List[str]            # .github/ISSUE_TEMPLATE, PR_TEMPLATE 등 경로
+    file_paths: Dict[str, str]      # 문서명 -> 실제 경로
+
+
+class WorkflowHints(TypedDict):
+    """기여 워크플로우 힌트"""
+    fork_required: bool
+    branch_convention: Optional[str]    # 예: "feature/xxx"
+    commit_convention: Optional[str]    # 예: "Conventional Commits"
+    test_command: Optional[str]         # 예: "npm test"
+    build_command: Optional[str]        # 예: "npm run build"
+    ci_present: bool
+    review_process: Optional[str]
+
+
+class CodeMap(TypedDict):
+    """코드 구조 맵"""
+    main_directories: List[str]         # 예: ["src/", "lib/", "tests/"]
+    entry_points: List[str]             # 예: ["main.py", "index.js"]
+    language: str                       # Primary language
+    package_manager: Optional[str]      # 예: "npm", "pip", "cargo"
+
+
+class OnboardingContext(TypedDict):
+    """온보딩 에이전트 공통 컨텍스트"""
+    owner: str
+    repo: str
+    ref: str
+    docs_index: DocsIndex
+    workflow_hints: WorkflowHints
+    code_map: CodeMap
+    # 캐시 메타
+    cached_at: Optional[str]
+    cache_ttl_seconds: int
 
 
 # === LangGraph State 정의 ===
@@ -25,6 +68,10 @@ class OnboardingState(TypedDict):
     candidate_issues: Optional[List[Dict[str, Any]]]
     plan: Optional[List[Dict[str, Any]]]
     summary: Optional[str]
+    
+    # 컨텍스트 필드 (이전 플랜 참조용)
+    previous_plan: Optional[List[Dict[str, Any]]]
+    previous_summary: Optional[str]
     
     # 에이전트 분석 필드 (Core Scoring 연동)
     diagnosis_analysis: Optional[Dict[str, Any]]  # health_score, onboarding_score 등
@@ -208,3 +255,4 @@ class OnboardingAgentResult:
                 "total_recommended": self.total_recommended,
             },
         }
+
