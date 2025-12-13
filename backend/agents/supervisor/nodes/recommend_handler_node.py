@@ -72,7 +72,7 @@ async def run_recommend_agent_node(state: SupervisorState) -> Dict[str, Any]:
     """추천 에이전트 실행 (onboarding 점수 기반 프로젝트 추천)
     
     Note: 추천은 진단 결과만 참고하며, 보안 분석은 제외합니다.
-    유사도 0.3 이상 + 온보딩 점수 60점 이상인 프로젝트만 추천합니다.
+    유사도 0.3 이상 + 온보딩 점수 40점 이상인 프로젝트만 추천합니다.
     """
     logger.info("Running Recommend Agent (with onboarding score filter)")
     
@@ -164,11 +164,11 @@ async def run_recommend_agent_node(state: SupervisorState) -> Dict[str, Any]:
                 
                 item["onboarding_score"] = onboarding
                 
-                if onboarding >= 50:
+                if onboarding >= 40:
                     candidates_with_scores.append(item)
                     logger.info(f"[RECOMMEND] ✅ {item['full_name']}: similarity={item['similarity_score']:.2f}, onboarding={onboarding}")
                 else:
-                    logger.info(f"[RECOMMEND] ❌ {item['full_name']}: onboarding={onboarding} (filtered out, threshold=50)")
+                    logger.info(f"[RECOMMEND] ❌ {item['full_name']}: onboarding={onboarding} (filtered out, threshold=40)")
             
             # 온보딩 점수로 정렬 (내림차순), 상위 6개만 선택
             candidates_with_scores.sort(key=lambda x: x["onboarding_score"], reverse=True)
@@ -176,7 +176,7 @@ async def run_recommend_agent_node(state: SupervisorState) -> Dict[str, Any]:
             # 프론트엔드 리포트 호환성을 위해 similar_projects도 설정
             formatted_result["similar_projects"] = candidates_with_scores[:6]
         
-        logger.info(f"[RECOMMEND] Final recommendations (onboarding>=50, top 6): {len(formatted_result['recommendations'])} projects")
+        logger.info(f"[RECOMMEND] Final recommendations (onboarding>=40, top 6): {len(formatted_result['recommendations'])} projects")
         
         # 메타인지: 추천 품질 체크
         rec_count = len(formatted_result["recommendations"])

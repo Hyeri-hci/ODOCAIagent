@@ -149,11 +149,17 @@ class SupervisorIntentParserV2(IntentParserBase):
    - "온보딩", "가이드", "기여 방법", "기여하려면", "시작하려면", "어떻게 시작", "기여 시작", "학습 플랜" → onboarding
    - "보안", "취약점", "CVE", "취약점 분석", "보안 분석" → security
    - "추천", "추천해줘", "비슷한 프로젝트", "유사 프로젝트", "대안", "다른 프로젝트", "비슷한 저장소", "similar" → recommend
+   - **"비슷한 프로젝트는?", "비슷한 거", "비슷한 것", "유사한 프로젝트는" → recommend (매우 중요!)**
    - **"프로젝트 찾", "프로젝트로 알려", "오픈소스 프로젝트", "프로젝트 알려줘", "찾고 있어", "찾아줘" + "프로젝트" → recommend (중요!)**
    - "Good First Issue", "이슈 추천", "좋은 이슈", "기여 체크리스트", "첫 PR" → contributor
    - "커뮤니티", "커뮤니티 활동" → contributor (community_analysis 기능)
    - "비교해줘", "알려줘", "설명해줘", "뭐야", "무엇인지" → general_chat (단, "프로젝트"와 함께 쓰이면 recommend!)
    - 정보가 부족하면 → clarification
+   
+   **!!!!! 매우 중요: recommend vs onboarding 구분 !!!!!**
+   - "비슷한 프로젝트는?", "비슷한 프로젝트 추천", "유사 프로젝트" → recommend (onboarding 아님!)
+   - "대안", "다른 프로젝트", "비슷한 것" → recommend
+   - "온보딩", "기여 방법", "시작하려면", "가이드" → onboarding
    
    **!!!!! 매우 중요: recommend vs general_chat 구분 !!!!!**
    - "오픈소스 프로젝트로 알려줘" → recommend (general_chat 아님!)
